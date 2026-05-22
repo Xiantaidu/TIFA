@@ -1,7 +1,8 @@
+from collections import defaultdict
+
 import matplotlib.patches
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.ticker import MultipleLocator
 
 
 def spectrogram_to_figure(spectrogram, title=None):
@@ -98,42 +99,37 @@ def probs_to_figure(
     return fig
 
 
-def note_to_figure(
-        note_midi_gt, note_rest_gt, note_dur_gt,
-        note_midi_pred=None, note_rest_pred=None, note_dur_pred=None,
-        title=None
-):
-    fig = plt.figure(figsize=(12, 6))
-    note_height = 0.5
+def vocab_distribution_to_figure(symbol_counts: dict[str, int]) -> "plt.Figure":
+    lang_data: dict[str, dict[str, int]] = defaultdict(dict)
+    for sym, count in symbol_counts.items():
+        lang = sym.split("/")[0] if "/" in sym else "_"
+        short = sym.split("/")[-1] if "/" in sym else sym
+        lang_data[lang][short] = lang_data[lang].get(short, 0) + count
 
-    def draw_notes(note_midi, note_rest, note_dur, color, label):
-        note_dur_acc = np.cumsum(note_dur)
-        ys = note_midi[~note_rest]
-        x_mins = (note_dur_acc - note_dur)[~note_rest]
-        x_maxs = note_dur_acc[~note_rest]
-        for i in range(len(ys)):
-            plt.gca().add_patch(plt.Rectangle(
-                xy=(x_mins[i], ys[i] - note_height / 2),
-                width=x_maxs[i] - x_mins[i], height=note_height,
-                edgecolor=color, fill=False,
-                linewidth=1.5, label=(label if i == 0 else None),
-            ))
-            plt.fill_between(
-                [x_mins[i], x_maxs[i]], ys[i] - note_height / 2, ys[i] + note_height / 2,
-                color="none", facecolor=color, alpha=0.2
-            )
+    sorted_langs = sorted(lang_data, key=lambda ln: (ln != "_", ln))
+    n_langs = len(sorted_langs)
+    if n_langs == 0:
+        return None
 
-    draw_notes(note_midi_gt, note_rest_gt, note_dur_gt, color="b", label="gt")
-    x_max = note_dur_gt.sum()
-    if note_midi_pred is not None:
-        draw_notes(note_midi_pred, note_rest_pred, note_dur_pred, color="r", label="pred")
-        x_max = max(x_max, note_dur_pred.sum())
-
-    plt.xlim(0, x_max)
-    plt.gca().yaxis.set_major_locator(MultipleLocator(1))
-    plt.grid(axis="y")
-    plt.legend()
-    if title is not None:
-        plt.title(title, fontsize=15)
-    plt.tight_layout()
+    max_symbols = max(len(lang_data[ln]) for ln in sorted_langs)
+    fig_width = max(16, max_symbols * 0.4)
+    fig, axes = plt.subplots(n_langs, 1, figsize=(fig_width, 5 * n_langs), squeeze=False)
+    for i, lang in enumerate(sorted_langs):
+        ax = axes[i][0]
+        data = lang_data[lang]
+        symbols = sorted(data.keys())
+        xs = range(len(symbols))
+        counts = [data[s] for s in symbols]
+        ax.bar(xs, counts)
+        max_count = max(counts)
+        for x, c in zip(xs, counts):
+            ax.text(x, c + max_count * 0.01, str(c), ha="center", va="bottom", fontsize=7)
+        ax.set_xticks(xs)
+        ax.set_xticklabels(symbols, fontsize=7)
+        ax.set_xlim(-0.6, len(symbols) - 0.4)
+        ax.set_title(f"{lang}  ({len(symbols)} symbols, {sum(counts)} occurrences)")
+        ax.set_ylabel("Count")
+        ax.grid(axis="y", alpha=0.3)
+        ax.set_ylim(0, max_count * 1.15)
+    fig.tight_layout()
     return fig

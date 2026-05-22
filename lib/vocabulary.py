@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import json
 import pathlib
-from typing import Iterable, Sequence, TypeVar
+from types import MappingProxyType
+from typing import Iterable, Mapping, Sequence, TypeVar
 
 from lib.types import MergedSymbolGroup
 
 
 __all__ = [
     "VocabularyBuilder",
-    "SymbolVocabulary",
+    "Vocabulary",
 ]
 
 
@@ -26,17 +27,23 @@ class VocabularyBuilder:
         self.stop_symbols = frozenset(stop_symbols)
         self.merged_groups = list(merged_groups or ())
         self.replaceable_clusters = list(replaceable_clusters or ())
-        self._symbols: set[str] = set()
+        self._symbol_counts: dict[str, int] = {}
 
     def add(self, symbols: Iterable[str], default_language: str) -> None:
         for s in symbols:
+            if s in self.stop_symbols:
+                continue
             if s not in self.global_symbols and "/" not in s and default_language is not None:
                 s = f"{default_language}/{s}"
-            self._symbols.add(s)
+            if s in self.stop_symbols:
+                continue
+            self._symbol_counts[s] = self._symbol_counts.get(s, 0) + 1
 
-    def build(self) -> SymbolVocabulary:
-        # Validate merged groups against observed symbols
-        observed = {s for s in self._symbols if s not in self.stop_symbols}
+    def counter(self) -> Mapping[str, int]:
+        return MappingProxyType(self._symbol_counts)
+
+    def build(self) -> Vocabulary:
+        observed = set(self._symbol_counts.keys())
         seen_group_names: set[str] = set()
         for group in self.merged_groups:
             if not group.name:
@@ -113,13 +120,13 @@ class VocabularyBuilder:
             members for members in cluster_map.values() if len(members) >= 2
         )
 
-        return SymbolVocabulary(
+        return Vocabulary(
             symbol_to_id=symbol_to_id,
             replaceable_cluster_ids=replaceable_ids,
         )
 
 
-class SymbolVocabulary:
+class Vocabulary:
     def __init__(
             self,
             *,

@@ -11,9 +11,10 @@ import tqdm
 from lib import logging
 from lib.config.io import save_raw_config
 from lib.config.schema import BinarizerConfig
-from lib.vocabulary import SymbolVocabulary, VocabularyBuilder
 from lib.indexed_dataset import IndexedDatasetBuilder
 from lib.multiprocess import chunked_multiprocess_run, FailedItem
+from lib.plot import vocab_distribution_to_figure
+from lib.vocabulary import Vocabulary, VocabularyBuilder
 
 ACCEPTED_AUDIO_FORMATS = {".wav", ".flac", ".opus"}
 
@@ -46,7 +47,7 @@ class BaseBinarizer(abc.ABC):
         self.data_dir: pathlib.Path = config.data_dir_resolved
         self.timestep = config.features.timestep
 
-        self.vocabulary: SymbolVocabulary | None = None
+        self.vocabulary: Vocabulary | None = None
 
         self.valid_items: list[MetadataItem] = []
         self.train_items: list[MetadataItem] = []
@@ -141,8 +142,7 @@ class BaseBinarizer(abc.ABC):
         logging.info(f"Total duration of {prefix}: {format_duration(total_duration)}.")
         logging.debug(f"Processing {prefix} items done.")
 
-    def process(self):
-        # Collect metadata from all subsets
+    def collect_metadata(self) -> list[MetadataItem]:
         index_file_paths = list(self.data_dir.rglob("index.csv"))
         metadata_list = []
         for index_file_path in index_file_paths:
@@ -150,8 +150,9 @@ class BaseBinarizer(abc.ABC):
             subset_metadata_list = self.load_metadata(subset_dir)
             metadata_list.extend(subset_metadata_list)
             logging.debug(f"Loaded {len(subset_metadata_list)} metadata items from '{subset_dir.as_posix()}'.")
+        return metadata_list
 
-        # Build vocabulary
+    def build_vocabulary(self, metadata_list: list[MetadataItem]):
         vocab_builder = VocabularyBuilder(
             global_symbols=self.config.vocabulary.global_symbols,
             stop_symbols=self.config.vocabulary.stop_symbols,
@@ -161,6 +162,19 @@ class BaseBinarizer(abc.ABC):
         for item in metadata_list:
             vocab_builder.add(item.raw_symbols, default_language=item.language)
         self.vocabulary = vocab_builder.build()
+        fig = vocab_distribution_to_figure(vocab_builder.counter())
+        if fig is not None:
+            filename = self.data_dir / "vocab_distribution.jpg"
+            fig.savefig(fname=filename, bbox_inches="tight", pad_inches=0.25)
+            import matplotlib.pyplot as plt
+            plt.close(fig)
+            logging.info(f"Vocabulary distribution plot saved to '{filename}'.")
+
+    def process(self):
+        metadata_list = self.collect_metadata()
+
+        # Build vocabulary
+        self.build_vocabulary(metadata_list)
 
         # Split training and validation sets
         self.split_dataset(metadata_list)
