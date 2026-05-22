@@ -19,6 +19,11 @@ training:
       prob: 0.5
       min_semitones: -12
       max_semitones: 12
+    time_stretching:
+      enabled: false
+      prob: 0.5
+      min_speed: 0.8
+      max_speed: 1.25
     loudness_scaling:
       enabled: true
       prob: 0.5

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from torch import Tensor
 
 from lib.config.schema import AugmentationConfig
+from lib.feature.mel import StretchableMelSpectrogram
 
 __all__ = [
     "generate_seed",
@@ -21,7 +22,7 @@ __all__ = [
     "ColoredNoise",
     "NaturalNoise",
     "RIRReverb",
-    "PitchShifting",
+    "SpectrogramStretching",
     "LoudnessScaling",
     "SpectrogramMasking",
     "AugmentationContext",
@@ -208,19 +209,34 @@ class RIRReverb(Augmentation):
 # Bridge transform (wav -> mel)
 # ---------------------------------------------------------------------------
 
-class PitchShifting(Augmentation):
-    """Convert waveform to mel spectrogram, with optional pitch shifting.
+class SpectrogramStretching(Augmentation):
+    """Convert waveform to mel spectrogram, with optional time and pitch stretching.
 
     Always applies since mel is computed online from audio.
     Holds a reference to the dataset's StretchableMelSpectrogram.
+
+    speed: time stretch factor (1.0 = no change). Sampled in log space.
+    shift: pitch shift in semitones (0 = no change).
     """
 
-    _namespace: ClassVar[str] = "pitch_shifting"
+    _namespace: ClassVar[str] = "spectrogram_stretching"
+    speed: float | None = None
     shift: float | None = None
 
-    def __init__(self, config, generator, mel_spectrogram, **kwargs):
+    def __init__(
+            self, config: AugmentationConfig, generator: np.random.Generator,
+            mel_spectrogram: StretchableMelSpectrogram,
+            **kwargs
+    ):
         super().__init__(**kwargs)
         self._mel_spectrogram = mel_spectrogram
+        if (
+            config.time_stretching.enabled
+            and generator.random() < config.time_stretching.prob
+        ):
+            log_min = math.log(config.time_stretching.min_speed)
+            log_max = math.log(config.time_stretching.max_speed)
+            self.speed = float(math.exp(generator.uniform(log_min, log_max)))
         if (
             config.pitch_shifting.enabled
             and generator.random() < config.pitch_shifting.prob
@@ -236,7 +252,9 @@ class PitchShifting(Augmentation):
     def apply(self, ctx: AugmentationContext) -> None:
         waveform_tensor = torch.from_numpy(ctx.waveform).unsqueeze(0)
         ctx.spectrogram = self._mel_spectrogram(
-            waveform_tensor, key_shift=self.shift or 0,
+            waveform_tensor,
+            key_shift=self.shift or 0,
+            speed=self.speed or 1.0,
         ).squeeze(0).T
 
 
@@ -357,7 +375,7 @@ def build_augmentation_chain(
 ) -> ComposedAugmentation:
     """Build a single unified augmentation chain for a sample.
 
-    Stages: wav→wav, wav→mel (with optional pitch shift), mel→mel.
+    Stages: wav→wav, wav→mel (with optional time/pitch stretch), mel→mel.
     """
     transforms: list[Augmentation] = []
 
@@ -371,7 +389,7 @@ def build_augmentation_chain(
             transforms.append(aug)
 
     # Stage 2: wav → mel (always, since mel is computed online)
-    transforms.append(PitchShifting(
+    transforms.append(SpectrogramStretching(
         config=config, generator=generator, mel_spectrogram=mel_spectrogram,
     ))
 

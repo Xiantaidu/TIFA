@@ -13,6 +13,7 @@ from lib.indexed_dataset import IndexedDataset
 from .augmentation import (
     AugmentationContext,
     ComposedAugmentation,
+    SpectrogramStretching,
     generate_seed, build_augmentation_chain,
 )
 
@@ -73,21 +74,12 @@ class BaseDataset(torch.utils.data.Dataset):
 
         augmentation = {}
         if self.augmentation_config is not None:
-            chain = self.augmentation_chains.get(index)
-            if chain is None:
-                chain = build_augmentation_chain(
-                    self.augmentation_config,
-                    generator=numpy.random.default_rng(),
-                    mel_spectrogram=self.mel_spectrogram,
-                    destructive_only=self.augmentation_destructive_only,
-                )
+            chain = self.augmentation_chains[index]
 
             wf_tensor = torch.from_numpy(waveform).unsqueeze(0)
             if self.augmentation_return_dirty:
-                # Compute clean mel before augmentation mutates the waveform copy
                 spectrogram_clean = self.mel_spectrogram(wf_tensor).squeeze(0).T
 
-            # Apply augmentation chain
             ctx = AugmentationContext(waveform=waveform, sr=self.sample_rate)
             chain.apply(ctx)
             spectrogram = ctx.spectrogram
@@ -116,9 +108,18 @@ class BaseDataset(torch.utils.data.Dataset):
 
     def set_epoch(self, epoch: int):
         self.epoch.value = epoch
+        if self.augmentation_config is not None and not self.augmentation_deterministic:
+            seed = generate_seed([str(epoch), *sorted(self.info.keys())])
+            self._build_chains(numpy.random.default_rng(seed))
 
     def num_frames(self, index: int) -> int:
-        return self.info["lengths"][index]
+        base_len = int(self.info["lengths"][index])
+        chain = self.augmentation_chains.get(index)
+        if chain is not None:
+            for t in chain.transforms:
+                if isinstance(t, SpectrogramStretching) and t.speed is not None:
+                    return max(1, int(base_len / t.speed))
+        return base_len
 
     def _setup(self):
         feature_raw = load_raw_config(self.data_dir / "feature.yaml")
@@ -140,13 +141,16 @@ class BaseDataset(torch.utils.data.Dataset):
 
         if self.augmentation_deterministic:
             seed = generate_seed(sorted(self.info.keys()))
-            generator = numpy.random.default_rng(seed)
-            for index in range(len(self)):
-                self.augmentation_chains[index] = build_augmentation_chain(
-                    self.augmentation_config, generator=generator,
-                    mel_spectrogram=self.mel_spectrogram,
-                    destructive_only=self.augmentation_destructive_only,
-                )
+            self._build_chains(numpy.random.default_rng(seed))
+
+    def _build_chains(self, generator: numpy.random.Generator):
+        self.augmentation_chains.clear()
+        for index in range(len(self)):
+            self.augmentation_chains[index] = build_augmentation_chain(
+                self.augmentation_config, generator=generator,
+                mel_spectrogram=self.mel_spectrogram,
+                destructive_only=self.augmentation_destructive_only,
+            )
 
     def _load_waveform(self, index: int) -> numpy.ndarray:
         waveform_fn = self.data_dir / str(self.info["item_paths"][index])

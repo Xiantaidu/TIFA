@@ -8,6 +8,16 @@ from training.pl_module_base import BaseLightningModule
 
 
 class SupervisedDataset(BaseDataset):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if (
+            self.augmentation_config is not None
+            and self.augmentation_config.time_stretching.enabled
+        ):
+            raise ValueError(
+                "Time stretching is not supported for supervised dataset."
+            )
+
     def __getitem__(self, index: int) -> dict:
         sample = super().__getitem__(index)
         # sample keys: spectrogram [T_spec, F], tokens [N], spans [N,2], regions [T]

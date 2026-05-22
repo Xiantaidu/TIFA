@@ -112,6 +112,18 @@ class PitchShiftingAugmentationConfig(ConfigBaseModel):
     })
 
 
+class TimeStretchingAugmentationConfig(ConfigBaseModel):
+    enabled: bool = Field(False)
+    prob: float = Field(0.5, gt=0.0, le=1.0)
+    min_speed: float = Field(0.8, gt=0.0)
+    max_speed: float = Field(1.25, json_schema_extra={
+        "dynamic_check": DynamicCheck(
+            expr=this() > ref("training.augmentation.time_stretching.min_speed"),
+            message="max_speed must be greater than min_speed."
+        )
+    })
+
+
 class LoudnessScalingAugmentationConfig(ConfigBaseModel):
     enabled: bool = Field(False)
     prob: float = Field(0.5, gt=0.0, le=1.0)
@@ -182,6 +194,7 @@ class AugmentationConfig(ConfigBaseModel):
         "dynamic_expr": ref("binarizer.features")
     })
     pitch_shifting: PitchShiftingAugmentationConfig = Field(...)
+    time_stretching: TimeStretchingAugmentationConfig = Field(...)
     loudness_scaling: LoudnessScalingAugmentationConfig = Field(...)
     spectrogram_masking: SpectrogramMaskingAugmentationConfig = Field(...)
     colored_noise: ColoredNoiseAugmentationConfig = Field(...)
