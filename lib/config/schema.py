@@ -310,6 +310,7 @@ class TrainerConfig(ConfigBaseModel):
 class ValidationConfig(ConfigBaseModel):
     allow_amp: bool = Field(False)
     max_plots: int = Field(100, ge=0)
+    parallel_dirty_metrics: bool = Field(True)
 
     @property
     def d3pm_sample_ts_resolved(self):
