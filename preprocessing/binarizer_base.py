@@ -184,7 +184,7 @@ class BaseBinarizer(abc.ABC):
         # Copy description files
         save_raw_config(self.config.features.model_dump(), self.data_dir / "feature.yaml")
         self.vocabulary.dump(self.data_dir / "vocabulary.json")
-        self.vocabulary.dump_replaceable_clusters(self.data_dir / "replaceable_clusters.json")
+        self.vocabulary.dump_replaceable_tokens(self.data_dir / "replaceable_tokens.json")
 
         # Process datasets
         if self.eval_mode:

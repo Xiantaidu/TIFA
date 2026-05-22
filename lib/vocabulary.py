@@ -156,18 +156,18 @@ class Vocabulary:
             "symbols": dict(self.symbol_to_id),
         }
 
-    def to_replaceable_clusters(self) -> dict:
+    def to_replaceable_tokens(self) -> dict:
         return {
-            "replaceable_clusters": [list(ids) for ids in self.replaceable_cluster_ids]
+            "replaceable_tokens": [list(ids) for ids in self.replaceable_cluster_ids]
         }
 
     def dump(self, path: str | pathlib.Path) -> None:
         with open(path, "w", encoding="utf8") as f:
             json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
 
-    def dump_replaceable_clusters(self, path: str | pathlib.Path) -> None:
+    def dump_replaceable_tokens(self, path: str | pathlib.Path) -> None:
         with open(path, "w", encoding="utf8") as f:
-            json.dump(self.to_replaceable_clusters(), f, ensure_ascii=False, indent=2)
+            json.dump(self.to_replaceable_tokens(), f, ensure_ascii=False, indent=2)
 
 
 _T = TypeVar("_T")
