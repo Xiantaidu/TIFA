@@ -2,7 +2,6 @@ import pathlib
 
 import librosa
 import numpy
-import opuscodec
 
 
 def load_audio(filepath: pathlib.Path) -> tuple[numpy.ndarray, int]:
@@ -12,6 +11,7 @@ def load_audio(filepath: pathlib.Path) -> tuple[numpy.ndarray, int]:
     """
     suffix = filepath.suffix.lower()
     if suffix == ".opus":
+        import opuscodec
         with open(filepath, "rb") as f:
             data = f.read()
         decoder = opuscodec.OpusBufferedDecoder()
