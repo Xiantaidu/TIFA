@@ -5,8 +5,7 @@ import pathlib
 from types import MappingProxyType
 from typing import Iterable, Mapping, Sequence, TypeVar
 
-from lib.types import MergedSymbolGroup
-
+from lib.config.schema import MergedSymbolGroupConfig
 
 __all__ = [
     "VocabularyBuilder",
@@ -20,7 +19,7 @@ class VocabularyBuilder:
             *,
             global_symbols: Iterable[str] = (),
             stop_symbols: Iterable[str] = (),
-            merged_groups: Iterable[MergedSymbolGroup] | None = None,
+            merged_groups: Iterable[MergedSymbolGroupConfig] | None = None,
             replaceable_clusters: Iterable[Sequence[str]] | None = None,
     ):
         self.global_symbols = frozenset(global_symbols)
