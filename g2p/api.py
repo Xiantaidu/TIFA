@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from .converters.base import Converter
+from .preprocessors.base import Preprocessor
+from .registry import get_converter, get_preprocessor, get_tokenizer
+from .tokenizers.base import Tokenizer
+from .pipeline import G2PPipeline
+
+if TYPE_CHECKING:
+    from lib.config.schema import (
+        ConverterConfig,
+        G2PPipelineConfig,
+        PreprocessorConfig,
+        TokenizerConfig,
+    )
+
+
+def _resolve_path_refs(obj: Any, root: Path) -> Any:
+    if isinstance(obj, str) and obj.startswith("@"):
+        return str((root / obj[1:]).resolve())
+    if isinstance(obj, dict):
+        return {k: _resolve_path_refs(v, root) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_resolve_path_refs(v, root) for v in obj]
+    return obj
+
+
+def build_tokenizer_from_config(
+    config: TokenizerConfig, *, root_path: str | Path = ""
+) -> Tokenizer:
+    cls = get_tokenizer(config.id)
+    kwargs = _resolve_path_refs(config.kwargs, Path(root_path))
+    return cls(**kwargs)
+
+
+def build_preprocessor_from_config(
+    config: PreprocessorConfig, *, root_path: str | Path = ""
+) -> Preprocessor:
+    cls = get_preprocessor(config.id)
+    kwargs = _resolve_path_refs(config.kwargs, Path(root_path))
+    return cls(**kwargs)
+
+
+def build_converter_from_config(
+    config: ConverterConfig, *, root_path: str | Path = ""
+) -> Converter:
+    cls = get_converter(config.id)
+    kwargs = _resolve_path_refs(config.kwargs, Path(root_path))
+    return cls(**kwargs)
+
+
+def build_pipeline_from_config(
+    config: G2PPipelineConfig, *, root_path: str | Path = ""
+) -> G2PPipeline:
+    root = Path(root_path)
+    return G2PPipeline(
+        preprocessors=[build_preprocessor_from_config(pc, root_path=root) for pc in config.preprocessors],
+        tokenizers=[build_tokenizer_from_config(tc, root_path=root) for tc in config.tokenizers],
+        converters=[build_converter_from_config(cc, root_path=root) for cc in config.converters],
+    )

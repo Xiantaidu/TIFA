@@ -1,0 +1,45 @@
+from g2p.registry import tokenizer
+
+from .base import Tokenizer
+
+
+def _is_cjk(c: str) -> bool:
+    cp = ord(c)
+    return (
+        0x2E80 <= cp <= 0x2EFF  # CJK Radicals Supplement
+        or 0x2F00 <= cp <= 0x2FDF  # Kangxi Radicals
+        or 0x3000 <= cp <= 0x303F  # CJK Symbols and Punctuation
+        or 0x3040 <= cp <= 0x309F  # Hiragana
+        or 0x30A0 <= cp <= 0x30FF  # Katakana
+        or 0x31F0 <= cp <= 0x31FF  # Katakana Phonetic Extensions
+        or 0x3400 <= cp <= 0x4DBF  # CJK Unified Ideographs Extension A
+        or 0x4E00 <= cp <= 0x9FFF  # CJK Unified Ideographs
+        or 0xAC00 <= cp <= 0xD7AF  # Hangul Syllables
+        or 0xF900 <= cp <= 0xFAFF  # CJK Compatibility Ideographs
+        or 0xFF00 <= cp <= 0xFFEF  # Halfwidth and Fullwidth Forms
+    )
+
+
+@tokenizer(id="cjk")
+class CJKTokenizer(Tokenizer):
+    """Split CJK characters individually while grouping non-CJK characters into runs.
+    ``你好hello世界`` → ``[你, 好, hello, 世界]``."""
+
+    def tokenize(self, tokens: list[str]) -> list[str]:
+        result: list[str] = []
+        for token in tokens:
+            buf: list[str] = []
+            for c in token:
+                if _is_cjk(c):
+                    if buf and not _is_cjk(buf[0]):
+                        result.append("".join(buf))
+                        buf.clear()
+                    result.append(c)
+                else:
+                    if buf and _is_cjk(buf[0]):
+                        result.append("".join(buf))
+                        buf.clear()
+                    buf.append(c)
+            if buf:
+                result.append("".join(buf))
+        return result

@@ -33,6 +33,27 @@ class DynamicCheck:
             )
 
 
+class TokenizerConfig(ConfigBaseModel):
+    id: str = Field(...)
+    kwargs: dict[str, Any] = Field(default_factory=dict)
+
+
+class PreprocessorConfig(ConfigBaseModel):
+    id: str = Field(...)
+    kwargs: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConverterConfig(ConfigBaseModel):
+    id: str = Field(...)
+    kwargs: dict[str, Any] = Field(default_factory=dict)
+
+
+class G2PPipelineConfig(ConfigBaseModel):
+    preprocessors: list[PreprocessorConfig] = Field(default_factory=list)
+    tokenizers: list[TokenizerConfig] = Field(..., min_length=1)
+    converters: list[ConverterConfig] = Field(default_factory=list)
+
+
 class RequiredOnGivenScope(DynamicCheck):
     def __init__(self, scope_mask: int):
         super().__init__(
@@ -81,6 +102,7 @@ class BinarizerFeaturesConfig(ConfigBaseModel):
 
 class BinarizerConfig(ConfigBaseModel):
     data_dir: str = Field(...)
+    g2p: G2PPipelineConfig | None = Field(None)
     vocabulary: VocabularyConfig = Field(default_factory=VocabularyConfig)
     validation_count: int = Field(20, gt=0)
     num_workers: int = Field(0, ge=0)
@@ -371,6 +393,9 @@ class TrainingConfig(ConfigBaseModel):
 
 
 class InferenceConfig(ConfigBaseModel):
+    g2p: G2PPipelineConfig | None = Field(None, json_schema_extra={
+        "dynamic_expr": ref("binarizer.g2p")
+    })
     features: BinarizerFeaturesConfig = Field(None, json_schema_extra={
         "dynamic_expr": ref("binarizer.features")
     })
