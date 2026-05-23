@@ -109,8 +109,7 @@ class BaseDataset(torch.utils.data.Dataset):
     def set_epoch(self, epoch: int):
         self.epoch.value = epoch
         if self.augmentation_config is not None and not self.augmentation_deterministic:
-            seed = generate_seed([str(epoch), *sorted(self.info.keys())])
-            self._build_chains(numpy.random.default_rng(seed))
+            self._build_chains(numpy.random.default_rng())
 
     def num_frames(self, index: int) -> int:
         base_len = int(self.info["lengths"][index])
