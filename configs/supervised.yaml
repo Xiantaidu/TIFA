@@ -3,7 +3,8 @@ bases: [
 ]
 
 binarizer:
-  data_dir: "data/phones"
+  phoneme_timing_data_dir: "data/phones"
+  g2p: null
   vocabulary:
     global_symbols: [AP, SP, EP, GS, sil, br, pau, cl]
     stop_symbols: [AP, SP, EP, GS, sil, br, pau, cl]

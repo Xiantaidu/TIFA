@@ -102,7 +102,8 @@ class BinarizerFeaturesConfig(ConfigBaseModel):
 
 
 class BinarizerConfig(ConfigBaseModel):
-    data_dir: str = Field(...)
+    phoneme_timing_data_dir: str = Field(...)
+    text_only_data_dir: str | None = Field(None)
     g2p: G2PPipelineConfig | None = Field(None)
     vocabulary: VocabularyConfig = Field(default_factory=VocabularyConfig)
     validation_count: int = Field(20, gt=0)
@@ -110,8 +111,12 @@ class BinarizerConfig(ConfigBaseModel):
     features: BinarizerFeaturesConfig = Field(...)
 
     @property
-    def data_dir_resolved(self) -> pathlib.Path:
-        return pathlib.Path(self.data_dir).resolve()
+    def phoneme_timing_data_dir_resolved(self) -> pathlib.Path:
+        return pathlib.Path(self.phoneme_timing_data_dir).resolve()
+
+    @property
+    def text_only_data_dir_resolved(self) -> pathlib.Path | None:
+        return pathlib.Path(self.text_only_data_dir).resolve()
 
 
 class BackboneConfig(ConfigBaseModel):

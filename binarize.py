@@ -27,23 +27,28 @@ from lib import logging
     help="Evaluation mode: the whole dataset will be processed as validation set."
 )
 def main(config: pathlib.Path, override: list[str], vocab_only: bool, eval_mode: bool):
-    from preprocessing.api import load_config_for_binarization
-    from preprocessing.phonemes_binarizer import PhonemesBinarizer
+    from preprocessing.api import (
+        load_config_for_binarization, build_vocab_from_datasets, binarize_datasets
+    )
+    from preprocessing.phonemes_binarizer import PhonemeTimingBinarizer
 
     config_obj = load_config_for_binarization(config, overrides=override)
-    binarizer = PhonemesBinarizer(config_obj, eval_mode=eval_mode)
 
     if vocab_only:
-        metadata_list = binarizer.collect_metadata()
-        logging.info(f"Collected {len(metadata_list)} metadata items.")
-        binarizer.build_vocabulary(metadata_list)
-        logging.success("Vocabulary built and plot saved. Exiting.")
+        build_vocab_from_datasets(
+            config=config_obj,
+            binarizer_classes=[PhonemeTimingBinarizer],
+        )
         return
 
     if eval_mode:
         logging.debug("Using evaluation mode.")
-    from preprocessing.api import binarize_datasets
-    binarize_datasets(binarizer=binarizer)
+
+    binarize_datasets(
+        config=config_obj,
+        binarizer_classes=[PhonemeTimingBinarizer],
+        eval_mode=eval_mode
+    )
 
 
 if __name__ == "__main__":

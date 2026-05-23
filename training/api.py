@@ -116,7 +116,7 @@ def train_model(
         current_time = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         save_raw_config(cfg.model_dump(), to_dir / f"hparams-{current_time}.yaml")
 
-    data_dir = config.binarizer.data_dir_resolved
+    data_dir = config.binarizer.phoneme_timing_data_dir_resolved
     ckpt_save_dir.mkdir(parents=True, exist_ok=True)
     _check_file_and_config(data_dir / "feature.yaml", config.binarizer.features)
     _check_and_copy("vocabulary.json", data_dir, ckpt_save_dir)

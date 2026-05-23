@@ -1,4 +1,5 @@
 import csv
+import pathlib
 from dataclasses import dataclass
 
 import numpy
@@ -23,8 +24,11 @@ class PhonemesMetadataItem(MetadataItem):
     raw_durations: list[float]  # including stop symbols, in seconds
 
 
-class PhonemesBinarizer(BaseBinarizer):
+class PhonemeTimingBinarizer(BaseBinarizer):
     __data_attrs__ = PHONEMES_ITEM_ATTRIBUTES
+
+    def resolve_data_dir(self) -> pathlib.Path:
+        return self.config.phoneme_timing_data_dir_resolved
 
     def load_metadata(self, subset_dir) -> list[MetadataItem]:
         index_path = subset_dir / "index.csv"

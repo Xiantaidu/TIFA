@@ -44,13 +44,17 @@ class BaseBinarizer(abc.ABC):
     def __init__(self, config: BinarizerConfig, eval_mode=False):
         self.config = config
         self.eval_mode = eval_mode
-        self.data_dir: pathlib.Path = config.data_dir_resolved
+        self.data_dir: pathlib.Path = self.resolve_data_dir()
         self.timestep = config.features.timestep
 
         self.vocabulary: Vocabulary | None = None
 
         self.valid_items: list[MetadataItem] = []
         self.train_items: list[MetadataItem] = []
+
+    @abc.abstractmethod
+    def resolve_data_dir(self) -> pathlib.Path:
+        pass
 
     @abc.abstractmethod
     def load_metadata(self, subset_dir: pathlib.Path) -> list[MetadataItem]:
@@ -162,7 +166,10 @@ class BaseBinarizer(abc.ABC):
         for item in metadata_list:
             vocab_builder.add(item.raw_symbols, default_language=item.language)
         self.vocabulary = vocab_builder.build()
-        fig = vocab_distribution_to_figure(vocab_builder.counter())
+        self.save_vocab_plot(vocab_builder.counter())
+
+    def save_vocab_plot(self, counter) -> None:
+        fig = vocab_distribution_to_figure(counter)
         if fig is not None:
             filename = self.data_dir / "vocab_distribution.jpg"
             fig.savefig(fname=filename, bbox_inches="tight", pad_inches=0.25)
@@ -170,28 +177,29 @@ class BaseBinarizer(abc.ABC):
             plt.close(fig)
             logging.info(f"Vocabulary distribution plot saved to '{filename}'.")
 
-    def process(self):
-        metadata_list = self.collect_metadata()
-
-        # Build vocabulary
-        self.build_vocabulary(metadata_list)
-
-        # Split training and validation sets
+    def build_dataset(self, metadata_list: list[MetadataItem]):
         self.split_dataset(metadata_list)
         logging.info(f"Training set total size: {len(self.train_items)}.")
         logging.info(f"Validation set total size: {len(self.valid_items)}.")
+        self._save_auxiliary_files()
+        self._process_datasets()
 
-        # Copy description files
+    def _save_auxiliary_files(self):
         save_raw_config(self.config.features.model_dump(), self.data_dir / "feature.yaml")
         self.vocabulary.dump(self.data_dir / "vocabulary.json")
         self.vocabulary.dump_replaceable_tokens(self.data_dir / "replaceable_tokens.json")
 
-        # Process datasets
+    def _process_datasets(self):
         if self.eval_mode:
             self.process_items(self.valid_items, prefix="valid", multiprocessing=True)
         else:
             self.process_items(self.valid_items, prefix="valid", multiprocessing=False)
             self.process_items(self.train_items, prefix="train", multiprocessing=True)
+
+    def process(self):
+        metadata_list = self.collect_metadata()
+        self.build_vocabulary(metadata_list)
+        self.build_dataset(metadata_list)
 
     def get_frame_count(self, waveform_fn) -> int:
         duration = librosa.get_duration(path=waveform_fn)
