@@ -9,20 +9,27 @@ flowchart LR
     Text["text<br/>(str)"] --> PP[preprocess]
     PP --> Tok[tokenize]
     Tok --> Conv[convert]
-    Conv --> Ph["phoneme sequences<br/>(list[list[str]])"]
-
-    PP -.->|chain| PP1[punctuation_filter] --> PP2[lowercase]
-    Tok -.->|chain| Tok1[whitespace]
-    Conv -.->|chain| C1[dictionary] --> C2[passthrough]
+    Conv --> Ph["PronunciationGroup sequences<br/>(list[PronunciationGroup])"]
 ```
 
-| Stage      | Input                | Output            | Purpose                                                   |
-|------------|----------------------|-------------------|-----------------------------------------------------------|
-| Preprocess | raw text as `[text]` | modified `[text]` | Clean text before tokenization (lowercase, strip, filter) |
-| Tokenize   | `list[str]`          | `list[str]`       | Split text into tokens (words, characters, etc.)          |
-| Convert    | `list[str]`          | `list[list[str]]` | Convert tokens to phoneme sequences                       |
+| Stage      | Input                | Output                       | Purpose                                                   |
+|------------|----------------------|------------------------------|-----------------------------------------------------------|
+| Preprocess | raw text as `[text]` | modified `[text]`            | Clean text before tokenization (lowercase, strip, filter) |
+| Tokenize   | `list[str]`          | `list[str]`                  | Split text into tokens (words, characters, etc.)          |
+| Convert    | `list[str]`          | `list[PronunciationGroup]`   | Convert tokens to phoneme sequences with language tags    |
 
-Each stage chains configurable components. A stage can have multiple components; each feeds its output to the next.
+Each stage runs its components sequentially — each feeds its output to the next.
+
+### PronunciationGroup
+
+```python
+@dataclass
+class PronunciationGroup:
+    paths: list[list[str]]     # alternative phoneme sequences for one token
+    language: str | None = None  # e.g. "cmn", "yue" — set by the pipeline
+```
+
+Pipeline output is `list[PronunciationGroup]`, one per token. Downstream code decides how to use the language tag (phoneme prefixing, filtering, etc.).
 
 ## Architecture
 
@@ -43,44 +50,50 @@ class MyPreprocessor(Preprocessor): ...
 class MyConverter(Converter): ...
 ```
 
-The `language` parameter on `@converter` sets `Converter.language` for compatibility checking. Converters with `language=None` bypass language verification (for generic converters like dictionaries).
+`language` is a comma-separated string (e.g. `"zh,cmn"`) stored as `tuple[str, ...]` on the class.
 
 ### Auto-discovery
 
-Dropping a `.py` file into `g2p/tokenizers/`, `g2p/preprocessors/`, or `g2p/converters/` automatically imports it and fires the decorator — no manual imports needed.
+Dropping a `.py` file into `g2p/tokenizers/`, `g2p/preprocessors/`, or `g2p/converters/` automatically imports it and fires the decorator.
 
 ```
 g2p/
+├── registry.py         # @tokenizer, @preprocessor, @converter + lookup + parse_language()
+├── pipeline.py         # G2PPipeline: preprocess→tokenize→convert loop with language stamping
+├── api.py              # build_*_from_config(root_path=)
 ├── tokenizers/
-│   ├── base.py          # Tokenizer ABC, ChainedTokenizer
-│   └── simple.py        # WhitespaceTokenizer, CharacterTokenizer, IdentityTokenizer
+│   ├── base.py         # Tokenizer ABC
+│   ├── simple.py       # Whitespace, Character, Identity
+│   └── cjk.py          # CJKTokenizer
 ├── preprocessors/
-│   ├── base.py          # Preprocessor ABC, ChainedPreprocessor
-│   └── simple.py        # PunctuationFilter, LowercasePreprocessor, StripWhitespacePreprocessor
-├── converters/
-│   ├── base.py          # Converter ABC, ChainedConverter, G2PConversionError
-│   └── simple.py        # DictionaryConverter, PassthroughConverter, CharPhonemeConverter
-├── pipeline.py          # G2PPipeline orchestrator
-├── api.py               # build_*_from_config()
-└── registry.py          # Decorators and lookup functions
+│   ├── base.py         # Preprocessor ABC
+│   └── simple.py       # PunctuationFilter, Lowercase, StripWhitespace
+└── converters/
+    ├── base.py         # Converter ABC, PronunciationGroup, G2PConversionError, resolve_language()
+    ├── paradigm.py     # LexiconConverter, PronunciationScriptConverter
+    ├── dictionary.py   # load_pronunciation_dict(), DictionaryConverter, PronunciationScriptDictionaryConverter
+    ├── chinese.py      # MandarinConverter, CantoneseConverter
+    ├── japanese.py     # JapaneseKanaConverter
+    ├── simple.py       # PassthroughConverter, CharPhonemeConverter
+    └── cpp_pinyin/     # PinyinEngine + dicts (mandarin, cantonese)
 ```
 
 ### Tokenizer
 
-Splits tokens into smaller tokens. A `ChainedTokenizer` feeds each tokenizer's output as input to the next. The first tokenizer in the pipeline receives `[raw_text]`.
+Splits tokens into smaller tokens. The first tokenizer receives `[raw_text]`.
 
 **Built-in:**
 
 | ID           | Class                 | Behavior                                                  |
 |--------------|-----------------------|-----------------------------------------------------------|
 | `whitespace` | `WhitespaceTokenizer` | Split on Unicode whitespace boundaries                    |
-| `cjk`        | `CjkTokenizer`        | Split CJK characters individually, group others into runs |
+| `cjk`        | `CJKTokenizer`        | Split CJK characters individually, group others into runs |
 | `character`  | `CharacterTokenizer`  | Split each token into individual characters               |
 | `identity`   | `IdentityTokenizer`   | Return tokens unchanged                                   |
 
 ### Preprocessor
 
-Transforms a token sequence. Applied before tokenization — receives `[raw_text]` and returns `[modified_text]`.
+Transforms a token sequence. Applied before tokenization — receives `[raw_text]`.
 
 **Built-in:**
 
@@ -92,76 +105,79 @@ Transforms a token sequence. Applied before tokenization — receives `[raw_text
 
 ### Converter
 
-Converts tokens to phoneme sequences. Each converter must implement:
+Converts tokens to phoneme sequences. Each converter implements:
 
 - `claim(token) → bool` — whether this converter handles the given token
-- `convert(tokens) → list[list[str]]` — convert tokens to phonemes
+- `convert(tokens) → list[PronunciationGroup]` — convert tokens to phoneme groups
+- `preprocessors() → list[Preprocessor]` (optional) — private preprocessors for claimed tokens
 
-Optionally override `preprocessors() → list[Preprocessor]` to apply private preprocessors to claimed tokens before `convert()`.
+`Converter.language` is a class attribute `tuple[str, ...] | None`. The pipeline resolves which specific tag matched and stamps it on each `PronunciationGroup.language`. Converters with `language=None` leave the field `None`.
 
-The output is `list[list[str]]`: one phoneme list per input token, in the original order.
+**Built-in converters:**
 
-**Built-in:**
+| ID               | Class                  | Behavior                                                           |
+|------------------|------------------------|--------------------------------------------------------------------|
+| `dictionary`     | `DictionaryConverter`  | Pronunciation dictionary lookup from a tab-separated file          |
+| `passthrough`    | `PassthroughConverter` | Catch-all: returns each token as its own phoneme                   |
+| `char_phoneme`   | `CharPhonemeConverter` | One-to-one character-to-phoneme mapping                            |
+| `mandarin`       | `MandarinConverter`    | hanzi → pinyin (cpp-pinyin engine) → phonemes (dict)               |
+| `cantonese`      | `CantoneseConverter`   | hanzi → jyutping (cpp-pinyin engine) → phonemes (dict)             |
+| `japanese_kana`  | `JapaneseKanaConverter`| kana → romaji (mapping table) → phonemes (dict)                    |
 
-| ID             | Class                  | Behavior                                                                   |
-|----------------|------------------------|----------------------------------------------------------------------------|
-| `chain`        | `ChainedConverter`     | Chain converters in priority order; each handles contiguous claimed tokens |
-| `dictionary`   | `DictionaryConverter`  | Pronunciation dictionary lookup from a tab-separated file                  |
-| `passthrough`  | `PassthroughConverter` | Catch-all: returns each token as its own phoneme                           |
-| `char_phoneme` | `CharPhonemeConverter` | One-to-one character-to-phoneme mapping                                    |
+### Paradigms
 
-#### ChainedConverter algorithm
+Paradigm base classes live in `paradigm.py` and `dictionary.py`. They are **not** registered — subclasses add the `@converter` decorator.
 
-The chain processes tokens left to right through each sub-converter in priority order.
+**`PronunciationScriptConverter`** — for writing systems that use a decoupled pronunciation script (pinyin, jyutping, romaji). Two-phase:
 
-```mermaid
-flowchart TD
-    init["states = [TokenState(t) for t in tokens]"]
-    next_module["next converter in chain"]
-    find_run["find contiguous unconverted tokens<br/>where converter.claim() is True"]
-    preprocess["apply converter.preprocessors()"]
-    convert["call converter.convert()"]
-    assign["assign phonemes back to states"]
-    more_tokens{"more<br/>unconverted?"}
-    more_modules{"more<br/>converters?"}
-    raise["raise G2PConversionError"]
+1. `text_to_script(tokens) → list[list[str]]` — text → script tokens (with alternatives)
+2. `script_to_phonemes(script) → list[list[str]]` — script token → phoneme sequences
 
-    init --> next_module
-    next_module --> find_run
-    find_run -->|found| preprocess
-    find_run -->|none| more_modules
-    preprocess --> convert --> assign
-    assign --> more_tokens
-    more_tokens -->|yes| find_run
-    more_tokens -->|no| more_modules
-    more_modules -->|yes| next_module
-    more_modules -->|no| raise
-```
+Both methods are abstract. `convert()` orchestrates them and deduplicates paths.
 
-Any tokens remaining unconverted after all converters raise `G2PConversionError`.
+**`PronunciationScriptDictionaryConverter`** — extends `PronunciationScriptConverter`. Fills in `script_to_phonemes` via `load_pronunciation_dict()`. Subclasses implement `text_to_script` and pass a required `dict_path` to the constructor.
 
-#### DictionaryConverter format
+**`LexiconConverter`** — for alphabetical languages where text IS the pronunciation script. Has a pronunciation dictionary for known words and an abstract `infer_oov(token)` method for out-of-vocabulary inference. `dict_path` is optional (pure inference is valid).
 
-Loads a pronunciation dictionary from a file path. Each line is tab-separated:
+### Language resolution
 
-```
-<word>\t<ph1> <ph2> ...
-```
+When the pipeline runs with `languages=["cmn"]`:
 
-- Multiple pronunciations can appear as duplicate words, or with `(N)` / ` (N)` suffixes: `word`, `word(1)`, `word (2)`, etc.
-- Words are case-insensitive
-- The first pronunciation variant is returned
+1. Converters are filtered: a converter runs if `language is None` or any of its tags are in the set.
+2. For each converter, `resolve_language(converter.language, language_set)` picks the single matching tag (or first tag when no filter is set).
+3. The tag is stamped on each output `PronunciationGroup.language`.
 
-Example:
+### Convert algorithm
+
+The pipeline processes tokens in priority order through each active converter:
+
+1. Find the next contiguous run of unconverted tokens where `converter.claim()` is true.
+2. Apply the converter's private preprocessors to the run.
+3. Call `converter.convert()` on the run.
+4. Stamp the resolved language on each result. Assign pronuncations back.
+5. Repeat until the converter has no more claimed runs. Move to the next converter.
+
+Any tokens still unconverted after all converters raise `G2PConversionError`.
+
+### DictionaryConverter format
+
+Tab-separated file: `<word>\t<ph1> <ph2> ...`
+
+- Multiple pronunciations via duplicate entries or `(N)` / ` (N)` suffixes: `word`, `word(1)`, `word (2)`
+- Case-insensitive
+- All pronunciation variants are preserved in `paths`
+
 ```
 hello	hh ax l ow
 hello(1)	hh eh l ow
 world	w er l d
 ```
 
-## Configuration
+### Shared dictionary loader
 
-Add a `g2p` block under `binarizer` in your config YAML. It copies to `inference` automatically (same mechanism as `features`).
+`load_pronunciation_dict(path)` in `dictionary.py` loads a tab-separated file and returns `dict[str, list[list[str]]]`. Used by `DictionaryConverter`, `PronunciationScriptDictionaryConverter`, and any custom converter that needs script-to-phoneme lookup. No `(N)`-variant handling — that's `DictionaryConverter`-specific.
+
+## Configuration
 
 ```yaml
 binarizer:
@@ -172,22 +188,24 @@ binarizer:
       - id: whitespace
     converters:
       - id: dictionary
+        language: eng
         kwargs:
-          path: dictionaries/my_dict.txt
+          path: dictionaries/eng_dict.txt
       - id: passthrough
+        language: eng
 ```
 
 ### Config schema
 
 ```python
 class G2PPipelineConfig(ConfigBaseModel):
-    preprocessors: list[PreprocessorConfig]   # Applied first, on raw text
-    tokenizers: list[TokenizerConfig]         # Chain of tokenizers
-    converters: list[ConverterConfig]         # Chain of converters (wraps in ChainedConverter)
+    preprocessors: list[PreprocessorConfig]
+    tokenizers: list[TokenizerConfig]
+    converters: list[ConverterConfig]
 
 class TokenizerConfig(ConfigBaseModel):
-    id: str          # Registry ID
-    kwargs: dict     # Constructor arguments
+    id: str
+    kwargs: dict
 
 class PreprocessorConfig(ConfigBaseModel):
     id: str
@@ -195,18 +213,22 @@ class PreprocessorConfig(ConfigBaseModel):
 
 class ConverterConfig(ConfigBaseModel):
     id: str
+    language: str | None = None   # comma-separated, overrides decorator default
     kwargs: dict
 ```
 
-String values in `kwargs` that start with `@` are treated as paths relative to the config file's directory. For example, `"@../dicts/cmudict.txt"` with `root_path="configs/g2p/"` resolves to `configs/dicts/cmudict.txt`. This avoids hardcoding absolute paths.
+`language` on `ConverterConfig` is **required** when the converter class has no registered language (`cls.language is None`). It overrides the decorator default when set.
 
-### Programmatic usage
+`@`-prefixed strings in kwargs resolve relative to `root_path`: `"@../dicts/eng.txt"` with `root_path="configs/g2p/"` → `configs/dicts/eng.txt`.
+
+## Programmatic usage
 
 ```python
 from g2p import G2PPipeline
 from g2p.tokenizers.simple import WhitespaceTokenizer
 from g2p.preprocessors.simple import LowercasePreprocessor
-from g2p.converters.simple import DictionaryConverter, PassthroughConverter
+from g2p.converters.dictionary import DictionaryConverter
+from g2p.converters.simple import PassthroughConverter
 
 pipeline = G2PPipeline(
     preprocessors=[LowercasePreprocessor()],
@@ -214,19 +236,20 @@ pipeline = G2PPipeline(
     converters=[DictionaryConverter(path="dict.txt"), PassthroughConverter()],
 )
 
-phonemes = pipeline.convert("Hello world")
-# → [["hh", "ax", "l", "ow"], ["w", "er", "l", "d"]]
+result = pipeline.convert("Hello world")
+# → [PronunciationGroup(paths=[["hh","ax","l","ow"],["hh","eh","l","ow"]], language=None),
+#    PronunciationGroup(paths=[["w","er","l","d"]], language=None)]
 ```
 
-Optionally filter converters by language:
+Language filtering:
 
 ```python
-pipeline.convert("Hello world", languages=["eng"])
+result = pipeline.convert("你好", languages=["cmn"])
+# MandarinConverter matched with "cmn"
+# → [PronunciationGroup(paths=[["ni"]], language="cmn")]
 ```
 
-Converters with `language=None` always run; converters with a matching language are activated; all others are skipped. Raises `ValueError` if no converter matches.
-
-Or build from config:
+Config-based:
 
 ```python
 from lib.config.schema import G2PPipelineConfig
@@ -243,23 +266,28 @@ Drop a file into `g2p/converters/`:
 ```python
 # g2p/converters/my_lang.py
 from g2p.registry import converter
-from g2p.converters.base import Converter
+from g2p.converters.base import Converter, PronunciationGroup
 
 @converter(id="my-lang", language="xyz")
 class MyLangConverter(Converter):
-    r"""G2P converter for the XYZ language."""
-    
-    def __init__(self, some_option: bool = True) -> None:
-        self._option = some_option
-
     def claim(self, token: str) -> bool:
-        return True  # or language/character detection
+        return True
 
-    def convert(self, tokens: list[str]) -> list[list[str]]:
-        return [[...] for t in tokens]
+    def convert(self, tokens: list[str]) -> list[PronunciationGroup]:
+        return [PronunciationGroup(paths=[[...]]) for t in tokens]
 ```
 
-Then reference it in config:
+Or derive from a paradigm:
+
+```python
+from g2p.converters.paradigm import PronunciationScriptConverter
+
+class MyConverter(PronunciationScriptConverter):
+    def text_to_script(self, tokens): ...
+    def script_to_phonemes(self, script): ...
+```
+
+Then reference in config:
 
 ```yaml
 converters:
@@ -268,4 +296,4 @@ converters:
       some_option: false
 ```
 
-No other files need editing. The auto-discovery in `converters/__init__.py` picks it up at import time.
+No other files need editing.
