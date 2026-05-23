@@ -1,0 +1,12 @@
+bases:
+  - configs/base.yaml
+
+binarizer:
+  g2p:
+    preprocessors:
+      - id: strip_whitespace
+    tokenizers:
+      - id: cjk
+    converters:
+      - id: cantonese
+      - id: passthrough
