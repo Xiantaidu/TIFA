@@ -4,7 +4,6 @@ Auto-discovered by ``g2p/converters/__init__.py`` and registered as
 ``@converter(id="japanese_kana", language="ja")``.
 """
 
-from __future__ import annotations
 
 from g2p.registry import converter
 
@@ -51,7 +50,7 @@ for _h, _k, _r in _KANA_TABLE:
 _KANA_CHARS = frozenset(_KANA_TO_ROMAJI)
 
 
-@converter(id="japanese_kana", language="ja")
+@converter(id="japanese_kana", language="ja,jpn")
 class JapaneseKanaConverter(PronunciationScriptDictionaryConverter):
     """Japanese kana-to-phoneme converter.
 
@@ -66,7 +65,7 @@ class JapaneseKanaConverter(PronunciationScriptDictionaryConverter):
     (e.g. ``qka`` → ``["k", "k", "a"]``).
     """
 
-    def __init__(self, dict_path: str | None = None) -> None:
+    def __init__(self, dict_path: str) -> None:
         super().__init__(dict_path=dict_path)
 
     def claim(self, token: str) -> bool:

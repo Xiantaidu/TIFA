@@ -8,10 +8,8 @@ Handles the original colon-separated dictionary format:
   user_dict.txt:    phrase:pron1 pron2 pron3  (space-separated, TONE3)
 """
 
-from __future__ import annotations
 
 from pathlib import Path
-from typing import TextIO
 
 
 def encode_phrase_key(chars: list[str]) -> int:

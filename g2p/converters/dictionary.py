@@ -72,15 +72,11 @@ class PronunciationScriptDictionaryConverter(PronunciationScriptConverter, ABC):
     Subclasses implement ``text_to_script``.
     """
 
-    def __init__(self, dict_path: str | None = None) -> None:
+    def __init__(self, dict_path: str) -> None:
         super().__init__()
-        self._script_dict: dict[str, list[list[str]]] | None = (
-            load_pronunciation_dict(dict_path) if dict_path else None
-        )
+        self._script_dict = load_pronunciation_dict(dict_path)
 
     def script_to_phonemes(self, script: str) -> list[list[str]]:
-        if self._script_dict is None:
-            return [[script]]
         pronunciations = self._script_dict.get(script)
         if pronunciations is None:
             raise KeyError(

@@ -1,14 +1,58 @@
 """Paradigm base classes for G2P converters."""
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 
 from g2p.converters.base import Converter, PronunciationGroup
 
 
+class LexiconConverter(Converter, ABC):
+    """Converter for languages where the writing system doubles as the
+    pronunciation script (most alphabetical languages).
+
+    Known words are looked up in a pronunciation dictionary loaded from
+    *dict_path*.  Out-of-vocabulary words are handled by
+    ``_infer_oov``, which subclasses implement with language-specific
+    letter-to-sound rules.
+    """
+
+    def __init__(self, dict_path: str | None = None) -> None:
+        super().__init__()
+        self._dict: dict[str, list[list[str]]] = {}
+        if dict_path is not None:
+            from .dictionary import load_pronunciation_dict
+            self._dict = load_pronunciation_dict(dict_path)
+
+    # ------------------------------------------------------------------
+    # Subclass contract
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def infer_oov(self, token: str) -> list[list[str]]:
+        """Infer phoneme sequences for an out-of-vocabulary token.
+
+        Called when *token* is not found in the pronunciation dictionary.
+        Returns one or more alternative phoneme sequences.
+        """
+        ...
+
+    # ------------------------------------------------------------------
+    # Converter interface
+    # ------------------------------------------------------------------
+
+    def convert(self, tokens: list[str]) -> list[PronunciationGroup]:
+        result: list[PronunciationGroup] = []
+        for token in tokens:
+            pronunciations = self._dict.get(token)
+            if pronunciations is not None:
+                paths = [list(p) for p in pronunciations]
+            else:
+                paths = self.infer_oov(token)
+            result.append(PronunciationGroup(paths=paths))
+        return result
+
+
 class PronunciationScriptConverter(Converter, ABC):
-    """G2P for writing systems that use a decoupled *pronunciation script*.
+    """Converter for writing systems that use a decoupled *pronunciation script*.
 
     Two-phase convert:
 

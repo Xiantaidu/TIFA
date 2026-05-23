@@ -22,7 +22,7 @@ CJK_RANGES = [
 
 # Special kana characters recognized by cpp-pinyin
 SPECIAL_KANA = frozenset(
-    "ャュョゃゅょ" "ァィゥェォ" "ぁぃぅぇぉ"
+    "ャュョゃゅょァィゥェォぁぃぅぇぉ"
 )
 
 # ---- Tone mark → (base char, tone digit) ----

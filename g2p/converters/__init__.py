@@ -1,7 +1,7 @@
 import importlib
 from pathlib import Path
 
-from .base import Converter, ChainedConverter, G2PConversionError, PronunciationGroup
+from .base import Converter, G2PConversionError, PronunciationGroup
 
 _dir = Path(__file__).parent
 for _f in _dir.iterdir():

@@ -1,7 +1,7 @@
 import importlib
 from pathlib import Path
 
-from .base import Tokenizer, ChainedTokenizer
+from .base import Tokenizer
 
 _dir = Path(__file__).parent
 for _f in _dir.iterdir():

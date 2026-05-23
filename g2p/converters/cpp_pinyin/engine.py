@@ -4,7 +4,6 @@ Contains the exact queryRaw() sliding-window phrase-disambiguation logic,
 including all four search directions per length.
 """
 
-from __future__ import annotations
 
 from pathlib import Path
 

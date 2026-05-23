@@ -1,7 +1,7 @@
 import importlib
 from pathlib import Path
 
-from .base import Preprocessor, ChainedPreprocessor
+from .base import Preprocessor
 
 _dir = Path(__file__).parent
 for _f in _dir.iterdir():

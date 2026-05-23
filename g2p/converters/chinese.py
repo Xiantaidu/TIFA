@@ -6,7 +6,6 @@ Both derive from ``PronunciationScriptDictionaryConverter``: hanzi → pinyin/jy
 (script-to-phonemes, via dictionary lookup when *dict_path* is given).
 """
 
-from __future__ import annotations
 
 from pathlib import Path
 
@@ -22,19 +21,17 @@ _CPP_PINYIN_DIR = Path(__file__).parent / "cpp_pinyin" / "dicts"
 class _ChineseScriptConverter(PronunciationScriptDictionaryConverter):
     """Shared base for cpp-pinyin-backed Chinese converters.
 
-    Subclasses pass their bundled-dict directory and are decorated with
-    ``@converter`` to register language and id.
+    Subclasses are decorated with ``@converter`` to register language and id.
     """
 
     def __init__(
         self,
-        dict_dir: str | None = None,
-        dict_path: str | None = None,
+        dict_path: str,
         *,
         _bundled_dict: str,
     ) -> None:
         super().__init__(dict_path=dict_path)
-        self._engine = PinyinEngine(dict_dir or _bundled_dict)
+        self._engine = PinyinEngine(_bundled_dict)
 
     @staticmethod
     def _is_hanzi(token: str) -> bool:
@@ -59,22 +56,16 @@ class _ChineseScriptConverter(PronunciationScriptDictionaryConverter):
         return result
 
 
-@converter(id="mandarin", language="cmn")
+@converter(id="mandarin", language="zh,cmn")
 class MandarinConverter(_ChineseScriptConverter):
     """Mandarin Chinese pinyin converter.
 
     Config examples::
 
-        # Bundled dictionaries
         converters:
           - id: mandarin
           - id: passthrough
-
-        # Custom dictionaries
-        converters:
-          - id: mandarin
-            kwargs:
-              dict_dir: /path/to/dicts
+            language: eng
 
         # Pinyin-to-phoneme mapping
         converters:
@@ -83,13 +74,8 @@ class MandarinConverter(_ChineseScriptConverter):
               dict_path: /path/to/pinyin_phonemes.txt
     """
 
-    def __init__(
-        self,
-        dict_dir: str | None = None,
-        dict_path: str | None = None,
-    ) -> None:
+    def __init__(self, dict_path: str) -> None:
         super().__init__(
-            dict_dir=dict_dir,
             dict_path=dict_path,
             _bundled_dict=str(_CPP_PINYIN_DIR / "mandarin"),
         )
@@ -101,16 +87,10 @@ class CantoneseConverter(_ChineseScriptConverter):
 
     Config examples::
 
-        # Bundled dictionaries
         converters:
           - id: cantonese
           - id: passthrough
-
-        # Custom dictionaries
-        converters:
-          - id: cantonese
-            kwargs:
-              dict_dir: /path/to/dicts
+            language: eng
 
         # Jyutping-to-phoneme mapping
         converters:
@@ -119,13 +99,8 @@ class CantoneseConverter(_ChineseScriptConverter):
               dict_path: /path/to/jyutping_phonemes.txt
     """
 
-    def __init__(
-        self,
-        dict_dir: str | None = None,
-        dict_path: str | None = None,
-    ) -> None:
+    def __init__(self, dict_path: str) -> None:
         super().__init__(
-            dict_dir=dict_dir,
             dict_path=dict_path,
             _bundled_dict=str(_CPP_PINYIN_DIR / "cantonese"),
         )

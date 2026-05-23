@@ -1,6 +1,6 @@
-from .converters.base import Converter, ChainedConverter, G2PConversionError, PronunciationGroup
+from .converters.base import Converter, G2PConversionError, PronunciationGroup
 from .pipeline import G2PPipeline
-from .preprocessors.base import Preprocessor, ChainedPreprocessor
+from .preprocessors.base import Preprocessor
 from .registry import (
     converter,
     get_converter,
@@ -12,7 +12,7 @@ from .registry import (
     preprocessor,
     tokenizer,
 )
-from .tokenizers.base import Tokenizer, ChainedTokenizer
+from .tokenizers.base import Tokenizer
 from .api import (
     build_tokenizer_from_config,
     build_preprocessor_from_config,

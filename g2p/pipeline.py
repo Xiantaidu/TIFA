@@ -1,6 +1,20 @@
-from .converters.base import ChainedConverter, Converter, PronunciationGroup
+from dataclasses import dataclass
+
+from .converters.base import (
+    Converter,
+    G2PConversionError,
+    PronunciationGroup,
+    resolve_language,
+)
 from .preprocessors.base import Preprocessor
 from .tokenizers.base import Tokenizer
+
+
+@dataclass
+class _TokenState:
+    text: str
+    index: int
+    pronunciation: PronunciationGroup | None = None
 
 
 class G2PPipeline:
@@ -14,13 +28,15 @@ class G2PPipeline:
         self._tokenizers = tokenizers or []
         self._converters = converters or []
 
-    def convert(self, text: str, *, languages: list[str] | None = None) -> list[PronunciationGroup]:
+    def convert(
+        self, text: str, *, languages: list[str] | None = None,
+    ) -> list[PronunciationGroup]:
         language_set = set(languages) if languages else None
         active = [
             c for c in self._converters
             if language_set is None
             or c.language is None
-            or any(l in language_set for l in c.language)
+            or any(ln in language_set for ln in c.language)
         ]
         if not active:
             raise ValueError("No converter matches the requested languages.")
@@ -31,5 +47,30 @@ class G2PPipeline:
         for tok in self._tokenizers:
             tokens = tok.tokenize(tokens)
 
-        converter = active[0] if len(active) == 1 else ChainedConverter(modules=active)
-        return converter.convert(tokens)
+        states = [_TokenState(text=t, index=i) for i, t in enumerate(tokens)]
+        for converter in active:
+            unconverted = [s for s in states if s.pronunciation is None]
+            i = 0
+            while i < len(unconverted):
+                if not converter.claim(unconverted[i].text):
+                    i += 1
+                    continue
+                j = i + 1
+                while j < len(unconverted) and converter.claim(unconverted[j].text):
+                    j += 1
+                run_states = unconverted[i:j]
+                run_texts = [s.text for s in run_states]
+                for pp in converter.preprocessors():
+                    run_texts = pp.process(run_texts)
+                results = converter.convert(run_texts)
+                resolved = resolve_language(converter.language, language_set)
+                for state, result in zip(run_states, results):
+                    result.language = resolved
+                    state.pronunciation = result
+                i = j
+
+        unconverted = [s for s in states if s.pronunciation is None]
+        if unconverted:
+            raise G2PConversionError([s.text for s in unconverted])
+
+        return [s.pronunciation for s in states]

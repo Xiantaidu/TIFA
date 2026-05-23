@@ -45,6 +45,7 @@ class PreprocessorConfig(ConfigBaseModel):
 
 class ConverterConfig(ConfigBaseModel):
     id: str = Field(...)
+    language: str | None = Field(None)
     kwargs: dict[str, Any] = Field(default_factory=dict)
 
 

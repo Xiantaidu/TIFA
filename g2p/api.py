@@ -1,21 +1,18 @@
-from __future__ import annotations
-
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
+
+from lib.config.schema import (
+    ConverterConfig,
+    G2PPipelineConfig,
+    PreprocessorConfig,
+    TokenizerConfig,
+)
 
 from .converters.base import Converter
 from .preprocessors.base import Preprocessor
-from .registry import get_converter, get_preprocessor, get_tokenizer
+from .registry import parse_language, get_converter, get_preprocessor, get_tokenizer
 from .tokenizers.base import Tokenizer
 from .pipeline import G2PPipeline
-
-if TYPE_CHECKING:
-    from lib.config.schema import (
-        ConverterConfig,
-        G2PPipelineConfig,
-        PreprocessorConfig,
-        TokenizerConfig,
-    )
 
 
 def _resolve_path_refs(obj: Any, root: Path) -> Any:
@@ -47,9 +44,14 @@ def build_preprocessor_from_config(
 def build_converter_from_config(
     config: ConverterConfig, *, root_path: str | Path = ""
 ) -> Converter:
-    cls = get_converter(config.id)
+    cls: type[Converter] = get_converter(config.id)
     kwargs = _resolve_path_refs(config.kwargs, Path(root_path))
-    return cls(**kwargs)
+    instance = cls(**kwargs)
+
+    if config.language is not None:
+        instance.language = parse_language(config.language)
+
+    return instance
 
 
 def build_pipeline_from_config(
