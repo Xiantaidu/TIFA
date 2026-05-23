@@ -1,9 +1,21 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from g2p.registry import converter
 
 from ..preprocessors.base import Preprocessor
+
+
+@dataclass
+class PronunciationGroup:
+    """A collection of alternative phoneme sequences for one token.
+
+    Each path in ``paths`` represents one possible pronunciation as a list
+    of phoneme strings.  Converters that only produce a single pronunciation
+    per token still wrap it in a one-element ``paths`` list.
+    """
+
+    paths: list[list[str]] = field(default_factory=list)
 
 
 class Converter(ABC):
@@ -22,7 +34,7 @@ class Converter(ABC):
         return []
 
     @abstractmethod
-    def convert(self, tokens: list[str]) -> list[list[str]]:
+    def convert(self, tokens: list[str]) -> list[PronunciationGroup]:
         ...
 
 
@@ -30,7 +42,7 @@ class Converter(ABC):
 class _TokenState:
     text: str
     index: int
-    phonemes: list[str] | None = None
+    pronunciation: PronunciationGroup | None = None
     assigned_converter: str | None = None
 
 
@@ -41,6 +53,23 @@ class G2PConversionError(Exception):
             f"The following tokens could not be converted "
             f"by any converter in the chain: {unconverted_tokens}"
         )
+
+
+def _normalize_pronunciation(value: object) -> PronunciationGroup:
+    """Coerce a converter return value into a ``PronunciationGroup``.
+
+    Accepts both the new ``PronunciationGroup`` type and the legacy
+    ``list[list[str]]`` so that existing converters whose code has not yet
+    been migrated still work inside ``ChainedConverter``.
+    """
+    if isinstance(value, PronunciationGroup):
+        return value
+    if isinstance(value, list):
+        return PronunciationGroup(paths=[value])  # type: ignore[arg-type]
+    raise TypeError(
+        f"Converter returned unexpected type {type(value).__name__}; "
+        f"expected PronunciationGroup or list[list[str]]."
+    )
 
 
 @converter(id="chain", language=None)
@@ -54,11 +83,11 @@ class ChainedConverter(Converter):
     def claim(self, token: str) -> bool:
         return any(m.claim(token) for m in self.modules)
 
-    def convert(self, tokens: list[str]) -> list[list[str]]:
+    def convert(self, tokens: list[str]) -> list[PronunciationGroup]:
         states = [_TokenState(text=t, index=i) for i, t in enumerate(tokens)]
 
         for module in self.modules:
-            unconverted = [s for s in states if s.phonemes is None]
+            unconverted = [s for s in states if s.pronunciation is None]
             i = 0
             while i < len(unconverted):
                 if not module.claim(unconverted[i].text):
@@ -73,15 +102,15 @@ class ChainedConverter(Converter):
                 for pp in module.preprocessors():
                     run_texts = pp.process(run_texts)
 
-                phoneme_lists = module.convert(run_texts)
+                results = module.convert(run_texts)
 
-                for state, phonemes in zip(run_states, phoneme_lists):
-                    state.phonemes = phonemes
+                for state, result in zip(run_states, results):
+                    state.pronunciation = _normalize_pronunciation(result)
                     state.assigned_converter = type(module).__name__
                 i = j
 
-        unconverted = [s for s in states if s.phonemes is None]
+        unconverted = [s for s in states if s.pronunciation is None]
         if unconverted:
             raise G2PConversionError([s.text for s in unconverted])
 
-        return [s.phonemes for s in states]
+        return [s.pronunciation for s in states]  # type: ignore[return-value]

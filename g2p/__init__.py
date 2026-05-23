@@ -1,4 +1,4 @@
-from .converters.base import Converter, ChainedConverter, G2PConversionError
+from .converters.base import Converter, ChainedConverter, G2PConversionError, PronunciationGroup
 from .pipeline import G2PPipeline
 from .preprocessors.base import Preprocessor, ChainedPreprocessor
 from .registry import (

@@ -1,4 +1,4 @@
-from .converters.base import ChainedConverter, Converter
+from .converters.base import ChainedConverter, Converter, PronunciationGroup
 from .preprocessors.base import Preprocessor
 from .tokenizers.base import Tokenizer
 
@@ -14,7 +14,7 @@ class G2PPipeline:
         self._tokenizers = tokenizers or []
         self._converters = converters or []
 
-    def convert(self, text: str, *, languages: list[str] | None = None) -> list[list[str]]:
+    def convert(self, text: str, *, languages: list[str] | None = None) -> list[PronunciationGroup]:
         language_set = set(languages) if languages else None
         active = [
             c for c in self._converters

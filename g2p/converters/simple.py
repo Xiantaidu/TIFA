@@ -3,7 +3,7 @@ from pathlib import Path
 
 from g2p.registry import converter
 
-from .base import Converter
+from .base import Converter, PronunciationGroup
 
 _PRON_UNSAFE_RE = re.compile(r"\s*\(\d+\)$")
 
@@ -34,8 +34,8 @@ class DictionaryConverter(Converter):
     def claim(self, token: str) -> bool:
         return token.lower() in self._dict
 
-    def convert(self, tokens: list[str]) -> list[list[str]]:
-        result: list[list[str]] = []
+    def convert(self, tokens: list[str]) -> list[PronunciationGroup]:
+        result: list[PronunciationGroup] = []
         for token in tokens:
             pronunciations = self._dict.get(token.lower())
             if pronunciations is None:
@@ -43,7 +43,7 @@ class DictionaryConverter(Converter):
                     f"DictionaryConverter: token '{token}' not in dictionary. "
                     f"claim should have filtered it."
                 )
-            result.append(list(pronunciations[0]))
+            result.append(PronunciationGroup(paths=list(pronunciations)))
         return result
 
 
@@ -55,8 +55,8 @@ class PassthroughConverter(Converter):
     def claim(self, token: str) -> bool:
         return True
 
-    def convert(self, tokens: list[str]) -> list[list[str]]:
-        return [[t] for t in tokens]
+    def convert(self, tokens: list[str]) -> list[PronunciationGroup]:
+        return [PronunciationGroup(paths=[[t]]) for t in tokens]
 
 
 @converter(id="char_phoneme", language=None)
@@ -70,11 +70,11 @@ class CharPhonemeConverter(Converter):
     def claim(self, token: str) -> bool:
         return all(c in self._mapping for c in token)
 
-    def convert(self, tokens: list[str]) -> list[list[str]]:
-        result: list[list[str]] = []
+    def convert(self, tokens: list[str]) -> list[PronunciationGroup]:
+        result: list[PronunciationGroup] = []
         for token in tokens:
             phonemes: list[str] = []
             for c in token:
                 phonemes.extend(self._mapping[c])
-            result.append(phonemes)
+            result.append(PronunciationGroup(paths=[phonemes]))
         return result
