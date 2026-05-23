@@ -92,21 +92,19 @@ class TextOnlyBinarizer(BaseBinarizer):
 
         all_partitions: list[list[list[int]]] = []
         for pg in groups:
-            raw_partitions = align_multipath(pg.paths)
-            for sub_paths in raw_partitions:
-                encoded = []
-                for path in sub_paths:
-                    tok_ids = []
-                    for ph in path:
-                        tid = self.vocabulary.encode(ph, item.language)
-                        if tid is None:
-                            raise RuntimeError(
-                                f"Token '{ph}' not in vocabulary "
-                                f"for item '{item.name}'."
-                            )
-                        tok_ids.append(tid)
-                    encoded.append(tok_ids)
-                all_partitions.append(encoded)
+            encoded_paths = []
+            for path in pg.paths:
+                tok_ids = []
+                for ph in path:
+                    tid = self.vocabulary.encode(ph, item.language)
+                    if tid is None:
+                        raise RuntimeError(
+                            f"Token '{ph}' not in vocabulary "
+                            f"for item '{item.name}'."
+                        )
+                    tok_ids.append(tid)
+                encoded_paths.append(tok_ids)
+            all_partitions.extend(align_multipath(encoded_paths))
 
         all_partitions = merge_shared(all_partitions)
 
