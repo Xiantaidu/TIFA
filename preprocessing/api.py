@@ -102,4 +102,7 @@ def binarize_datasets(
     for b, metadata in zip(binarizers, per_metadata):
         b.build_dataset(metadata)
 
+    # Main binarizer saves auxiliary files
+    binarizers[0].save_auxiliary_files()
+
     logging.success("Binarization completed.")

@@ -31,13 +31,18 @@ def main(config: pathlib.Path, override: list[str], vocab_only: bool, eval_mode:
         load_config_for_binarization, build_vocab_from_datasets, binarize_datasets
     )
     from preprocessing.phonemes_binarizer import PhonemeTimingBinarizer
+    from preprocessing.texts_binarizer import TextOnlyBinarizer
 
     config_obj = load_config_for_binarization(config, overrides=override)
+
+    binarizer_classes = [PhonemeTimingBinarizer]
+    if config_obj.text_only_data_dir is not None:
+        binarizer_classes.append(TextOnlyBinarizer)
 
     if vocab_only:
         build_vocab_from_datasets(
             config=config_obj,
-            binarizer_classes=[PhonemeTimingBinarizer],
+            binarizer_classes=binarizer_classes,
         )
         return
 
@@ -46,7 +51,7 @@ def main(config: pathlib.Path, override: list[str], vocab_only: bool, eval_mode:
 
     binarize_datasets(
         config=config_obj,
-        binarizer_classes=[PhonemeTimingBinarizer],
+        binarizer_classes=binarizer_classes,
         eval_mode=eval_mode
     )
 

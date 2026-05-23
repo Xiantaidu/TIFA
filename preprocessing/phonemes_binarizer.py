@@ -20,7 +20,7 @@ PHONEMES_ITEM_ATTRIBUTES = [
 
 
 @dataclass
-class PhonemesMetadataItem(MetadataItem):
+class PhonemeMetadataItem(MetadataItem):
     raw_durations: list[float]  # including stop symbols, in seconds
 
 
@@ -49,7 +49,7 @@ class PhonemeTimingBinarizer(BaseBinarizer):
                     f"item '{name}', phones({len(symbols)}), durations({len(durations)})."
                 )
                 continue
-            metadata_items.append(PhonemesMetadataItem(
+            metadata_items.append(PhonemeMetadataItem(
                 name=name,
                 language=language,
                 waveform_fn=waveform_fn,
@@ -59,7 +59,7 @@ class PhonemeTimingBinarizer(BaseBinarizer):
             ))
         return metadata_items
 
-    def process_item(self, item: PhonemesMetadataItem) -> DataSample:
+    def process_item(self, item: PhonemeMetadataItem) -> DataSample:
         if self.vocabulary is None:
             raise RuntimeError("Vocabulary has not been built.")
         length = self.get_frame_count(item.waveform_fn)

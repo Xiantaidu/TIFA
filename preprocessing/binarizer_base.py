@@ -175,16 +175,15 @@ class BaseBinarizer(abc.ABC):
             fig.savefig(fname=filename, bbox_inches="tight", pad_inches=0.25)
             import matplotlib.pyplot as plt
             plt.close(fig)
-            logging.info(f"Vocabulary distribution plot saved to '{filename}'.")
+            logging.info(f"Vocabulary distribution plot saved to '{filename.as_posix()}'.")
 
     def build_dataset(self, metadata_list: list[MetadataItem]):
         self.split_dataset(metadata_list)
         logging.info(f"Training set total size: {len(self.train_items)}.")
         logging.info(f"Validation set total size: {len(self.valid_items)}.")
-        self._save_auxiliary_files()
         self._process_datasets()
 
-    def _save_auxiliary_files(self):
+    def save_auxiliary_files(self):
         save_raw_config(self.config.features.model_dump(), self.data_dir / "feature.yaml")
         self.vocabulary.dump(self.data_dir / "vocabulary.json")
         self.vocabulary.dump_replaceable_tokens(self.data_dir / "replaceable_tokens.json")
@@ -200,6 +199,7 @@ class BaseBinarizer(abc.ABC):
         metadata_list = self.collect_metadata()
         self.build_vocabulary(metadata_list)
         self.build_dataset(metadata_list)
+        self.save_auxiliary_files()
 
     def get_frame_count(self, waveform_fn) -> int:
         duration = librosa.get_duration(path=waveform_fn)

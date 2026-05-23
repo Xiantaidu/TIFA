@@ -1,6 +1,6 @@
 binarizer:
   validation_count: 100
-  num_workers: 8
+  num_workers: 2
   features:
     audio_sample_rate: 48000
     hop_size: 480

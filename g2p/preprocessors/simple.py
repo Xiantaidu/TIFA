@@ -7,12 +7,28 @@ from .base import Preprocessor
 
 @preprocessor(id="punctuation_filter")
 class PunctuationFilter(Preprocessor):
-    """Remove tokens that consist entirely of punctuation."""
+    """Split tokens on punctuation and discard the punctuation characters."""
 
-    _punctuation_set = frozenset(string.punctuation)
+    _punctuation_set = frozenset(
+        string.punctuation
+        + "，。；：“”‘’（）【】《》…—～、·"
+        + "！？"
+    )
 
     def process(self, tokens: list[str]) -> list[str]:
-        return [t for t in tokens if not all(c in self._punctuation_set for c in t)]
+        result: list[str] = []
+        for t in tokens:
+            part: list[str] = []
+            for c in t:
+                if c in self._punctuation_set:
+                    if part:
+                        result.append("".join(part))
+                        part = []
+                else:
+                    part.append(c)
+            if part:
+                result.append("".join(part))
+        return result
 
 
 @preprocessor(id="lowercase")
