@@ -121,23 +121,22 @@ def _partition_rows(rows: list[list[str | None]]) -> list[list[list[str]]]:
     return segments
 
 
-def align_multipath(paths: list[list[str]]) -> list[list[list[str]]]:
-    """Align alternative phoneme sequences and partition into segments.
+def _align_multipath(paths: list[list[str]]) -> list[list[list[str]]]:
+    """Align alternative sequences and partition into segments.
 
-    Each input path is a list of phoneme strings — one alternative pronunciation
-    of the same token.  The function performs progressive multiple-sequence
-    Levenshtein alignment, then partitions the aligned columns into alternating
-    *shared* and *divergent* segments.
+    Each input path is one alternative sequence.  Performs progressive
+    multiple-sequence Levenshtein alignment, then partitions the aligned
+    columns into alternating *shared* and *divergent* segments.
 
     Returns a list of **partitions**.  Each partition is a list of sub-paths
     (deduplicated).  A partition with a single sub-path means no alternatives
     at that position (a shared segment).
 
-    >>> align_multipath([["A", "B", "C", "D"], ["A", "E", "D"]])
+    >>> _align_multipath([["A", "B", "C", "D"], ["A", "E", "D"]])
     [[['A']], [['B', 'C'], ['E']], [['D']]]
-    >>> align_multipath([["l", "e"], ["l", "i", "ao"]])
+    >>> _align_multipath([["l", "e"], ["l", "i", "ao"]])
     [[['l']], [['e'], ['i', 'ao']]]
-    >>> align_multipath([["h", "ao"]])
+    >>> _align_multipath([["h", "ao"]])
     [[['h', 'ao']]]
     """
     if not paths:
@@ -158,21 +157,21 @@ def align_multipath(paths: list[list[str]]) -> list[list[list[str]]]:
     return _partition_rows(rows)
 
 
-def merge_shared(partitions: list[list[list]]) -> list[list[list]]:
-    """Merge consecutive partitions of the same shape.
+def _merge_shared(partitions: list[list[list]]) -> list[list[list]]:
+    """Merge consecutive partitions that are both shared or both divergent.
 
     A partition with a single sub-path (width = 1) is a *shared* segment;
     a partition with multiple sub-paths (width > 1) is a *divergent* segment.
 
-    Consecutive shared segments are merged by concatenating their paths.
-    Consecutive divergent segments are merged via Cartesian product.
-    Mixed boundaries (shared then divergent, or vice versa) are kept separate.
+    Two consecutive shared segments are merged by concatenating their paths.
+    Two consecutive divergent segments are merged via Cartesian product.
+    A shared segment next to a divergent segment is left as-is.
 
-    >>> merge_shared([[['a']], [['b', 'c'], ['d']], [['e']]])
+    >>> _merge_shared([[['a']], [['b', 'c'], ['d']], [['e']]])
     [[['a']], [['b', 'c'], ['d']], [['e']]]
-    >>> merge_shared([[['a']], [['b']], [['c', 'd'], ['e']]])
+    >>> _merge_shared([[['a']], [['b']], [['c', 'd'], ['e']]])
     [[['a', 'b']], [['c', 'd'], ['e']]]
-    >>> merge_shared([[['B1'], ['B2']], [['C1'], ['C2']], [['D1']]])
+    >>> _merge_shared([[['B1'], ['B2']], [['C1'], ['C2']], [['D1']]])
     [[['B1', 'C1'], ['B1', 'C2'], ['B2', 'C1'], ['B2', 'C2']], [['D1']]]
     """
     if not partitions:
@@ -187,3 +186,23 @@ def merge_shared(partitions: list[list[list]]) -> list[list[list]]:
         else:
             merged.append(sub_paths)
     return merged
+
+
+def partition_groups(groups: list[list[list]]) -> list[list[list]]:
+    """Align and merge alternative paths from multiple consecutive groups.
+
+    Calls :func:`_align_multipath` on each group, then :func:`_merge_shared`
+    across all resulting partitions.
+
+    Each element of *groups* is a set of alternative paths, where each path
+    is a sequence of elements.  Returns the final merged partition list.
+
+    >>> partition_groups([[['a']], [['b1'], ['b2']], [['c']]])
+    [[['a']], [['b1'], ['b2']], [['c']]]
+    >>> partition_groups([[['a']], [['b']], [['c']]])
+    [[['a', 'b', 'c']]]
+    """
+    all_parts: list[list[list]] = []
+    for group_paths in groups:
+        all_parts.extend(_align_multipath(group_paths))
+    return _merge_shared(all_parts)
