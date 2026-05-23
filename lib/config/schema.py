@@ -371,7 +371,9 @@ class TrainingConfig(ConfigBaseModel):
 
 
 class InferenceConfig(ConfigBaseModel):
-    pass
+    features: BinarizerFeaturesConfig = Field(None, json_schema_extra={
+        "dynamic_expr": ref("binarizer.features")
+    })
 
 
 class RootConfig(ConfigBaseModel):

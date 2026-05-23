@@ -119,7 +119,7 @@ def train_model(
     data_dir = config.binarizer.data_dir_resolved
     ckpt_save_dir.mkdir(parents=True, exist_ok=True)
     _check_file_and_config(data_dir / "feature.yaml", config.binarizer.features)
-    _check_and_copy("lang_map.json", data_dir, ckpt_save_dir)
+    _check_and_copy("vocabulary.json", data_dir, ckpt_save_dir)
     _config_dump(config, ckpt_save_dir)
     model_config = config.model
     training_config = config.training

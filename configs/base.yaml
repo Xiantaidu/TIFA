@@ -19,7 +19,7 @@ training:
     max_val_batch_frames: 16000
     max_val_batch_size: 16
     frame_count_grid: 6
-    num_workers: 16
+    num_workers: 4
     prefetch_factor: 2
   optimizer:
     cls: torch.optim.AdamW
