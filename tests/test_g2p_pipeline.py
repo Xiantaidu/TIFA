@@ -29,43 +29,51 @@ class TestG2PPipeline(unittest.TestCase):
             converters=[CantoneseConverter(), PassthroughConverter()],
         )
 
+    @staticmethod
+    def _first(result: list) -> list[list[str]]:
+        return [pg.paths[0] for pg in result]
+
     # ---- Mandarin ----
 
     def test_mandarin_simple(self):
-        self.assertEqual(self.cmn.convert("你好"), [["ni"], ["hao"]])
+        self.assertEqual(self._first(self.cmn.convert("你好")), [["ni"], ["hao"]])
 
     def test_mandarin_polyphonic(self):
         self.assertEqual(
-            self.cmn.convert("银行行长"),
+            self._first(self.cmn.convert("银行行长")),
             [["yin"], ["hang"], ["hang"], ["zhang"]],
         )
 
     def test_mandarin_traditional(self):
-        self.assertEqual(self.cmn.convert("魚"), [["yu"]])
+        self.assertEqual(self._first(self.cmn.convert("魚")), [["yu"]])
 
     def test_mandarin_mixed(self):
         self.assertEqual(
-            self.cmn.convert("Hello你好123"),
+            self._first(self.cmn.convert("Hello你好123")),
             [["Hello"], ["ni"], ["hao"], ["123"]],
         )
 
     def test_mandarin_whitespace_stripped(self):
-        self.assertEqual(self.cmn.convert("  你好  "), [["ni"], ["hao"]])
+        self.assertEqual(self._first(self.cmn.convert("  你好  ")), [["ni"], ["hao"]])
 
     # ---- Cantonese ----
 
     def test_cantonese_simple(self):
-        self.assertEqual(self.yue.convert("你好"), [["nei"], ["hou"]])
+        self.assertEqual(self._first(self.yue.convert("你好")), [["nei"], ["hou"]])
 
     def test_cantonese_phrase(self):
         self.assertEqual(
-            self.yue.convert("大排檔"),
+            self._first(self.yue.convert("大排檔")),
             [["daai"], ["paai"], ["dong"]],
         )
 
 
 class TestG2PBuildFromConfig(unittest.TestCase):
     """Config-based pipeline construction (G2P.md §Programmatic usage)."""
+
+    @staticmethod
+    def _first(result: list) -> list[list[str]]:
+        return [pg.paths[0] for pg in result]
 
     def test_build_mandarin_from_config(self):
         config = G2PPipelineConfig.model_validate({
@@ -74,7 +82,7 @@ class TestG2PBuildFromConfig(unittest.TestCase):
             "converters": [{"id": "mandarin"}, {"id": "passthrough"}],
         })
         pipeline = build_pipeline_from_config(config)
-        self.assertEqual(pipeline.convert("你好"), [["ni"], ["hao"]])
+        self.assertEqual(self._first(pipeline.convert("你好")), [["ni"], ["hao"]])
 
     def test_build_cantonese_from_config(self):
         config = G2PPipelineConfig.model_validate({
@@ -82,7 +90,7 @@ class TestG2PBuildFromConfig(unittest.TestCase):
             "converters": [{"id": "cantonese"}, {"id": "passthrough"}],
         })
         pipeline = build_pipeline_from_config(config)
-        self.assertEqual(pipeline.convert("你好"), [["nei"], ["hou"]])
+        self.assertEqual(self._first(pipeline.convert("你好")), [["nei"], ["hou"]])
 
 
 class TestG2PLanguageFiltering(unittest.TestCase):
@@ -99,20 +107,24 @@ class TestG2PLanguageFiltering(unittest.TestCase):
             ],
         )
 
+    @staticmethod
+    def _first(result: list) -> list[list[str]]:
+        return [pg.paths[0] for pg in result]
+
     def test_filter_mandarin(self):
         self.assertEqual(
-            self.pipeline.convert("你", languages=["cmn"]), [["ni"]],
+            self._first(self.pipeline.convert("你", languages=["cmn"])), [["ni"]],
         )
 
     def test_filter_cantonese(self):
         self.assertEqual(
-            self.pipeline.convert("你", languages=["yue"]), [["nei"]],
+            self._first(self.pipeline.convert("你", languages=["yue"])), [["nei"]],
         )
 
     def test_filter_no_match_falls_to_passthrough(self):
         # PassthroughConverter (language=None) always runs
         self.assertEqual(
-            self.pipeline.convert("你", languages=["eng"]), [["你"]],
+            self._first(self.pipeline.convert("你", languages=["eng"])), [["你"]],
         )
 
 

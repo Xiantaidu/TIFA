@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from g2p.converters.base import Converter
+from g2p.converters.base import Converter, PronunciationGroup
 from g2p.converters.cpp_pinyin import PinyinEngine
 from g2p.converters.cpp_pinyin.constants import STYLE_NORMAL
 from g2p.registry import converter
@@ -48,6 +48,23 @@ class CantoneseConverter(Converter):
     def claim(self, token: str) -> bool:
         return self._is_hanzi(token)
 
-    def convert(self, tokens: list[str]) -> list[list[str]]:
+    def convert(self, tokens: list[str]) -> list[PronunciationGroup]:
         simplified = self._engine.simplify(tokens)
-        return self._engine.query_raw(simplified, style=STYLE_NORMAL)
+        best = self._engine.query_raw(simplified, style=STYLE_NORMAL)
+        result: list[PronunciationGroup] = []
+        for ch, best_list in zip(simplified, best):
+            seen: set[tuple[str, ...]] = set()
+            paths: list[list[str]] = []
+            # best_list e.g. ["nei"] — phrase-disambiguated best path
+            key = tuple(best_list)
+            seen.add(key)
+            paths.append(best_list)
+            # Alternative readings from dictionary
+            for reading in self._engine.readings(ch, style=STYLE_NORMAL):
+                p = [reading]
+                key = tuple(p)
+                if key not in seen:
+                    seen.add(key)
+                    paths.append(p)
+            result.append(PronunciationGroup(paths=paths))
+        return result

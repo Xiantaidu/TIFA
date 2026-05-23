@@ -7,11 +7,12 @@ and the cpp-pinyin engine operates solely as the converter stage.
 import unittest
 
 from g2p import G2PPipeline
+from g2p.converters.base import PronunciationGroup
+from g2p.converters.cantonese import CantoneseConverter
+from g2p.converters.mandarin import MandarinConverter
+from g2p.converters.simple import PassthroughConverter
 from g2p.preprocessors.simple import LowercasePreprocessor
 from g2p.tokenizers.cjk import CJKTokenizer
-from g2p.converters.mandarin import MandarinConverter
-from g2p.converters.cantonese import CantoneseConverter
-from g2p.converters.simple import PassthroughConverter
 
 
 class TestCppPinyinIntegration(unittest.TestCase):
@@ -35,47 +36,77 @@ class TestCppPinyinIntegration(unittest.TestCase):
 
     def test_mandarin_simple(self):
         result = self.mandarin.convert("你好")
-        self.assertEqual(result, [["ni"], ["hao"]])
+        self.assertEqual(result, [
+            PronunciationGroup(paths=[["ni"]]),
+            PronunciationGroup(paths=[["hao"]]),
+        ])
 
     def test_mandarin_phrase_disambiguation(self):
         result = self.mandarin.convert("一了百了")
-        self.assertEqual(result, [["yi"], ["liao"], ["bai"], ["liao"]])
+        self.assertEqual(result, [
+            PronunciationGroup(paths=[["yi"]]),
+            PronunciationGroup(paths=[["liao"], ["le"]]),
+            PronunciationGroup(paths=[["bai"]]),
+            PronunciationGroup(paths=[["liao"], ["le"]]),
+        ])
 
     def test_consecutive_phrases(self):
         result = self.mandarin.convert("一了百了一个半")
         self.assertEqual(result, [
-            ["yi"], ["liao"], ["bai"], ["liao"],
-            ["yi"], ["ge"], ["ban"],
+            PronunciationGroup(paths=[["yi"]]),
+            PronunciationGroup(paths=[["liao"], ["le"]]),
+            PronunciationGroup(paths=[["bai"]]),
+            PronunciationGroup(paths=[["liao"], ["le"]]),
+            PronunciationGroup(paths=[["yi"]]),
+            PronunciationGroup(paths=[["ge"]]),
+            PronunciationGroup(paths=[["ban"]]),
         ])
 
     def test_polyphonic_classic(self):
         result = self.mandarin.convert("银行行长")
         self.assertEqual(result, [
-            ["yin"], ["hang"], ["hang"], ["zhang"],
+            PronunciationGroup(paths=[["yin"]]),
+            PronunciationGroup(paths=[["hang"], ["xing"], ["heng"]]),
+            PronunciationGroup(paths=[["hang"], ["xing"], ["heng"]]),
+            PronunciationGroup(paths=[["zhang"], ["chang"]]),
         ])
 
     def test_traditional_to_simplified(self):
         result = self.mandarin.convert("魚")
-        self.assertEqual(result, [["yu"]])
+        self.assertEqual(result, [
+            PronunciationGroup(paths=[["yu"]]),
+        ])
 
     def test_cantonese_simple(self):
         result = self.cantonese.convert("你好")
-        self.assertEqual(result, [["nei"], ["hou"]])
+        self.assertEqual(result, [
+            PronunciationGroup(paths=[["nei"]]),
+            PronunciationGroup(paths=[["hou"]]),
+        ])
 
     def test_cantonese_phrase(self):
         result = self.cantonese.convert("大排檔")
-        self.assertEqual(result, [["daai"], ["paai"], ["dong"]])
+        self.assertEqual(result, [
+            PronunciationGroup(paths=[["daai"]]),
+            PronunciationGroup(paths=[["paai"]]),
+            PronunciationGroup(paths=[["dong"]]),
+        ])
 
     def test_mixed_language(self):
         result = self.mixed.convert("Hello你好World")
         # Non-CJK handled by PassthroughConverter, CJK by MandarinConverter
         self.assertEqual(result, [
-            ["hello"], ["ni"], ["hao"], ["world"],
+            PronunciationGroup(paths=[["hello"]]),
+            PronunciationGroup(paths=[["ni"]]),
+            PronunciationGroup(paths=[["hao"]]),
+            PronunciationGroup(paths=[["world"]]),
         ])
 
     def test_non_cjk_passthrough(self):
         result = self.mixed.convert("Hello123")
-        self.assertEqual(result, [["hello123"]])
+        self.assertEqual(result, [
+            PronunciationGroup(paths=[["hello123"]]),
+        ])
 
 
 class TestLanguageFiltering(unittest.TestCase):
@@ -94,15 +125,15 @@ class TestLanguageFiltering(unittest.TestCase):
 
     def test_mandarin_filter(self):
         result = self.pipeline.convert("你", languages=["cmn"])
-        self.assertEqual(result, [["ni"]])
+        self.assertEqual(result, [PronunciationGroup(paths=[["ni"]])])
 
     def test_cantonese_filter(self):
         result = self.pipeline.convert("你", languages=["yue"])
-        self.assertEqual(result, [["nei"]])
+        self.assertEqual(result, [PronunciationGroup(paths=[["nei"]])])
 
     def test_english_no_filter(self):
         result = self.pipeline.convert("Hello")
-        self.assertEqual(result, [["Hello"]])
+        self.assertEqual(result, [PronunciationGroup(paths=[["Hello"]])])
 
 
 if __name__ == "__main__":
