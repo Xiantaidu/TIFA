@@ -1,0 +1,89 @@
+"""Pronunciation-dictionary G2P converter and shared loader."""
+
+import re
+from abc import ABC
+from pathlib import Path
+
+from g2p.registry import converter
+
+from .base import Converter, PronunciationGroup
+from .paradigm import PronunciationScriptConverter
+
+_PRON_UNSAFE_RE = re.compile(r"\s*\(\d+\)$")
+
+
+def load_pronunciation_dict(path: str | Path) -> dict[str, list[list[str]]]:
+    """Load a tab-separated pronunciation dictionary.
+
+    Format: ``<key>\\t<ph1> <ph2> ...``
+    Duplicate keys accumulate pronunciations.
+
+    Returns ``{key: [[ph, ...], ...]}`` — a mapping from lookup keys to
+    lists of alternative phoneme sequences.
+    """
+    result: dict[str, list[list[str]]] = {}
+    with open(Path(path), "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            key, _, phoneme_str = line.partition("\t")
+            if not phoneme_str:
+                continue
+            result.setdefault(key, []).append(phoneme_str.split())
+    return result
+
+
+@converter(id="dictionary", language=None)
+class DictionaryConverter(Converter):
+    """Pronunciation dictionary lookup. Loads a tab-separated file:
+    ``<word>\\t<ph1> <ph2> ...``. Duplicate words accumulate pronunciations;
+    ``word(N)`` and ``word (N)`` suffixes are variant forms of the same word.
+    """
+
+    def __init__(self, path: str) -> None:
+        raw = load_pronunciation_dict(path)
+        self._dict: dict[str, list[list[str]]] = {}
+        for key, prons in raw.items():
+            base = _PRON_UNSAFE_RE.sub("", key).lower()
+            self._dict.setdefault(base, []).extend(prons)
+
+    def claim(self, token: str) -> bool:
+        return token.lower() in self._dict
+
+    def convert(self, tokens: list[str]) -> list[PronunciationGroup]:
+        result: list[PronunciationGroup] = []
+        for token in tokens:
+            pronunciations = self._dict.get(token.lower())
+            if pronunciations is None:
+                raise KeyError(
+                    f"DictionaryConverter: token '{token}' not in dictionary. "
+                    f"claim should have filtered it."
+                )
+            result.append(PronunciationGroup(paths=[list(p) for p in pronunciations]))
+        return result
+
+
+class PronunciationScriptDictionaryConverter(PronunciationScriptConverter, ABC):
+    """``PronunciationScriptConverter`` whose *script_to_phonemes* step is a
+    dictionary lookup loaded from *dict_path*.
+
+    When *dict_path* is omitted each script token passes through unchanged.
+    Subclasses implement ``text_to_script``.
+    """
+
+    def __init__(self, dict_path: str | None = None) -> None:
+        super().__init__()
+        self._script_dict: dict[str, list[list[str]]] | None = (
+            load_pronunciation_dict(dict_path) if dict_path else None
+        )
+
+    def script_to_phonemes(self, script: str) -> list[list[str]]:
+        if self._script_dict is None:
+            return [[script]]
+        pronunciations = self._script_dict.get(script)
+        if pronunciations is None:
+            raise KeyError(
+                f"Script token {script!r} not found in script-to-phoneme dict."
+            )
+        return [list(p) for p in pronunciations]

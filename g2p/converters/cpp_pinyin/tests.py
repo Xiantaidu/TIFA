@@ -8,8 +8,7 @@ import unittest
 
 from g2p import G2PPipeline
 from g2p.converters.base import PronunciationGroup
-from g2p.converters.cantonese import CantoneseConverter
-from g2p.converters.mandarin import MandarinConverter
+from g2p.converters.chinese import CantoneseConverter, MandarinConverter
 from g2p.converters.simple import PassthroughConverter
 from g2p.preprocessors.simple import LowercasePreprocessor
 from g2p.tokenizers.cjk import CJKTokenizer

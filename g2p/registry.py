@@ -5,6 +5,12 @@ _preprocessor_registry: dict[str, type] = {}
 _converter_registry: dict[str, type] = {}
 
 
+def _parse_language(language: str | None) -> tuple[str, ...] | None:
+    if language is None:
+        return None
+    return tuple(t.strip() for t in language.split(","))
+
+
 def tokenizer(*, id: str) -> Callable[[type], type]:
     def decorator(cls: type) -> type:
         if id in _tokenizer_registry:
@@ -24,11 +30,13 @@ def preprocessor(*, id: str) -> Callable[[type], type]:
 
 
 def converter(*, id: str, language: str | None = None) -> Callable[[type], type]:
+    tags = _parse_language(language)
+
     def decorator(cls: type) -> type:
         if id in _converter_registry:
             raise ValueError(f"Converter '{id}' is already registered.")
         _converter_registry[id] = cls
-        cls._language = language
+        cls._language = tags
         return cls
     return decorator
 
@@ -55,6 +63,3 @@ def list_preprocessors() -> list[str]:
 
 def list_converters() -> list[str]:
     return list(_converter_registry.keys())
-
-
-

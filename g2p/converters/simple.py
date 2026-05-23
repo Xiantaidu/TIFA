@@ -1,50 +1,6 @@
-import re
-from pathlib import Path
-
 from g2p.registry import converter
 
 from .base import Converter, PronunciationGroup
-
-_PRON_UNSAFE_RE = re.compile(r"\s*\(\d+\)$")
-
-
-@converter(id="dictionary", language=None)
-class DictionaryConverter(Converter):
-    """Pronunciation dictionary lookup. Loads a tab-separated file:
-    ``<word>\\t<ph1> <ph2> ...``. Duplicate words accumulate pronunciations;
-    ``word(N)`` and ``word (N)`` suffixes are variant forms of the same word."""
-
-    def __init__(self, path: str) -> None:
-        self._dict: dict[str, list[list[str]]] = {}
-        self._load(path)
-
-    def _load(self, path: str) -> None:
-        with open(Path(path), "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                word, _, phoneme_str = line.partition("\t")
-                if not phoneme_str:
-                    continue
-                base_word = _PRON_UNSAFE_RE.sub("", word).lower()
-                phonemes = phoneme_str.split()
-                self._dict.setdefault(base_word, []).append(phonemes)
-
-    def claim(self, token: str) -> bool:
-        return token.lower() in self._dict
-
-    def convert(self, tokens: list[str]) -> list[PronunciationGroup]:
-        result: list[PronunciationGroup] = []
-        for token in tokens:
-            pronunciations = self._dict.get(token.lower())
-            if pronunciations is None:
-                raise KeyError(
-                    f"DictionaryConverter: token '{token}' not in dictionary. "
-                    f"claim should have filtered it."
-                )
-            result.append(PronunciationGroup(paths=list(pronunciations)))
-        return result
 
 
 @converter(id="passthrough", language=None)

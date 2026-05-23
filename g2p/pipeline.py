@@ -18,7 +18,9 @@ class G2PPipeline:
         language_set = set(languages) if languages else None
         active = [
             c for c in self._converters
-            if language_set is None or c.language is None or c.language in language_set
+            if language_set is None
+            or c.language is None
+            or any(l in language_set for l in c.language)
         ]
         if not active:
             raise ValueError("No converter matches the requested languages.")

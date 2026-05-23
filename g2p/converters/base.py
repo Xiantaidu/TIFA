@@ -19,10 +19,10 @@ class PronunciationGroup:
 
 
 class Converter(ABC):
-    _language: str | None = None
+    _language: tuple[str, ...] | None = None
 
     @property
-    def language(self) -> str | None:
+    def language(self) -> tuple[str, ...] | None:
         return self._language
 
     @abstractmethod
@@ -58,10 +58,22 @@ class G2PConversionError(Exception):
 @converter(id="chain", language=None)
 class ChainedConverter(Converter):
     """Chain multiple converters in priority order. Each token is handled by the
-    first converter that claims it; unconverted tokens raise G2PConversionError."""
+    first converter that claims it; unconverted tokens raise G2PConversionError.
 
-    def __init__(self, modules: list[Converter]) -> None:
+    If *language* is given (as a comma-separated string), the chain declares
+    that language so it can be filtered by ``G2PPipeline`` alongside
+    single-language converters.
+    """
+
+    def __init__(
+        self,
+        modules: list[Converter],
+        language: str | None = None,
+    ) -> None:
         self.modules = modules
+        if language is not None:
+            from g2p.registry import _parse_language
+            self._language = _parse_language(language)
 
     def claim(self, token: str) -> bool:
         return any(m.claim(token) for m in self.modules)
