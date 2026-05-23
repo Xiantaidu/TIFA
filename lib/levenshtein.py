@@ -159,19 +159,31 @@ def align_multipath(paths: list[list[str]]) -> list[list[list[str]]]:
 
 
 def merge_shared(partitions: list[list[list]]) -> list[list[list]]:
-    """Merge consecutive single-path partitions.
+    """Merge consecutive partitions of the same shape.
+
+    A partition with a single sub-path (width = 1) is a *shared* segment;
+    a partition with multiple sub-paths (width > 1) is a *divergent* segment.
+
+    Consecutive shared segments are merged by concatenating their paths.
+    Consecutive divergent segments are merged via Cartesian product.
+    Mixed boundaries (shared then divergent, or vice versa) are kept separate.
 
     >>> merge_shared([[['a']], [['b', 'c'], ['d']], [['e']]])
     [[['a']], [['b', 'c'], ['d']], [['e']]]
     >>> merge_shared([[['a']], [['b']], [['c', 'd'], ['e']]])
     [[['a', 'b']], [['c', 'd'], ['e']]]
+    >>> merge_shared([[['B1'], ['B2']], [['C1'], ['C2']], [['D1']]])
+    [[['B1', 'C1'], ['B1', 'C2'], ['B2', 'C1'], ['B2', 'C2']], [['D1']]]
     """
     if not partitions:
         return []
     merged = [partitions[0]]
     for sub_paths in partitions[1:]:
-        if len(sub_paths) == 1 and len(merged[-1]) == 1:
-            merged[-1][0].extend(sub_paths[0])
+        prev = merged[-1]
+        if len(sub_paths) == 1 and len(prev) == 1:
+            prev[0].extend(sub_paths[0])
+        elif len(sub_paths) > 1 and len(prev) > 1:
+            merged[-1] = [p + s for p in prev for s in sub_paths]
         else:
             merged.append(sub_paths)
     return merged
