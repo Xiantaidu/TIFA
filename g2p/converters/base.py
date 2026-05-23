@@ -55,23 +55,6 @@ class G2PConversionError(Exception):
         )
 
 
-def _normalize_pronunciation(value: object) -> PronunciationGroup:
-    """Coerce a converter return value into a ``PronunciationGroup``.
-
-    Accepts both the new ``PronunciationGroup`` type and the legacy
-    ``list[list[str]]`` so that existing converters whose code has not yet
-    been migrated still work inside ``ChainedConverter``.
-    """
-    if isinstance(value, PronunciationGroup):
-        return value
-    if isinstance(value, list):
-        return PronunciationGroup(paths=[value])  # type: ignore[arg-type]
-    raise TypeError(
-        f"Converter returned unexpected type {type(value).__name__}; "
-        f"expected PronunciationGroup or list[list[str]]."
-    )
-
-
 @converter(id="chain", language=None)
 class ChainedConverter(Converter):
     """Chain multiple converters in priority order. Each token is handled by the
@@ -105,7 +88,7 @@ class ChainedConverter(Converter):
                 results = module.convert(run_texts)
 
                 for state, result in zip(run_states, results):
-                    state.pronunciation = _normalize_pronunciation(result)
+                    state.pronunciation = result
                     state.assigned_converter = type(module).__name__
                 i = j
 
@@ -113,4 +96,4 @@ class ChainedConverter(Converter):
         if unconverted:
             raise G2PConversionError([s.text for s in unconverted])
 
-        return [s.pronunciation for s in states]  # type: ignore[return-value]
+        return [s.pronunciation for s in states]
