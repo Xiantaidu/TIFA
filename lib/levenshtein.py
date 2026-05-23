@@ -133,12 +133,12 @@ def align_multipath(paths: list[list[str]]) -> list[list[list[str]]]:
     (deduplicated).  A partition with a single sub-path means no alternatives
     at that position (a shared segment).
 
-    >>> align_multipath([["A","B","C","D"], ["A","E","D"]])
-    [[['A']], [['B','C'], ['E']], [['D']]]
-    >>> align_multipath([["l","e"], ["l","i","ao"]])
-    [[['l']], [['e'], ['i','ao']]]
-    >>> align_multipath([["h","ao"]])
-    [[['h','ao']]]
+    >>> align_multipath([["A", "B", "C", "D"], ["A", "E", "D"]])
+    [[['A']], [['B', 'C'], ['E']], [['D']]]
+    >>> align_multipath([["l", "e"], ["l", "i", "ao"]])
+    [[['l']], [['e'], ['i', 'ao']]]
+    >>> align_multipath([["h", "ao"]])
+    [[['h', 'ao']]]
     """
     if not paths:
         return []
@@ -156,3 +156,22 @@ def align_multipath(paths: list[list[str]]) -> list[list[list[str]]]:
         rows = _merge_profile(rows, path)
 
     return _partition_rows(rows)
+
+
+def merge_shared(partitions: list[list[list]]) -> list[list[list]]:
+    """Merge consecutive single-path partitions.
+
+    >>> merge_shared([[['a']], [['b', 'c'], ['d']], [['e']]])
+    [[['a']], [['b', 'c'], ['d']], [['e']]]
+    >>> merge_shared([[['a']], [['b']], [['c', 'd'], ['e']]])
+    [[['a', 'b']], [['c', 'd'], ['e']]]
+    """
+    if not partitions:
+        return []
+    merged = [partitions[0]]
+    for sub_paths in partitions[1:]:
+        if len(sub_paths) == 1 and len(merged[-1]) == 1:
+            merged[-1][0].extend(sub_paths[0])
+        else:
+            merged.append(sub_paths)
+    return merged

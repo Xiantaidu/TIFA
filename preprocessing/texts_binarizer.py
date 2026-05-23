@@ -7,7 +7,7 @@ import numpy
 from g2p.api import build_pipeline_from_config
 from g2p.converters.base import PronunciationGroup
 from lib import logging
-from lib.levenshtein import align_multipath
+from lib.levenshtein import align_multipath, merge_shared
 
 from .binarizer_base import (
     BaseBinarizer,
@@ -108,14 +108,7 @@ class TextOnlyBinarizer(BaseBinarizer):
                     encoded.append(tok_ids)
                 all_partitions.append(encoded)
 
-        # Merge consecutive single-path partitions
-        merged: list[list[list[int]]] = []
-        for sub_paths in all_partitions:
-            if len(sub_paths) == 1 and merged and len(merged[-1]) == 1:
-                merged[-1][0].extend(sub_paths[0])
-            else:
-                merged.append(sub_paths)
-        all_partitions = merged
+        all_partitions = merge_shared(all_partitions)
 
         T = sum(
             max(len(sp) for sp in sub_paths)
