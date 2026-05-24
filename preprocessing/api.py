@@ -67,8 +67,11 @@ def binarize_datasets(
         eval_mode: bool = False
 ):
     binarizers = [
-        cls(config=config, eval_mode=eval_mode)
-        for cls in binarizer_classes
+        binarizer_classes[0](config=config, eval_mode=eval_mode),
+        *[
+            cls(config=config, eval_mode=eval_mode, aux_mode=True)
+            for cls in binarizer_classes[1:]
+        ]
     ]
 
     if len(binarizers) == 1:
@@ -102,7 +105,8 @@ def binarize_datasets(
     for b, metadata in zip(binarizers, per_metadata):
         b.build_dataset(metadata)
 
-    # Main binarizer saves auxiliary files
-    binarizers[0].save_auxiliary_files()
+    # Each binarizer saves its own auxiliary files
+    for b in binarizers:
+        b.save_auxiliary_files()
 
     logging.success("Binarization completed.")

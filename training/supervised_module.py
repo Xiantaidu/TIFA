@@ -1,45 +1,18 @@
-import math
-
 import torch
 from torch import nn
+from torch.utils.data import DataLoader
 
-from training.data import BaseDataset
+from training.data import (
+    BaseDataset,
+    PhonemeTimingDataset,
+    TextOnlyDataset,
+    DynamicBatchSampler,
+    ZippedDataLoader,
+)
 from training.pl_module_base import BaseLightningModule
 
 
-class SupervisedDataset(BaseDataset):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        if (
-            self.augmentation_config is not None
-            and self.augmentation_config.time_stretching.enabled
-        ):
-            raise ValueError(
-                "Time stretching is not supported for supervised dataset."
-            )
-
-    def __getitem__(self, index: int) -> dict:
-        sample = super().__getitem__(index)
-        # sample keys: spectrogram [T_spec, F], tokens [N], spans [N,2], regions [T]
-
-        T_spec = sample["spectrogram"].shape[0]
-        T = sample["regions"].shape[0]
-
-        if T_spec > T:
-            sample["spectrogram"] = sample["spectrogram"][:T]
-        elif T_spec < T:
-            sample["spectrogram"] = torch.nn.functional.pad(
-                sample["spectrogram"], (0, 0, 0, T - T_spec),
-                value=math.log(1e-5),
-            )
-
-        sample["T"] = torch.tensor(max(T_spec, T), dtype=torch.long)
-        sample["N"] = torch.tensor(sample["tokens"].shape[0], dtype=torch.long)
-        return sample
-
-
 class SupervisedModule(BaseLightningModule):
-    __dataset__ = SupervisedDataset
 
     def build_model(self) -> nn.Module:
         return nn.Linear(1, 1)
@@ -47,7 +20,78 @@ class SupervisedModule(BaseLightningModule):
     def register_losses_and_metrics(self) -> None:
         self.register_loss("dummy", nn.MSELoss())
 
+    def build_train_dataset(self) -> BaseDataset:
+        return PhonemeTimingDataset(
+            self.data_dir, "train",
+            augmentation_config=self.training_config.augmentation,
+        )
+
+    def build_valid_dataset(self) -> BaseDataset:
+        if self.use_parallel_dirty_metrics:
+            return PhonemeTimingDataset(
+                self.data_dir, "valid",
+                augmentation_config=self.training_config.augmentation,
+                augmentation_deterministic=True,
+                augmentation_destructive_only=True,
+                augmentation_return_dirty=True,
+            )
+        else:
+            return PhonemeTimingDataset(self.data_dir, "valid")
+
+    def setup(self, stage: str) -> None:
+        super().setup(stage)
+        if self.aux_data_dir is not None:
+            self.aux_train_dataset = TextOnlyDataset(
+                self.aux_data_dir, "aux",
+                augmentation_config=self.training_config.augmentation,
+            )
+            self.aux_train_sampler = None
+
+    def train_dataloader(self):
+        main_dl = super().train_dataloader()
+        if self.aux_train_dataset is None:
+            return main_dl
+
+        dl_cfg = self.training_config.dataloader
+        multiplier = dl_cfg.aux_multiplier
+        self.aux_train_sampler = DynamicBatchSampler(
+            self.aux_train_dataset,
+            max_batch_size=int(dl_cfg.max_batch_size * multiplier),
+            max_batch_frames=int(dl_cfg.max_batch_frames * multiplier),
+            sort_by_len=True,
+            frame_count_grid=dl_cfg.frame_count_grid,
+            batch_count_multiple_of=self.training_config.trainer.accumulate_grad_batches,
+            reassign_batches=True,
+            shuffle_batches=False,
+            seed=42,
+        )
+        aux_dl = DataLoader(
+            self.aux_train_dataset,
+            collate_fn=self.aux_train_dataset.collate,
+            batch_sampler=self.aux_train_sampler,
+            num_workers=dl_cfg.num_workers,
+            prefetch_factor=dl_cfg.prefetch_factor if dl_cfg.num_workers > 0 else None,
+            pin_memory=True,
+            persistent_workers=dl_cfg.num_workers > 0,
+        )
+        return ZippedDataLoader(main_dl, aux_dl, self.aux_train_sampler)
+
+    def on_train_epoch_start(self):
+        super().on_train_epoch_start()
+        if self.aux_train_sampler is not None:
+            self.aux_train_sampler.set_epoch(self.current_epoch)
+
     def forward_model(self, sample, infer):
+        if isinstance(sample, dict) and "main" in sample:
+            main_sample = sample["main"]
+            aux_sample = sample["aux"]
+        else:
+            main_sample = sample
+            aux_sample = None
+        print(main_sample["spectrogram"].shape)
+        print(aux_sample["tokens"].shape if aux_sample is not None else "No aux sample")
+
+        # TODO: real model forward on main_sample and aux_sample
         raise NotImplementedError("SupervisedModule.forward_model is a stub")
 
     def plot_validation_results(self, sample, outputs):

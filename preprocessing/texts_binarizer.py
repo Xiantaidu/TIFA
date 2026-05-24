@@ -7,7 +7,7 @@ import numpy
 from g2p.api import build_pipeline_from_config
 from g2p.converters.base import PronunciationGroup
 from lib import logging
-from lib.levenshtein import partition_groups
+from lib.levenshtein import segment_groups
 
 from .binarizer_base import (
     BaseBinarizer,
@@ -17,9 +17,9 @@ from .binarizer_base import (
 )
 
 TEXTS_ITEM_ATTRIBUTES = [
-    "tokens",  # [T, max_width] int64 — path grid, 0 = no token
-    "partitions",  # [T] int64 — 1-based partition index per grid position
-    "widths",  # [P] int64 — number of alternative sub-paths per partition
+    "paths",  # [N, max(widths)] int64 — path grid, 0 = no token
+    "segments",  # [N] int64 — 1-based segment index per grid position
+    "widths",  # [max(segments)] int64 — number of alternative sub-paths per segment
 ]
 
 
@@ -106,30 +106,30 @@ class TextOnlyBinarizer(BaseBinarizer):
                 encoded_paths.append(tok_ids)
             encoded_groups.append(encoded_paths)
 
-        all_partitions = partition_groups(encoded_groups)
+        all_segments = segment_groups(encoded_groups)
 
-        T = sum(
+        N = sum(
             max(len(sp) for sp in sub_paths)
-            for sub_paths in all_partitions
+            for sub_paths in all_segments
         )
         max_width = max(
-            (len(sub_paths) for sub_paths in all_partitions),
+            (len(sub_paths) for sub_paths in all_segments),
             default=0,
         )
-        P = len(all_partitions)
+        P = len(all_segments)
 
-        tokens = numpy.zeros((T, max_width), dtype=numpy.int64)
-        partitions_arr = numpy.zeros(T, dtype=numpy.int64)
+        paths = numpy.zeros((N, max_width), dtype=numpy.int64)
+        segments_arr = numpy.zeros(N, dtype=numpy.int64)
         widths = numpy.zeros(P, dtype=numpy.int64)
 
         col = 0
-        for p_idx, sub_paths in enumerate(all_partitions):
+        for p_idx, sub_paths in enumerate(all_segments):
             L = max(len(sp) for sp in sub_paths)
             widths[p_idx] = len(sub_paths)
-            partitions_arr[col:col + L] = p_idx + 1
+            segments_arr[col:col + L] = p_idx + 1
             for alt_idx, path in enumerate(sub_paths):
                 for pos, tok_id in enumerate(path):
-                    tokens[col + pos, alt_idx] = tok_id
+                    paths[col + pos, alt_idx] = tok_id
             col += L
 
         return DataSample(
@@ -138,8 +138,8 @@ class TextOnlyBinarizer(BaseBinarizer):
             length=length,
             text=item.text,
             data={
-                "tokens": tokens,
-                "partitions": partitions_arr,
+                "paths": paths,
+                "segments": segments_arr,
                 "widths": widths,
             },
         )

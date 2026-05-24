@@ -41,9 +41,10 @@ class DataSample:
 class BaseBinarizer(abc.ABC):
     __data_attrs__: list[str] = None
 
-    def __init__(self, config: BinarizerConfig, eval_mode=False):
+    def __init__(self, config: BinarizerConfig, eval_mode=False, aux_mode=False):
         self.config = config
         self.eval_mode = eval_mode
+        self.aux_mode = aux_mode
         self.data_dir: pathlib.Path = self.resolve_data_dir()
         self.timestep = config.features.timestep
 
@@ -65,6 +66,11 @@ class BaseBinarizer(abc.ABC):
         pass
 
     def split_dataset(self, metadata_list: list[MetadataItem]):
+        if self.aux_mode:
+            self.train_items = sorted(
+                metadata_list, key=lambda itm: itm.estimated_duration, reverse=True
+            )
+            return
         if self.eval_mode:
             # Put all items into validation set and leave training set empty.
             self.valid_items.extend(metadata_list)
@@ -189,7 +195,9 @@ class BaseBinarizer(abc.ABC):
         self.vocabulary.dump_replaceable_tokens(self.data_dir / "replaceable_tokens.json")
 
     def _process_datasets(self):
-        if self.eval_mode:
+        if self.aux_mode:
+            self.process_items(self.train_items, prefix="aux", multiprocessing=True)
+        elif self.eval_mode:
             self.process_items(self.valid_items, prefix="valid", multiprocessing=True)
         else:
             self.process_items(self.valid_items, prefix="valid", multiprocessing=False)

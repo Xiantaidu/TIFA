@@ -20,7 +20,10 @@ from .augmentation import (
 __all__ = [
     "collate_nd",
     "BaseDataset",
+    "PhonemeTimingDataset",
+    "TextOnlyDataset",
     "DynamicBatchSampler",
+    "ZippedDataLoader",
 ]
 
 
@@ -178,6 +181,47 @@ class BaseDataset(torch.utils.data.Dataset):
         return batch
 
 
+class PhonemeTimingDataset(BaseDataset):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if (
+            self.augmentation_config is not None
+            and self.augmentation_config.time_stretching.enabled
+        ):
+            raise ValueError(
+                "Time stretching is not supported for supervised dataset."
+            )
+
+    def __getitem__(self, index: int) -> dict:
+        sample = super().__getitem__(index)
+        # sample keys: spectrogram [T_spec, F], tokens [N], spans [N,2], regions [T]
+
+        T_spec = sample["spectrogram"].shape[0]
+        T = sample["regions"].shape[0]
+
+        if T_spec > T:
+            sample["spectrogram"] = sample["spectrogram"][:T]
+        elif T_spec < T:
+            sample["spectrogram"] = torch.nn.functional.pad(
+                sample["spectrogram"], (0, 0, 0, T - T_spec),
+                value=math.log(1e-5),
+            )
+
+        sample["T"] = torch.tensor(max(T_spec, T), dtype=torch.long)
+        sample["N"] = torch.tensor(sample["tokens"].shape[0], dtype=torch.long)
+        return sample
+
+
+class TextOnlyDataset(BaseDataset):
+    def __getitem__(self, index: int) -> dict:
+        sample = super().__getitem__(index)
+        # sample keys: spectrogram [T_spec, F], paths [max_path_length, max_width],
+        #              segments [max_path_length], widths [max_segment_count]
+        sample["T"] = torch.tensor(sample["spectrogram"].shape[0], dtype=torch.long)
+        sample["N"] = torch.tensor(sample["paths"].shape[0], dtype=torch.long)
+        return sample
+
+
 class DynamicBatchSampler(torch.utils.data.distributed.DistributedSampler):
     def __init__(
             self,
@@ -190,6 +234,7 @@ class DynamicBatchSampler(torch.utils.data.distributed.DistributedSampler):
             reassign_batches: bool = True,
             shuffle_batches: bool = True,
             seed: int = 0,
+            target_num_batches: int | None = None,
     ):
         if torch.distributed.is_initialized():
             num_replicas = None
@@ -216,6 +261,7 @@ class DynamicBatchSampler(torch.utils.data.distributed.DistributedSampler):
         self.generator: torch.Generator = torch.Generator().manual_seed(seed)
         self.batches: list[list[int]] = None
         self.formed = None
+        self.target_num_batches = target_num_batches
 
     def __iter__(self):
         self.form_batches()
@@ -247,29 +293,73 @@ class DynamicBatchSampler(torch.utils.data.distributed.DistributedSampler):
         else:
             sorted_indices = list(range(len(lengths)))
 
+        total_items = len(sorted_indices)
+        if self.target_num_batches is not None:
+            target_items_per_batch = max(1, math.ceil(total_items / self.target_num_batches))
+            effective_max_batch_size = min(self.max_batch_size, target_items_per_batch)
+        else:
+            effective_max_batch_size = self.max_batch_size
+
         def batch_full(batch_: list[int], new_index_: int):
-            if len(batch_) >= self.max_batch_size:
+            if len(batch_) >= effective_max_batch_size:
                 return True
             max_len = max(lengths[new_index_], max((lengths[i] for i in batch_), default=0))
             if max_len * (len(batch_) + 1) > self.max_batch_frames:
                 return True
             return False
 
-        batches: list[list[int]] = []
+        def _greedy_pack() -> list[list[int]]:
+            batches_: list[list[int]] = []
+            current_batch = []
+            for _idx in sorted_indices:
+                sample_length = lengths[_idx]
+                if sample_length > self.max_batch_frames:
+                    raise ValueError(
+                        f"Sample length {sample_length} exceeds max batch frames {self.max_batch_frames}."
+                    )
+                if batch_full(current_batch, _idx):
+                    batches_.append(current_batch)
+                    current_batch = []
+                current_batch.append(_idx)
+            if current_batch:
+                batches_.append(current_batch)
+            return batches_
 
-        current_batch = []
-        for idx in sorted_indices:
-            sample_length = lengths[idx]
-            if sample_length > self.max_batch_frames:
-                raise ValueError(
-                    f"Sample length {sample_length} exceeds max batch frames {self.max_batch_frames}."
-                )
-            if batch_full(current_batch, idx):
-                batches.append(current_batch)
-                current_batch = []
-            current_batch.append(idx)
-        if current_batch:
-            batches.append(current_batch)
+        batches = _greedy_pack()
+
+        if self.target_num_batches is not None:
+            # Merge: too many batches — merge the smallest adjacent pairs
+            while len(batches) > self.target_num_batches:
+                best_i = -1
+                best_size = float("inf")
+                for i in range(len(batches) - 1):
+                    combined = len(batches[i]) + len(batches[i + 1])
+                    if combined > self.max_batch_size:
+                        continue
+                    combined_len = max(
+                        max((lengths[j] for j in batches[i]), default=0),
+                        max((lengths[j] for j in batches[i + 1]), default=0),
+                    )
+                    if combined_len * combined > self.max_batch_frames:
+                        continue
+                    if combined < best_size:
+                        best_size = combined
+                        best_i = i
+                if best_i < 0:
+                    break  # no more mergeable pairs
+                batches[best_i].extend(batches[best_i + 1])
+                del batches[best_i + 1]
+
+            # Reduce: too few batches — halve effective size and repack
+            while len(batches) < self.target_num_batches:
+                if effective_max_batch_size <= 1:
+                    raise RuntimeError(
+                        f"Cannot form {self.target_num_batches} batches from "
+                        f"{total_items} items: aux dataset too small. "
+                        f"Reduce aux_dataset_multiplier or add more data."
+                    )
+                effective_max_batch_size = max(1, effective_max_batch_size // 2)
+                batches = _greedy_pack()
 
         multiple_of = self.num_replicas * self.batch_count_multiple_of
         remainder = (multiple_of - (len(batches) % multiple_of)) % multiple_of
@@ -321,3 +411,45 @@ class DynamicBatchSampler(torch.utils.data.distributed.DistributedSampler):
 
         self.batches = batches
         self.formed = self.epoch + self.seed
+
+
+class ZippedDataLoader:
+    """
+    Zips a main DataLoader with an aux DataLoader.
+    Epoch length is defined by the main DataLoader.
+    The aux sampler's ``target_num_batches`` is set dynamically to match.
+    """
+
+    def __init__(
+            self,
+            main_dataloader: torch.utils.data.DataLoader,
+            aux_dataloader: torch.utils.data.DataLoader,
+            aux_sampler: DynamicBatchSampler,
+    ):
+        self.main_dl = main_dataloader
+        self.aux_dl = aux_dataloader
+        self.aux_sampler = aux_sampler
+
+    def __iter__(self):
+        main_iter = iter(self.main_dl)
+        n_batches = len(self.main_dl)
+
+        self.aux_sampler.target_num_batches = n_batches
+        self.aux_sampler.formed = None
+        aux_iter = iter(self.aux_dl)
+
+        for main_batch in main_iter:
+            try:
+                aux_batch = next(aux_iter)
+            except StopIteration:
+                self.aux_sampler.formed = None
+                aux_iter = iter(self.aux_dl)
+                aux_batch = next(aux_iter)
+            yield {
+                "main": main_batch,
+                "aux": aux_batch,
+                "size": main_batch["size"],
+            }
+
+    def __len__(self):
+        return len(self.main_dl)

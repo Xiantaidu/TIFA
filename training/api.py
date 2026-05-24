@@ -117,8 +117,11 @@ def train_model(
         save_raw_config(cfg.model_dump(), to_dir / f"hparams-{current_time}.yaml")
 
     data_dir = config.binarizer.phoneme_timing_data_dir_resolved
+    aux_data_dir = config.binarizer.text_only_data_dir_resolved
     ckpt_save_dir.mkdir(parents=True, exist_ok=True)
     _check_file_and_config(data_dir / "feature.yaml", config.binarizer.features)
+    if aux_data_dir is not None:
+        _check_file_and_config(aux_data_dir / "feature.yaml", config.binarizer.features)
     _check_and_copy("vocabulary.json", data_dir, ckpt_save_dir)
     _config_dump(config, ckpt_save_dir)
     model_config = config.model
@@ -126,6 +129,7 @@ def train_model(
 
     pl_module: BaseLightningModule = pl_module_cls(
         data_dir=data_dir,
+        aux_data_dir=aux_data_dir,
         model_config=model_config,
         training_config=training_config,
         load_pretrained=resume_from is None,

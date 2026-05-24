@@ -24,6 +24,8 @@ binarizer:
 model: {}
 
 training:
+  dataloader:
+    aux_multiplier: 2.0
   augmentation:
     pitch_shifting:
       enabled: true

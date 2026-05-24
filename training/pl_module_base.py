@@ -25,18 +25,18 @@ matplotlib.use("Agg")  # fix Tcl_AsyncDelete: async handler deleted by the wrong
 
 class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
 
-    __dataset__ = BaseDataset
-
     def __init__(
             self,
             data_dir: pathlib.Path,
             model_config: ModelConfig,
             training_config: TrainingConfig,
             load_pretrained: bool = False,
+            aux_data_dir: pathlib.Path | None = None,
     ):
         super().__init__()
 
         self.data_dir = data_dir
+        self.aux_data_dir = aux_data_dir
         self.model_config = model_config
         self.training_config = training_config
 
@@ -65,6 +65,8 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         self.train_dataset: BaseDataset = None
         self.valid_dataset: BaseDataset = None
         self.train_sampler: DynamicBatchSampler = None
+        self.aux_train_dataset: BaseDataset = None
+        self.aux_train_sampler: DynamicBatchSampler = None
 
         self.logger_step = -1  # when accumulate_grad_batches > 1, this helps to avoid redundant logging
 
@@ -202,26 +204,15 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
             raise ValueError(f"Metric name {name} is already used by a loss.")
         self.metrics[name] = metric
 
+    @abc.abstractmethod
     def build_train_dataset(self) -> BaseDataset:
-        """
-        Build the training dataset.
-        """
-        return self.__dataset__(self.data_dir, "train", augmentation_config=self.training_config.augmentation)
+        """Build the training dataset."""
+        pass
 
+    @abc.abstractmethod
     def build_valid_dataset(self) -> BaseDataset:
-        """
-        Build the validation dataset.
-        """
-        if self.use_parallel_dirty_metrics:
-            return self.__dataset__(
-                self.data_dir, "valid",
-                augmentation_config=self.training_config.augmentation,
-                augmentation_deterministic=True,
-                augmentation_destructive_only=True,
-                augmentation_return_dirty=True,
-            )
-        else:
-            return self.__dataset__(self.data_dir, "valid")
+        """Build the validation dataset."""
+        pass
 
     def setup(self, stage: str) -> None:
         if stage != "fit":

@@ -251,6 +251,7 @@ class DataLoaderConfig(ConfigBaseModel):
     frame_count_grid: int = Field(6, ge=1)
     num_workers: int = Field(4, ge=0)
     prefetch_factor: int = Field(2, ge=0)
+    aux_multiplier: float = Field(1.0, gt=0.0)
 
 
 class OptimizerConfig(ConfigBaseModel):
