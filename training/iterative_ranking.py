@@ -1,4 +1,3 @@
-import random
 from typing import Any
 
 import lightning.pytorch
@@ -8,30 +7,17 @@ from torch import Tensor
 
 
 def rank_rewards(k: int) -> Tensor:
-    """Rank-based rewards with step 2 centered on zero. k=4 → [-3,-1,1,3]."""
-    return torch.arange(-(k - 1), k, 2, dtype=torch.float32)
-
-
-def sample_paths(widths: list[int], k: int) -> list[list[int]]:
-    """Sample up to *k* distinct paths by uniformly picking an alternative per segment."""
-    paths_set: set[tuple[int, ...]] = set()
-    max_attempts = k * 10
-    for _ in range(max_attempts):
-        path = tuple(
-            random.randrange(w) if w > 1 else 0
-            for w in widths
-        )
-        paths_set.add(path)
-        if len(paths_set) >= k:
-            break
-    return [list(p) for p in paths_set]
+    """Rank-based rewards with step 2 centered on zero, best first. k=4 → [3,1,-1,-3]."""
+    return torch.arange(k - 1, -k, -2, dtype=torch.float32)
 
 
 class PathRanker:
     """Per-subpath accumulated scores with sparse auto-creation.
 
-    Scores are stored as ``{item_idx: {seg_idx: Tensor([alt0_score, ...])}}``.
-    Items and segments are created on first access via ``update_scores``.
+    Stores ``{item_idx: {seg_idx: Tensor([alt0_score, ...])}}``.
+    Receives flat ``(item_idx, seg_idx, alt_idx, score)`` tuples,
+    groups by ``(item_idx, seg_idx)``, ranks within each group,
+    and assigns ``rank_rewards(group_size)`` to each alt.
     """
 
     def __init__(self, gamma: float):
@@ -41,44 +27,45 @@ class PathRanker:
     def __len__(self) -> int:
         return len(self._scores)
 
-    def get_best_path(self, item_idx: int) -> list[int]:
-        """Highest-scoring alternative index per segment. Empty list if unknown."""
+    def get_best_path(self, item_idx: int) -> dict[int, int]:
+        """``{seg_idx: best_alt_idx}`` for known divergent segments. Empty if unknown."""
         segs = self._scores.get(item_idx)
         if not segs:
-            return []
-        return [
-            int(segs[p].argmax().item()) if segs[p].numel() > 1 else 0
-            for p in sorted(segs)
-        ]
+            return {}
+        return {p: int(s.argmax().item()) for p, s in segs.items()}
 
-    def update_scores(self, item_idx: int, paths: list[list[int]], rewards: Tensor):
-        """Distribute per-path rewards equally across all segments, clamped ≥ 0."""
-        num_seg = max((len(p) for p in paths), default=0)
-        if num_seg == 0:
-            return
-        for path, reward in zip(paths, rewards):
-            r = reward.item()
-            if r == 0:
-                continue
-            delta = r / num_seg
-            self._ensure_item(item_idx, num_seg, path)
-            segs = self._scores[item_idx]
-            for p in range(num_seg):
-                alt = path[p]
-                segs[p][alt] = max(segs[p][alt].item() + delta, 0.0)
+    def update_scores(self, results: list[tuple[int, int, int, float]]):
+        """Group by (item_idx, seg_idx), rank by score, assign rewards."""
+        groups: dict[tuple[int, int], list[tuple[int, float]]] = {}
+        for item_idx, seg_idx, alt_idx, score in results:
+            groups.setdefault((item_idx, seg_idx), []).append((alt_idx, score))
 
-    def _ensure_item(self, item_idx: int, num_seg: int, path: list[int]):
+        for (item_idx, seg_idx), entries in groups.items():
+            scores = torch.tensor([s for _, s in entries], dtype=torch.float32)
+            _, sorted_idx = torch.sort(scores, descending=True)
+            rewards = rank_rewards(len(entries))
+            mapped = torch.zeros(len(entries))
+            mapped[sorted_idx] = rewards
+
+            self._ensure_segment(item_idx, seg_idx, len(entries))
+            seg_scores = self._scores[item_idx][seg_idx]
+            for (alt_idx, _), r in zip(entries, mapped):
+                r_val = r.item()
+                if r_val == 0:
+                    continue
+                seg_scores[alt_idx] = max(seg_scores[alt_idx].item() + r_val, 0.0)
+
+    def _ensure_segment(self, item_idx: int, seg_idx: int, width: int):
         if item_idx not in self._scores:
             self._scores[item_idx] = {}
         segs = self._scores[item_idx]
-        for p in range(num_seg):
-            if p not in segs:
-                segs[p] = torch.zeros(path[p] + 1)
-            elif segs[p].numel() <= path[p]:
-                old = segs[p]
-                new = torch.zeros(path[p] + 1)
-                new[:len(old)] = old
-                segs[p] = new
+        if seg_idx not in segs:
+            segs[seg_idx] = torch.zeros(width)
+        elif segs[seg_idx].numel() < width:
+            old = segs[seg_idx]
+            new = torch.zeros(width)
+            new[:len(old)] = old
+            segs[seg_idx] = new
 
     def decay_scores(self):
         for segs in self._scores.values():
@@ -146,13 +133,12 @@ class IterativeRanking(lightning.pytorch.Callback):
     pushes ``pl_module._best_paths`` so the module knows which paths to use.
     """
 
-    def __init__(self, k: int, gamma: float, update_every_n_epochs: int):
+    def __init__(self, gamma: float, update_every_n_epochs: int):
         super().__init__()
-        self.k = k
         self.gamma = gamma
         self.update_every_n_epochs = update_every_n_epochs
         self.ranker: PathRanker | None = None
-        self._best_paths: dict[int, list[int]] | None = None
+        self._best_paths: dict[int, dict[int, int]] | None = None
         self._pending_ranker_state: dict[str, Tensor] | None = None
 
     def on_train_start(self, trainer, pl_module):
@@ -171,21 +157,14 @@ class IterativeRanking(lightning.pytorch.Callback):
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if self.ranker is None:
             return
-        results = pl_module._ranking_results
+        results: list[tuple[int, int, int, float]] | None = pl_module._ranking_results
         batch_indices: list[int] = []
         if results is not None:
             with torch.no_grad():
-                for r in results:
-                    item_idx = r["item_idx"]
-                    paths = r["paths"]
-                    scores = r["scores"]
-                    k = len(paths)
-                    _, sorted_idx = torch.sort(scores, descending=True)
-                    rewards = rank_rewards(k)
-                    mapped_rewards = torch.zeros(k)
-                    mapped_rewards[sorted_idx] = rewards
-                    self.ranker.update_scores(item_idx, paths, mapped_rewards)
-                    batch_indices.append(item_idx)
+                self.ranker.update_scores(results)
+                for item_idx, _, _, _ in results:
+                    if item_idx not in batch_indices:
+                        batch_indices.append(item_idx)
         self.ranker.sync_batch_scores(pl_module.device, batch_indices)
 
     def on_train_epoch_start(self, trainer, pl_module):
@@ -205,7 +184,8 @@ class IterativeRanking(lightning.pytorch.Callback):
             sd["iterative_ranker"] = self.ranker.state_dict()
         if self._best_paths is not None:
             sd["iterative_best_paths"] = {
-                str(i): p for i, p in self._best_paths.items()
+                str(i): {str(p): a for p, a in segs.items()}
+                for i, segs in self._best_paths.items()
             }
         return sd
 
@@ -219,7 +199,10 @@ class IterativeRanking(lightning.pytorch.Callback):
             self.ranker.load_state_dict(pending)
             saved_paths = state_dict.get("iterative_best_paths")
             if saved_paths is not None:
-                self._best_paths = {int(i): p for i, p in saved_paths.items()}
+                self._best_paths = {
+                    int(i): {int(p): a for p, a in segs.items()}
+                    for i, segs in saved_paths.items()
+                }
             else:
                 self._best_paths = {
                     i: self.ranker.get_best_path(i)

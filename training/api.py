@@ -185,8 +185,8 @@ def train_model(
     if training_config.iterative_ranking.enabled:
         cfg = training_config.iterative_ranking
         callbacks.append(IterativeRanking(
-            k=cfg.k, gamma=cfg.gamma,
-            update_every_n_epochs=cfg.update_every_n_epochs
+            gamma=cfg.gamma,
+            update_every_n_epochs=cfg.update_every_n_epochs,
         ))
     trainer = lightning.pytorch.Trainer(
         accelerator=training_config.trainer.accelerator,
