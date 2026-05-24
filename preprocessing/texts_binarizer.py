@@ -7,7 +7,7 @@ import numpy
 from g2p.api import build_pipeline_from_config
 from g2p.converters.base import PronunciationGroup
 from lib import logging
-from lib.levenshtein import align_multipath, merge_shared
+from lib.levenshtein import partition_groups
 
 from .binarizer_base import (
     BaseBinarizer,
@@ -90,7 +90,7 @@ class TextOnlyBinarizer(BaseBinarizer):
         if groups is None:
             raise RuntimeError(f"G2P not run for item '{item.name}'")
 
-        all_partitions: list[list[list[int]]] = []
+        encoded_groups: list[list[list[int]]] = []
         for pg in groups:
             encoded_paths = []
             for path in pg.paths:
@@ -104,9 +104,9 @@ class TextOnlyBinarizer(BaseBinarizer):
                         )
                     tok_ids.append(tid)
                 encoded_paths.append(tok_ids)
-            all_partitions.extend(align_multipath(encoded_paths))
+            encoded_groups.append(encoded_paths)
 
-        all_partitions = merge_shared(all_partitions)
+        all_partitions = partition_groups(encoded_groups)
 
         T = sum(
             max(len(sp) for sp in sub_paths)
