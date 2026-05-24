@@ -356,7 +356,7 @@ class DynamicBatchSampler(torch.utils.data.distributed.DistributedSampler):
                     raise RuntimeError(
                         f"Cannot form {self.target_num_batches} batches from "
                         f"{total_items} items: aux dataset too small. "
-                        f"Reduce aux_dataset_multiplier or add more data."
+                        f"Reduce aux_multiplier or add more data."
                     )
                 effective_max_batch_size = max(1, effective_max_batch_size // 2)
                 batches = _greedy_pack()
