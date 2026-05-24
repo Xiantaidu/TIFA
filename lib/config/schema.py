@@ -239,6 +239,13 @@ class AugmentationConfig(ConfigBaseModel):
         )
 
 
+class IterativeRankingConfig(ConfigBaseModel):
+    enabled: bool = False
+    k: int = Field(4, ge=2)
+    gamma: float = Field(0.9, gt=0.0, le=1.0)
+    update_every_n_epochs: int = Field(1, ge=1)
+
+
 class LossConfig(ConfigBaseModel):
     pass
 
@@ -389,6 +396,7 @@ class WeightAveragingConfig(ConfigBaseModel):
 
 class TrainingConfig(ConfigBaseModel):
     augmentation: AugmentationConfig = Field(...)
+    iterative_ranking: IterativeRankingConfig = Field(default_factory=IterativeRankingConfig)
     loss: LossConfig = Field(...)
     dataloader: DataLoaderConfig = Field(...)
     optimizer: OptimizerConfig = Field(...)

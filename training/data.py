@@ -27,15 +27,24 @@ __all__ = [
 ]
 
 
-def collate_nd(values, pad_value=0, max_len=None):
+def collate_nd(values, pad_value=0, max_len=None, ndim=1):
     """
-    Pad a list of Nd tensors on their first dimension and stack them into a (N+1)d tensor.
+    Pad a list of Nd tensors on their first ``ndim`` dimensions and stack them
+    into a (N+1)d tensor.
     """
-    size = ((max(v.size(0) for v in values) if max_len is None else max_len), *values[0].shape[1:])
+    max_sizes = [
+        max(v.size(d) for v in values)
+        for d in range(ndim)
+    ]
+    if max_len is not None:
+        max_sizes[0] = max_len
+    remaining = values[0].shape[ndim:]
+    size = (*max_sizes, *remaining)
     res = torch.full((len(values), *size), fill_value=pad_value, dtype=values[0].dtype, device=values[0].device)
 
     for i, v in enumerate(values):
-        res[i, :len(v), ...] = v
+        idx = [i] + [slice(v.size(d)) for d in range(ndim)]
+        res[tuple(idx)] = v
     return res
 
 
@@ -44,6 +53,7 @@ class BaseDataset(torch.utils.data.Dataset):
         "spectrogram": math.log(1e-5),
         "spectrogram_dirty": math.log(1e-5),
     }
+    __multi_dims__: dict[str, int] = {}
 
     def __init__(
             self,
@@ -177,7 +187,8 @@ class BaseDataset(torch.utils.data.Dataset):
                 batch[key] = torch.stack([s[key] for s in samples])
             else:
                 pad_value = cls.__non_zero_paddings__.get(key, 0)
-                batch[key] = collate_nd([s[key] for s in samples], pad_value=pad_value)
+                ndim = cls.__multi_dims__.get(key, 1)
+                batch[key] = collate_nd([s[key] for s in samples], pad_value=pad_value, ndim=ndim)
         return batch
 
 
@@ -213,6 +224,11 @@ class PhonemeTimingDataset(BaseDataset):
 
 
 class TextOnlyDataset(BaseDataset):
+    __multi_dims__ = {
+        **BaseDataset.__multi_dims__,
+        "paths": 2
+    }
+
     def __getitem__(self, index: int) -> dict:
         sample = super().__getitem__(index)
         # sample keys: spectrogram [T_spec, F], paths [max_path_length, max_width],

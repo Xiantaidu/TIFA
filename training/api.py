@@ -74,6 +74,7 @@ def train_model(
     from training.pl_module_base import BaseLightningModule
 
     from training.callbacks import PeriodicModelCheckpoint, ExpressionModelCheckpoint, FriendlyTQDMProgressBar
+    from training.iterative_ranking import IterativeRanking
     from training.strategy import get_strategy
 
     if not issubclass(pl_module_cls, BaseLightningModule):
@@ -181,6 +182,12 @@ def train_model(
         else:
             raise ValueError(f"Invalid checkpoint monitor type: {ckpt_config.type}")
         callbacks.append(checkpoint)
+    if training_config.iterative_ranking.enabled:
+        cfg = training_config.iterative_ranking
+        callbacks.append(IterativeRanking(
+            k=cfg.k, gamma=cfg.gamma,
+            update_every_n_epochs=cfg.update_every_n_epochs
+        ))
     trainer = lightning.pytorch.Trainer(
         accelerator=training_config.trainer.accelerator,
         strategy=get_strategy(
