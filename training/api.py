@@ -117,8 +117,7 @@ def train_model(
         current_time = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         save_raw_config(cfg.model_dump(), to_dir / f"hparams-{current_time}.yaml")
 
-    data_dir = config.binarizer.phoneme_timing_data_dir_resolved
-    aux_data_dir = config.binarizer.text_only_data_dir_resolved
+    data_dir, aux_data_dir = pl_module_cls.resolve_data_dirs(config)
     ckpt_save_dir.mkdir(parents=True, exist_ok=True)
     _check_file_and_config(data_dir / "feature.yaml", config.binarizer.features)
     if aux_data_dir is not None:

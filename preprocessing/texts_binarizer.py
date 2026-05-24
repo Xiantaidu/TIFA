@@ -116,17 +116,17 @@ class TextOnlyBinarizer(BaseBinarizer):
             (len(sub_paths) for sub_paths in all_segments),
             default=0,
         )
-        P = len(all_segments)
+        S = len(all_segments)
 
         paths = numpy.zeros((N, max_width), dtype=numpy.int64)
         segments_arr = numpy.zeros(N, dtype=numpy.int64)
-        widths = numpy.zeros(P, dtype=numpy.int64)
+        widths = numpy.zeros(S, dtype=numpy.int64)
 
         col = 0
-        for p_idx, sub_paths in enumerate(all_segments):
+        for s_idx, sub_paths in enumerate(all_segments):
             L = max(len(sp) for sp in sub_paths)
-            widths[p_idx] = len(sub_paths)
-            segments_arr[col:col + L] = p_idx + 1
+            widths[s_idx] = len(sub_paths)
+            segments_arr[col:col + L] = s_idx + 1
             for alt_idx, path in enumerate(sub_paths):
                 for pos, tok_id in enumerate(path):
                     paths[col + pos, alt_idx] = tok_id

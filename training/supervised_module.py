@@ -1,7 +1,10 @@
+import pathlib
+
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
+from lib.config.schema import RootConfig
 from training.data import (
     BaseDataset,
     PhonemeTimingDataset,
@@ -13,6 +16,13 @@ from training.pl_module_base import BaseLightningModule
 
 
 class SupervisedModule(BaseLightningModule):
+
+    @classmethod
+    def resolve_data_dirs(cls, config: RootConfig) -> tuple[pathlib.Path, pathlib.Path | None]:
+        return (
+            config.binarizer.phoneme_timing_data_dir_resolved,
+            config.binarizer.text_only_data_dir_resolved,
+        )
 
     def build_model(self) -> nn.Module:
         return nn.Linear(1, 1)

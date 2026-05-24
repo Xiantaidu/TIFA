@@ -21,6 +21,43 @@ training:
     frame_count_grid: 6
     num_workers: 4
     prefetch_factor: 2
+  augmentation:
+    pitch_shifting:
+      enabled: true
+      prob: 0.5
+      min_semitones: -12
+      max_semitones: 12
+    time_stretching:
+      enabled: true
+      prob: 0.5
+      min_speed: 0.8
+      max_speed: 1.25
+    loudness_scaling:
+      enabled: true
+      prob: 0.5
+      min_db: -6
+      max_db: 6
+    spectrogram_masking:
+      enabled: true
+      time_mask_prob: 0.15
+      time_mask_max_width: 50
+      freq_mask_prob: 0.15
+      freq_mask_max_width: 20
+      intersect_prob: 0.5
+    colored_noise:
+      enabled: true
+      prob: 0.25
+      min_exponent: 0
+      max_exponent: 2
+    natural_noise:
+      enabled: true
+      prob: 0.25
+      max_repeats: 3
+      noise_path_glob: "data/noise/**/*.wav"
+    rir_reverb:
+      enabled: true
+      prob: 0.25
+      kernel_path_glob: "data/reverb/**/*.wav"
   optimizer:
     cls: torch.optim.AdamW
     kwargs:

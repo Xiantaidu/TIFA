@@ -1,9 +1,14 @@
+import typing
 from typing import Any
 
 import lightning.pytorch
 import torch
 import torch.distributed
 from torch import Tensor
+
+
+class RankingModule(typing.Protocol):
+    def set_best_paths(self, best_paths: dict[int, dict[int, int]] | None) -> None: ...
 
 
 def rank_rewards(k: int) -> Tensor:
@@ -27,6 +32,9 @@ class PathRanker:
     def __len__(self) -> int:
         return len(self._scores)
 
+    def known_items(self) -> list[int]:
+        return list(self._scores)
+
     def get_best_path(self, item_idx: int) -> dict[int, int]:
         """``{seg_idx: best_alt_idx}`` for known divergent segments. Empty if unknown."""
         segs = self._scores.get(item_idx)
@@ -47,7 +55,8 @@ class PathRanker:
             mapped = torch.zeros(len(entries))
             mapped[sorted_idx] = rewards
 
-            self._ensure_segment(item_idx, seg_idx, len(entries))
+            n_alts = max(alt_idx for alt_idx, _ in entries) + 1
+            self._ensure_segment(item_idx, seg_idx, n_alts)
             seg_scores = self._scores[item_idx][seg_idx]
             for (alt_idx, _), r in zip(entries, mapped):
                 r_val = r.item()
@@ -129,11 +138,10 @@ class PathRanker:
 class IterativeRanking(lightning.pytorch.Callback):
     """Per-step path ranking with epoch-boundary decay and DDP sync.
 
-    Reads ``pl_module._ranking_results`` each batch to update subpath scores,
-    pushes ``pl_module._best_paths`` so the module knows which paths to use.
+    Requires *pl_module* to implement :class:`RankingModule`.
     """
 
-    def __init__(self, gamma: float, update_every_n_epochs: int):
+    def __init__(self, gamma: float, update_every_n_epochs: int) -> None:
         super().__init__()
         self.gamma = gamma
         self.update_every_n_epochs = update_every_n_epochs
@@ -141,23 +149,40 @@ class IterativeRanking(lightning.pytorch.Callback):
         self._best_paths: dict[int, dict[int, int]] | None = None
         self._pending_ranker_state: dict[str, Tensor] | None = None
 
-    def on_train_start(self, trainer, pl_module):
-        if pl_module.aux_train_dataset is None:
-            return
+    def on_train_start(
+            self,
+            trainer: lightning.pytorch.Trainer,
+            pl_module: RankingModule,
+    ) -> None:
         self.ranker = PathRanker(self.gamma)
         if self._pending_ranker_state is not None:
             self.ranker.load_state_dict(self._pending_ranker_state)
             self._pending_ranker_state = None
         self._best_paths = {}
 
-    def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
-        if pl_module._best_paths is None:
-            pl_module._best_paths = self._best_paths
+    def on_train_batch_start(
+            self,
+            trainer: lightning.pytorch.Trainer,
+            pl_module: RankingModule,
+            batch: dict[str, torch.Tensor],
+            batch_idx: int,
+    ) -> None:
+        pl_module.set_best_paths(self._best_paths)
 
-    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+    def on_train_batch_end(
+            self,
+            trainer: lightning.pytorch.Trainer,
+            pl_module: RankingModule,
+            outputs: dict[str, torch.Tensor] | torch.Tensor,
+            batch: dict[str, torch.Tensor],
+            batch_idx: int,
+    ) -> None:
         if self.ranker is None:
             return
-        results: list[tuple[int, int, int, float]] | None = pl_module._ranking_results
+        if isinstance(outputs, dict):
+            results = outputs.get("ranking_results")
+        else:
+            results = None
         batch_indices: list[int] = []
         if results is not None:
             with torch.no_grad():
@@ -165,18 +190,23 @@ class IterativeRanking(lightning.pytorch.Callback):
                 for item_idx, _, _, _ in results:
                     if item_idx not in batch_indices:
                         batch_indices.append(item_idx)
-        self.ranker.sync_batch_scores(pl_module.device, batch_indices)
+        device = batch["spectrogram"].device
+        self.ranker.sync_batch_scores(device, batch_indices)
 
-    def on_train_epoch_start(self, trainer, pl_module):
+    def on_train_epoch_start(
+            self,
+            trainer: lightning.pytorch.Trainer,
+            pl_module: RankingModule,
+    ) -> None:
         if self.ranker is None:
             return
         if trainer.current_epoch > 0 and trainer.current_epoch % self.update_every_n_epochs == 0:
             self.ranker.decay_scores()
             self._best_paths = {
                 i: self.ranker.get_best_path(i)
-                for i in self.ranker._scores
+                for i in self.ranker.known_items()
             }
-            pl_module._best_paths = self._best_paths
+            pl_module.set_best_paths(self._best_paths)
 
     def state_dict(self) -> dict[str, Any]:
         sd = super().state_dict()
@@ -206,7 +236,7 @@ class IterativeRanking(lightning.pytorch.Callback):
             else:
                 self._best_paths = {
                     i: self.ranker.get_best_path(i)
-                    for i in self.ranker._scores
+                    for i in self.ranker.known_items()
                 }
         else:
             self._pending_ranker_state = pending

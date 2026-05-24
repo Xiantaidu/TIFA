@@ -12,7 +12,7 @@ from torch import nn
 from torchmetrics import Metric, MeanMetric
 
 from lib import logging
-from lib.config.schema import ModelConfig, TrainingConfig
+from lib.config.schema import ModelConfig, RootConfig, TrainingConfig
 from lib.reflection import build_optimizer_from_config, build_lr_scheduler_from_config
 from .data import BaseDataset, DynamicBatchSampler
 from .weight_averaging import ExponentialMovingAverage
@@ -71,6 +71,12 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         self.logger_step = -1  # when accumulate_grad_batches > 1, this helps to avoid redundant logging
 
         self.post_init()
+
+    @classmethod
+    @abc.abstractmethod
+    def resolve_data_dirs(cls, config: RootConfig) -> tuple[pathlib.Path, pathlib.Path | None]:
+        """Return (data_dir, aux_data_dir) from root config."""
+        pass
 
     @abc.abstractmethod
     def build_model(self) -> nn.Module:
@@ -396,7 +402,11 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
             self.ema.load_state_dict(checkpoint.pop("ema_state_dict"), strict=True)
 
 
-def _apply_include_exclude(dict_to_filter: dict[str, Any], includes: list[str] = None, excludes: list[str] = None) -> dict[str, Any]:
+def _apply_include_exclude(
+        dict_to_filter: dict[str, Any],
+        includes: list[str] = None,
+        excludes: list[str] = None,
+) -> dict[str, Any]:
     result = {}
     for key, value in dict_to_filter.items():
         if includes and not any(fnmatch(key, pattern) for pattern in includes):

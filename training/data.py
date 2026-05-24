@@ -228,6 +228,10 @@ class TextOnlyDataset(BaseDataset):
         **BaseDataset.__multi_dims__,
         "paths": 2
     }
+    __non_zero_paddings__ = {
+        **BaseDataset.__non_zero_paddings__,
+        "widths": 1,
+    }
 
     def __getitem__(self, index: int) -> dict:
         sample = super().__getitem__(index)
