@@ -298,7 +298,10 @@ class SpectrogramMasking(Augmentation):
     intersect: bool = None
     seed: int | None = None
 
-    def __init__(self, config: AugmentationConfig, generator: np.random.Generator, **kwargs):
+    def __init__(
+            self, config: AugmentationConfig, generator: np.random.Generator,
+            num_bins: int, **kwargs
+    ):
         super().__init__(**kwargs)
         if config.spectrogram_masking.enabled:
             time_masked = generator.random() < config.spectrogram_masking.time_mask_prob
@@ -314,7 +317,7 @@ class SpectrogramMasking(Augmentation):
                     1, config.spectrogram_masking.freq_mask_max_width + 1,
                 ))
                 self.freq_mask_offset = int(generator.integers(
-                    0, config.features.spectrogram.num_bins - self.freq_mask_width + 1,
+                    0, num_bins - self.freq_mask_width + 1,
                 ))
                 self.freq_mask_mean = generator.uniform(math.log(1e-5), 0)
                 self.freq_mask_std = generator.uniform(0, 1)
@@ -397,7 +400,7 @@ def build_augmentation_chain(
     if not destructive_only:
         for aug in [
             LoudnessScaling(config=config, generator=generator),
-            SpectrogramMasking(config=config, generator=generator),
+            SpectrogramMasking(config=config, generator=generator, num_bins=mel_spectrogram.n_mels),
         ]:
             if aug.should_apply():
                 transforms.append(aug)

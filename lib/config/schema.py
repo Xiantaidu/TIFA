@@ -218,9 +218,6 @@ class RIRReverbAugmentationConfig(ConfigBaseModel):
 
 
 class AugmentationConfig(ConfigBaseModel):
-    features: BinarizerFeaturesConfig = Field(None, json_schema_extra={
-        "dynamic_expr": ref("binarizer.features")
-    })
     pitch_shifting: PitchShiftingAugmentationConfig = Field(...)
     time_stretching: TimeStretchingAugmentationConfig = Field(...)
     loudness_scaling: LoudnessScalingAugmentationConfig = Field(...)
