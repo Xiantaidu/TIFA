@@ -1,0 +1,40 @@
+binarizer:
+  g2p:
+    preprocessors:
+      - id: filter-punctuation
+      - id: strip-whitespace
+      - id: lowercase
+    tokenizers:
+      - id: whitespace
+      - id: cjk
+    converters:
+      # Chinese: hanzi
+      - id: chinese-pinyin
+        kwargs:
+          dict_path: "dictionaries/ds-zh-pinyin-lite.txt"
+      # Chinese: pinyin
+      - id: dictionary
+        language: zh
+        kwargs:
+          dict_path: "dictionaries/ds-zh-pinyin-lite.txt"
+      # Japanese: kana
+      - id: japanese-kana
+        kwargs:
+          dict_path: "dictionaries/japanese_dict_full.txt"
+          double_written_sokuon: false
+      # Japanese: romaji
+      - id: dictionary
+        language: ja
+        kwargs:
+          dict_path: "dictionaries/japanese_dict_full.txt"
+      # English: dictionary + lstm
+      - id: lstm
+        language: en
+        kwargs:
+          dict_path: "dictionaries/ds_cmudict-07b.txt"
+          model_path: "assets/LstmG2p-Eng"
+      # English: pure dictionary
+  #      - id: dictionary
+  #        language: en
+  #        kwargs:
+  #          dict_path: "dictionaries/ds_cmudict-07b.txt"

@@ -1,7 +1,4 @@
 """Japanese kana G2P converter — kana → romaji → phonemes.
-
-Auto-discovered by ``g2p/converters/__init__.py`` and registered as
-``@converter(id="japanese_kana", language="ja,jpn")``.
 """
 
 
@@ -124,7 +121,7 @@ def _apply_sokuon(romaji_list: list[str]) -> list[str]:
     return result
 
 
-@converter(id="japanese_kana", language="ja,jpn")
+@converter(id="japanese-kana", language="ja,jpn")
 class JapaneseKanaConverter(PronunciationScriptDictionaryConverter):
     """Japanese kana-to-phoneme converter.
 

@@ -41,8 +41,8 @@ class DictionaryConverter(Converter):
     ``word(N)`` and ``word (N)`` suffixes are variant forms of the same word.
     """
 
-    def __init__(self, path: str) -> None:
-        raw = load_pronunciation_dict(path)
+    def __init__(self, dict_path: str) -> None:
+        raw = load_pronunciation_dict(dict_path)
         self._dict: dict[str, list[list[str]]] = {}
         for key, prons in raw.items():
             base = _PRON_UNSAFE_RE.sub("", key).lower()

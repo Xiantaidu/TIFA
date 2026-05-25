@@ -15,7 +15,7 @@ class PassthroughConverter(Converter):
         return [PronunciationGroup(paths=[[t]]) for t in tokens]
 
 
-@converter(id="char_phoneme", language=None)
+@converter(id="characters", language=None)
 class CharPhonemeConverter(Converter):
     """One-to-one character-to-phoneme mapping.
     Each character in a token is mapped to one or more phonemes."""

@@ -1,6 +1,5 @@
 """Mandarin and Cantonese G2P converters — delegate to the cpp-pinyin engine.
 
-Auto-discovered by ``g2p/converters/__init__.py``.
 Both derive from ``PronunciationScriptDictionaryConverter``: hanzi → pinyin/jyutping
 (text-to-script, via the cpp-pinyin engine) then pinyin/jyutping → phonemes
 (script-to-phonemes, via dictionary lookup when *dict_path* is given).
@@ -56,8 +55,8 @@ class _ChineseScriptConverter(PronunciationScriptDictionaryConverter):
         return result
 
 
-@converter(id="mandarin", language="zh,zho,cmn")
-class MandarinConverter(_ChineseScriptConverter):
+@converter(id="chinese-pinyin", language="zh,zho,cmn")
+class PinyinConverter(_ChineseScriptConverter):
     """Mandarin Chinese pinyin converter.
 
     Config examples::
@@ -81,7 +80,7 @@ class MandarinConverter(_ChineseScriptConverter):
         )
 
 
-@converter(id="cantonese", language="yue")
+@converter(id="cantonese-jyutping", language="yue")
 class CantoneseConverter(_ChineseScriptConverter):
     """Cantonese (Jyutping) converter.
 

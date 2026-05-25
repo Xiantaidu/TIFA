@@ -1,7 +1,4 @@
 """LSTM G2P converter using ONNX encoder-decoder models.
-
-Auto-discovered by ``g2p/converters/__init__.py``.
-Registered as ``@converter(id="lstm", language=None)``.
 """
 
 import json
@@ -23,7 +20,7 @@ class LSTMConverter(LexiconConverter):
           ``decoder.onnx``, ``char.json``, ``phonemes.json``.
     """
 
-    def __init__(self, model_path: str, dict_path: str = None) -> None:
+    def __init__(self, *, dict_path: str = None, model_path: str) -> None:
         super().__init__(dict_path=dict_path)
 
         model_dir = Path(model_path)

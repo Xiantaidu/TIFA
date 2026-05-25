@@ -1,19 +1,10 @@
 bases:
   - "configs/base.yaml"
+  - "configs/g2p.yaml"
 
 binarizer:
   phoneme_timing_data_dir: "data/phones"
   text_only_data_dir: "data/texts"
-  g2p:
-    preprocessors:
-      - id: punctuation_filter
-      - id: strip_whitespace
-    tokenizers:
-      - id: cjk
-    converters:
-      - id: mandarin
-        kwargs:
-          dict_path: "dictionaries/ds-zh-pinyin-lite.txt"
   vocabulary:
     global_symbols: [AP, SP, EP, GS, sil, br, pau, cl]
     stop_symbols: [AP, SP, EP, GS, sil, br, pau, cl]
