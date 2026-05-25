@@ -20,12 +20,12 @@ class VocabularyBuilder:
             global_symbols: Iterable[str] = (),
             stop_symbols: Iterable[str] = (),
             merged_groups: Iterable[MergedSymbolGroupConfig] | None = None,
-            replaceable_clusters: Iterable[Sequence[str]] | None = None,
+            peers: Iterable[Sequence[str]] | None = None,
     ):
         self.global_symbols = frozenset(global_symbols)
         self.stop_symbols = frozenset(stop_symbols)
         self.merged_groups = list(merged_groups or ())
-        self.replaceable_clusters = list(replaceable_clusters or ())
+        self.peers = list(peers or ())
         self._symbol_counts: dict[str, int] = {}
 
     def add(self, symbols: Iterable[str], default_language: str) -> None:
@@ -94,34 +94,34 @@ class VocabularyBuilder:
             for s in group_map[name]:
                 symbol_to_id[s] = gid
 
-        # Resolve replaceable clusters through name_to_id, then disjoint-set
-        all_cluster_ids: set[int] = set()
+        # Resolve peer groups through name_to_id, then disjoint-set
+        all_peer_ids: set[int] = set()
         resolved: list[tuple[str, list[int]]] = []
-        for i, cluster in enumerate(self.replaceable_clusters):
+        for i, group in enumerate(self.peers):
             ids = []
-            for s in cluster:
+            for s in group:
                 if s in self.stop_symbols:
                     raise ValueError(
-                        f"Stop symbol '{s}' cannot be used in a replaceable cluster.")
+                        f"Stop symbol '{s}' cannot be used in peers.")
                 try:
                     ids.append(name_to_id[s])
                 except KeyError as e:
                     raise ValueError(
-                        f"Unknown symbol or group in replaceable cluster: '{s}'.") from e
+                        f"Unknown symbol or group in peers: '{s}'.") from e
             ids = list(dict.fromkeys(ids))
-            all_cluster_ids.update(ids)
+            all_peer_ids.update(ids)
             resolved.append((f"__c{i}", ids))
 
-        cluster_map = _disjoint_sets(all_cluster_ids, resolved)
+        peer_map = _disjoint_sets(all_peer_ids, resolved)
 
         # Filter singletons
-        replaceable_ids = tuple(
-            members for members in cluster_map.values() if len(members) >= 2
+        peer_ids = tuple(
+            members for members in peer_map.values() if len(members) >= 2
         )
 
         return Vocabulary(
             symbol_to_id=symbol_to_id,
-            replaceable_cluster_ids=replaceable_ids,
+            peer_ids=peer_ids,
         )
 
 
@@ -130,10 +130,10 @@ class Vocabulary:
             self,
             *,
             symbol_to_id: dict[str, int],
-            replaceable_cluster_ids: tuple[tuple[int, ...], ...],
+            peer_ids: tuple[tuple[int, ...], ...],
     ):
         self.symbol_to_id = symbol_to_id
-        self.replaceable_cluster_ids = replaceable_cluster_ids
+        self.peer_ids = peer_ids
 
     @property
     def vocab_size(self) -> int:
@@ -155,18 +155,18 @@ class Vocabulary:
             "symbols": dict(self.symbol_to_id),
         }
 
-    def to_replaceable_tokens(self) -> dict:
+    def to_token_peers(self) -> dict:
         return {
-            "replaceable_tokens": [list(ids) for ids in self.replaceable_cluster_ids]
+            "token_peer_ids": [list(ids) for ids in self.peer_ids]
         }
 
     def dump(self, path: str | pathlib.Path) -> None:
         with open(path, "w", encoding="utf8") as f:
             json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
 
-    def dump_replaceable_tokens(self, path: str | pathlib.Path) -> None:
+    def dump_token_peers(self, path: str | pathlib.Path) -> None:
         with open(path, "w", encoding="utf8") as f:
-            json.dump(self.to_replaceable_tokens(), f, ensure_ascii=False, indent=2)
+            json.dump(self.to_token_peers(), f, ensure_ascii=False, indent=2)
 
 
 _T = TypeVar("_T")

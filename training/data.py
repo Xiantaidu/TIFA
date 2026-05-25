@@ -216,6 +216,18 @@ class PhonemeTimingDataset(BaseDataset):
                 vocab_data = json.load(f)
             self._vocab_size = len(vocab_data["symbols"]) + 1
 
+        self._token_peers: dict[int, list[int]] = {}
+        if (
+            self.augmentation_config is not None
+            and self.augmentation_config.token_perturbation.enabled
+        ):
+            peers_path = self.data_dir / "token_peers.json"
+            with open(peers_path, "r", encoding="utf8") as f:
+                peers_data = json.load(f)
+            for group in peers_data["token_peer_ids"]:
+                for i, tid in enumerate(group):
+                    self._token_peers[tid] = [p for p in group if p != tid]
+
     def __getitem__(self, index: int) -> dict:
         sample = super().__getitem__(index)
         # sample keys: spectrogram [T_spec, F], tokens [N], spans [N,2], regions [T]
@@ -232,6 +244,18 @@ class PhonemeTimingDataset(BaseDataset):
             )
 
         T_val = max(T_spec, T)
+
+        if self._token_peers and not self._ensure_original_tokens:
+            pert_cfg = self.augmentation_config.token_perturbation
+            if random.random() < pert_cfg.prob:
+                new_tokens = []
+                for tid in sample["tokens"].tolist():
+                    peers = self._token_peers.get(tid)
+                    if peers and random.random() < pert_cfg.p_sub:
+                        new_tokens.append(random.choice(peers))
+                    else:
+                        new_tokens.append(tid)
+                sample["tokens"] = torch.tensor(new_tokens, dtype=torch.long)
 
         if self._vocab_size is not None and not self._ensure_original_tokens:
             edit_cfg = self.augmentation_config.sequence_edit

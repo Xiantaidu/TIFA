@@ -18,7 +18,7 @@ binarizer:
     global_symbols: [AP, SP, EP, GS, sil, br, pau, cl]
     stop_symbols: [AP, SP, EP, GS, sil, br, pau, cl]
     merged_groups: []
-    replaceable_clusters: []
+    peers: []
 
 model: {}
 
@@ -26,12 +26,16 @@ training:
   dataloader:
     aux_multiplier: 1.0
   augmentation:
+    token_perturbation:
+      enabled: false
+      prob: 0.2
+      p_sub: 0.05
     sequence_edit:
       enabled: false
-      prob: 0.3
-      p_sub: 0.08
-      p_del: 0.08
-      p_ins: 0.05
+      prob: 0.2
+      p_sub: 0.03
+      p_del: 0.02
+      p_ins: 0.02
     time_stretching:
       enabled: false
   loss: {}

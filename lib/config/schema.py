@@ -72,7 +72,7 @@ class VocabularyConfig(ConfigBaseModel):
     global_symbols: list[str] = Field(default_factory=list)
     stop_symbols: list[str] = Field(default_factory=list)
     merged_groups: list[MergedSymbolGroupConfig] = Field(default_factory=list)
-    replaceable_clusters: list[list[str]] = Field(default_factory=list)
+    peers: list[list[str]] = Field(default_factory=list)
 
 
 class SpectrogramConfig(ConfigBaseModel):
@@ -225,6 +225,12 @@ class SequenceEditAugmentationConfig(ConfigBaseModel):
     p_ins: float = Field(0.05, gt=0.0, le=1.0)
 
 
+class TokenPerturbationConfig(ConfigBaseModel):
+    enabled: bool = False
+    prob: float = Field(0.3, gt=0.0, le=1.0)
+    p_sub: float = Field(0.1, gt=0.0, le=1.0)
+
+
 class AugmentationConfig(ConfigBaseModel):
     pitch_shifting: PitchShiftingAugmentationConfig = Field(...)
     time_stretching: TimeStretchingAugmentationConfig = Field(...)
@@ -234,6 +240,7 @@ class AugmentationConfig(ConfigBaseModel):
     natural_noise: NaturalNoiseAugmentationConfig = Field(...)
     rir_reverb: RIRReverbAugmentationConfig = Field(...)
     sequence_edit: SequenceEditAugmentationConfig = Field(default_factory=SequenceEditAugmentationConfig)
+    token_perturbation: TokenPerturbationConfig = Field(default_factory=TokenPerturbationConfig)
 
     @property
     def has_destructive_augmentations(self) -> bool:

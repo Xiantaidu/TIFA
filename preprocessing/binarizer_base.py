@@ -167,7 +167,7 @@ class BaseBinarizer(abc.ABC):
             global_symbols=self.config.vocabulary.global_symbols,
             stop_symbols=self.config.vocabulary.stop_symbols,
             merged_groups=self.config.vocabulary.merged_groups,
-            replaceable_clusters=self.config.vocabulary.replaceable_clusters,
+            peers=self.config.vocabulary.peers,
         )
         for item in metadata_list:
             vocab_builder.add(item.raw_symbols, default_language=item.language)
@@ -192,7 +192,7 @@ class BaseBinarizer(abc.ABC):
     def save_auxiliary_files(self):
         save_raw_config(self.config.features.model_dump(), self.data_dir / "feature.yaml")
         self.vocabulary.dump(self.data_dir / "vocabulary.json")
-        self.vocabulary.dump_replaceable_tokens(self.data_dir / "replaceable_tokens.json")
+        self.vocabulary.dump_token_peers(self.data_dir / "token_peers.json")
 
     def _process_datasets(self):
         if self.aux_mode:
