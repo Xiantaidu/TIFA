@@ -64,16 +64,17 @@ g2p/
 ├── tokenizers/
 │   ├── base.py         # Tokenizer ABC
 │   ├── simple.py       # Whitespace, Character, Identity
-│   └── cjk.py          # CJKTokenizer
+│   └── cjk.py          # CJKTokenizer (also groups kana digraphs)
 ├── preprocessors/
 │   ├── base.py         # Preprocessor ABC
-│   └── simple.py       # PunctuationFilter, Lowercase, StripWhitespace
+│   └── simple.py       # FilterPunctuation, LowercasePreprocessor, StripWhitespacePreprocessor, RemoveAccentsPreprocessor
 └── converters/
     ├── base.py         # Converter ABC, PronunciationGroup, G2PConversionError, resolve_language()
     ├── paradigm.py     # LexiconConverter, PronunciationScriptConverter
     ├── dictionary.py   # load_pronunciation_dict(), DictionaryConverter, PronunciationScriptDictionaryConverter
-    ├── chinese.py      # MandarinConverter, CantoneseConverter
-    ├── japanese.py     # JapaneseKanaConverter
+    ├── chinese.py      # MandarinConverter (id=chinese-pinyin), CantoneseConverter (id=cantonese-jyutping)
+    ├── japanese.py     # JapaneseKanaConverter (id=japanese-kana) — cpp-kana-aligned
+    ├── lstm.py         # LSTMConverter (id=lstm) — ONNX encoder-decoder OOV
     ├── simple.py       # PassthroughConverter, CharPhonemeConverter
     └── cpp_pinyin/     # PinyinEngine + dicts (mandarin, cantonese)
 ```
@@ -84,12 +85,12 @@ Splits tokens into smaller tokens. The first tokenizer receives `[raw_text]`.
 
 **Built-in:**
 
-| ID           | Class                 | Behavior                                                  |
-|--------------|-----------------------|-----------------------------------------------------------|
-| `whitespace` | `WhitespaceTokenizer` | Split on Unicode whitespace boundaries                    |
-| `cjk`        | `CJKTokenizer`        | Split CJK characters individually, group others into runs |
-| `character`  | `CharacterTokenizer`  | Split each token into individual characters               |
-| `identity`   | `IdentityTokenizer`   | Return tokens unchanged                                   |
+| ID           | Class                 | Behavior                                                         |
+|--------------|-----------------------|------------------------------------------------------------------|
+| `whitespace` | `WhitespaceTokenizer` | Split on Unicode whitespace boundaries                           |
+| `cjk`        | `CJKTokenizer`        | Split CJK chars individually, group non-CJK runs. Kana digraphs (kana + small kana) kept as single tokens |
+| `character`  | `CharacterTokenizer`  | Split each token into individual characters                      |
+| `identity`   | `IdentityTokenizer`   | Return tokens unchanged                                          |
 
 ### Preprocessor
 
@@ -97,11 +98,12 @@ Transforms a token sequence. Applied before tokenization — receives `[raw_text
 
 **Built-in:**
 
-| ID                   | Class                         | Behavior                                         |
-|----------------------|-------------------------------|--------------------------------------------------|
-| `punctuation_filter` | `PunctuationFilter`           | Remove tokens consisting entirely of punctuation |
-| `lowercase`          | `LowercasePreprocessor`       | Lowercase all tokens                             |
-| `strip_whitespace`   | `StripWhitespacePreprocessor` | Strip whitespace, remove empty tokens            |
+| ID                  | Class                         | Behavior                                             |
+|---------------------|-------------------------------|------------------------------------------------------|
+| `filter-punctuation` | `FilterPunctuation`           | Split tokens on punctuation and discard punctuation chars |
+| `lowercase`         | `LowercasePreprocessor`       | Lowercase all tokens                                 |
+| `strip-whitespace`  | `StripWhitespacePreprocessor` | Strip whitespace, remove empty tokens                |
+| `remove-accents`    | `RemoveAccentsPreprocessor`   | Decompose accented chars and strip combining marks   |
 
 ### Converter
 
@@ -115,14 +117,36 @@ Converts tokens to phoneme sequences. Each converter implements:
 
 **Built-in converters:**
 
-| ID               | Class                  | Behavior                                                           |
-|------------------|------------------------|--------------------------------------------------------------------|
-| `dictionary`     | `DictionaryConverter`  | Pronunciation dictionary lookup from a tab-separated file          |
-| `passthrough`    | `PassthroughConverter` | Catch-all: returns each token as its own phoneme                   |
-| `char_phoneme`   | `CharPhonemeConverter` | One-to-one character-to-phoneme mapping                            |
-| `mandarin`       | `MandarinConverter`    | hanzi → pinyin (cpp-pinyin engine) → phonemes (dict)               |
-| `cantonese`      | `CantoneseConverter`   | hanzi → jyutping (cpp-pinyin engine) → phonemes (dict)             |
-| `japanese_kana`  | `JapaneseKanaConverter`| kana → romaji (mapping table) → phonemes (dict)                    |
+| ID                   | Class                  | Behavior                                                                     |
+|----------------------|------------------------|------------------------------------------------------------------------------|
+| `dictionary`         | `DictionaryConverter`  | Pronunciation dictionary lookup from a tab-separated file                    |
+| `passthrough`        | `PassthroughConverter` | Catch-all: returns each token as its own phoneme                             |
+| `characters`         | `CharPhonemeConverter` | One-to-one character-to-phoneme mapping                                      |
+| `chinese-pinyin`     | `MandarinConverter`    | hanzi → pinyin (cpp-pinyin engine) → phonemes (dict)                         |
+| `cantonese-jyutping` | `CantoneseConverter`   | hanzi → jyutping (cpp-pinyin engine) → phonemes (dict)                       |
+| `japanese-kana`      | `JapaneseKanaConverter`| kana → romaji (cpp-kana-aligned table) → phonemes (dict). Handles yōon digraphs, gemination |
+| `lstm`               | `LSTMConverter`        | LexiconConverter with ONNX encoder-decoder inference for OOV words           |
+
+### Japanese Kana converter
+
+Extends `PronunciationScriptDictionaryConverter`. Kana tokens (from CJKTokenizer, including digraphs like きゃ) are mapped to romaji via a table matching cpp-kana, then looked up in the dictionary.
+
+Key behaviors:
+- っ → `"cl"`, を → `"o"`; ー and ゜ produce empty phonemes
+- Katakana auto-converted to hiragana before lookup
+- `claim()` accepts single kana and 2-char digraphs (kana + small kana)
+- `double_written_sokuon: bool = False` — gemination: `cl` + consonant → duplicate consonant (e.g. っか → k, ka)
+- `script_to_phonemes` handles `cl` → `[["cl"]]`, empty string → `[[]]`, and single consonants from gemination → `[[consonant]]`
+
+### LSTM Converter
+
+Extends `LexiconConverter`. Dictionary lookup first, ONNX encoder-decoder inference for out-of-vocabulary words.
+
+Parameters:
+- `dict_path: str | None` — optional pronunciation dictionary
+- `model_path: str` — directory with `encoder.onnx`, `decoder.onnx`, `char.json`, `phonemes.json`
+
+`claim()` returns True if the token is in the dictionary OR all characters are in the model's char vocabulary. ONNX sessions are lazily loaded on first inference.
 
 ### Paradigms
 
@@ -175,24 +199,48 @@ world	w er l d
 
 ### Shared dictionary loader
 
-`load_pronunciation_dict(path)` in `dictionary.py` loads a tab-separated file and returns `dict[str, list[list[str]]]`. Used by `DictionaryConverter`, `PronunciationScriptDictionaryConverter`, and any custom converter that needs script-to-phoneme lookup. No `(N)`-variant handling — that's `DictionaryConverter`-specific.
+`load_pronunciation_dict(path)` in `dictionary.py` loads a tab-separated file and returns `dict[str, list[list[str]]]`. Used by `DictionaryConverter`, `PronunciationScriptDictionaryConverter`, `LSTMConverter`, and any custom converter that needs script-to-phoneme lookup. No `(N)`-variant handling — that's `DictionaryConverter`-specific.
 
 ## Configuration
+
+Reference config at `configs/g2p.yaml`:
 
 ```yaml
 binarizer:
   g2p:
     preprocessors:
+      - id: filter-punctuation
+      - id: strip-whitespace
       - id: lowercase
     tokenizers:
       - id: whitespace
+      - id: cjk
     converters:
-      - id: dictionary
-        language: eng
+      # Chinese: hanzi
+      - id: chinese-pinyin
         kwargs:
-          path: dictionaries/eng_dict.txt
-      - id: passthrough
-        language: eng
+          dict_path: "dictionaries/ds-zh-pinyin-lite.txt"
+      # Chinese: pinyin (direct dictionary fallback)
+      - id: dictionary
+        language: zh
+        kwargs:
+          dict_path: "dictionaries/ds-zh-pinyin-lite.txt"
+      # Japanese: kana
+      - id: japanese-kana
+        kwargs:
+          dict_path: "dictionaries/japanese_dict_full.txt"
+          double_written_sokuon: false
+      # Japanese: romaji (direct dictionary fallback)
+      - id: dictionary
+        language: ja
+        kwargs:
+          dict_path: "dictionaries/japanese_dict_full.txt"
+      # English: dictionary + LSTM OOV
+      - id: lstm
+        language: en
+        kwargs:
+          dict_path: "dictionaries/ds_cmudict-07b.txt"
+          model_path: "assets/LstmG2p-Eng"
 ```
 
 ### Config schema
