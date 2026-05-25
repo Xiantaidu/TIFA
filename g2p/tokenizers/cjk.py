@@ -20,26 +20,46 @@ def _is_cjk(c: str) -> bool:
     )
 
 
+def _is_kana(c: str) -> bool:
+    cp = ord(c)
+    return 0x3040 <= cp <= 0x309F or 0x30A0 <= cp <= 0x30FF
+
+
+_SMALL_KANA = frozenset(
+    "ゃゅょャュョぁぃぅぇぉァィゥェォ"
+)
+
+
+def _is_small_kana(c: str) -> bool:
+    return c in _SMALL_KANA
+
+
 @tokenizer(id="cjk")
 class CJKTokenizer(Tokenizer):
     """Split CJK characters individually while grouping non-CJK characters into runs.
-    ``你好hello世界`` → ``[你, 好, hello, 世界]``."""
+    ``你好hello世界`` → ``[你, 好, hello, 世界]``.
+
+    Kana digraphs (kana + small kana) are kept together:
+    ``きゃ`` → ``[きゃ]``."""
 
     def tokenize(self, tokens: list[str]) -> list[str]:
         result: list[str] = []
         for token in tokens:
-            buf: list[str] = []
-            for c in token:
-                if _is_cjk(c):
-                    if buf and not _is_cjk(buf[0]):
-                        result.append("".join(buf))
-                        buf.clear()
+            chars = list(token)
+            i = 0
+            while i < len(chars):
+                c = chars[i]
+                if _is_kana(c) and i + 1 < len(chars) and _is_small_kana(chars[i + 1]):
+                    # kana digraph — group with following small kana
+                    result.append(c + chars[i + 1])
+                    i += 2
+                elif _is_cjk(c):
                     result.append(c)
+                    i += 1
                 else:
-                    if buf and _is_cjk(buf[0]):
-                        result.append("".join(buf))
-                        buf.clear()
-                    buf.append(c)
-            if buf:
-                result.append("".join(buf))
+                    buf: list[str] = []
+                    while i < len(chars) and not _is_cjk(chars[i]):
+                        buf.append(chars[i])
+                        i += 1
+                    result.append("".join(buf))
         return result

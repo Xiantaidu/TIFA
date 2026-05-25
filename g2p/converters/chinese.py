@@ -56,7 +56,7 @@ class _ChineseScriptConverter(PronunciationScriptDictionaryConverter):
         return result
 
 
-@converter(id="mandarin", language="zh,cmn")
+@converter(id="mandarin", language="zh,zho,cmn")
 class MandarinConverter(_ChineseScriptConverter):
     """Mandarin Chinese pinyin converter.
 
