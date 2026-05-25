@@ -63,8 +63,8 @@ class SelfSupervisedModule(BaseLightningModule, RankingModule):
 
     def _compute_ranking(self, sample):
         from lib.path_sampling import sample_paths_uniform
+        from training.iterative_ranking import SegmentScores
 
-        results: list[tuple[int, int, int, float]] = []
         widths = sample["widths"]  # [B, S_max] padded with 1
         ranking_cfg = self.training_config.iterative_ranking
         k = ranking_cfg.k
@@ -80,13 +80,14 @@ class SelfSupervisedModule(BaseLightningModule, RankingModule):
         unique_all = torch.unique(flat, dim=0)  # [K', S_max+1]
 
         item_ids = unique_all[:, 0].long().tolist()  # [K']
-        deduped = unique_all[:, 1:]  # [K', S_max]
+        deduped = unique_all[:, 1:].unsqueeze(0)  # [1, K', S_max]
 
+        # Build per-segment score vectors; accumulate over unique paths
+        results: list[SegmentScores] = []
         with torch.no_grad():
             for i, item_idx in enumerate(item_ids):
-                # find batch position for this item
                 b = (sample["indices"] == item_idx).nonzero(as_tuple=True)[0].item()
-                path = deduped[i]  # [S_max]
+                path = deduped[0, i]  # [S_max]
                 for s in range(S_max):
                     w = int(widths[b, s].item())
                     if w <= 1:
@@ -100,7 +101,20 @@ class SelfSupervisedModule(BaseLightningModule, RankingModule):
                          "widths": widths[b]},
                         s, alt_idx,
                     )
-                    results.append((item_idx, s, alt_idx, score))
+                    # Accumulate into existing or new segment vector
+                    existing = next(
+                        (
+                            r for r in results
+                            if r.item_idx == item_idx and r.seg_idx == s
+                        ),
+                        None
+                    )
+                    if existing is not None:
+                        existing.scores[alt_idx] += score
+                    else:
+                        vec = torch.zeros(w, device=sample["spectrogram"].device)
+                        vec[alt_idx] = score
+                        results.append(SegmentScores(item_idx, s, vec))
         return results
 
     def score_subpath(self, item_data: dict,

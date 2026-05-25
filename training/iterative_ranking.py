@@ -7,6 +7,23 @@ import torch.distributed
 from torch import Tensor
 
 
+class SegmentScores:
+    """Per-segment score vector for PathRanker accumulation.
+
+    Attributes:
+        item_idx: dataset item index.
+        seg_idx: segment index within the item.
+        scores: ``[w]`` tensor where *w* is the segment's total alt count.
+    """
+
+    __slots__ = ("item_idx", "seg_idx", "scores")
+
+    def __init__(self, item_idx: int, seg_idx: int, scores: Tensor):
+        self.item_idx = item_idx
+        self.seg_idx = seg_idx
+        self.scores = scores
+
+
 class RankingModule(typing.Protocol):
     def set_best_paths(self, best_paths: dict[int, dict[int, int]] | None) -> None: ...
 
@@ -42,27 +59,12 @@ class PathRanker:
             return {}
         return {p: int(s.argmax().item()) for p, s in segs.items()}
 
-    def update_scores(self, results: list[tuple[int, int, int, float]]):
-        """Group by (item_idx, seg_idx), rank by score, assign rewards."""
-        groups: dict[tuple[int, int], list[tuple[int, float]]] = {}
-        for item_idx, seg_idx, alt_idx, score in results:
-            groups.setdefault((item_idx, seg_idx), []).append((alt_idx, score))
-
-        for (item_idx, seg_idx), entries in groups.items():
-            scores = torch.tensor([s for _, s in entries], dtype=torch.float32)
-            _, sorted_idx = torch.sort(scores, descending=True)
-            rewards = rank_rewards(len(entries))
-            mapped = torch.zeros(len(entries))
-            mapped[sorted_idx] = rewards
-
-            n_alts = max(alt_idx for alt_idx, _ in entries) + 1
-            self._ensure_segment(item_idx, seg_idx, n_alts)
-            seg_scores = self._scores[item_idx][seg_idx]
-            for (alt_idx, _), r in zip(entries, mapped):
-                r_val = r.item()
-                if r_val == 0:
-                    continue
-                seg_scores[alt_idx] = max(seg_scores[alt_idx].item() + r_val, 0.0)
+    def update_scores(self, results: list[SegmentScores]) -> None:
+        """Accumulate per-segment score vectors."""
+        for r in results:
+            w = r.scores.numel()
+            self._ensure_segment(r.item_idx, r.seg_idx, w)
+            self._scores[r.item_idx][r.seg_idx] += r.scores.cpu()
 
     def _ensure_segment(self, item_idx: int, seg_idx: int, width: int):
         if item_idx not in self._scores:
@@ -187,7 +189,8 @@ class IterativeRanking(lightning.pytorch.Callback):
         if results is not None:
             with torch.no_grad():
                 self.ranker.update_scores(results)
-                for item_idx, _, _, _ in results:
+                for r in results:
+                    item_idx = r.item_idx
                     if item_idx not in batch_indices:
                         batch_indices.append(item_idx)
         device = batch["spectrogram"].device
