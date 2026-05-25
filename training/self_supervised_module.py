@@ -63,7 +63,7 @@ class SelfSupervisedModule(BaseLightningModule, RankingModule):
 
     def _compute_ranking(self, sample):
         from lib.path_sampling import sample_paths_uniform
-        from training.iterative_ranking import SegmentScores, rank_rewards
+        from training.iterative_ranking import SegmentRewards, rank_rewards
 
         widths = sample["widths"]  # [B, S_max] padded with 1
         k = self.training_config.iterative_ranking.k
@@ -73,7 +73,7 @@ class SelfSupervisedModule(BaseLightningModule, RankingModule):
 
         choices = sample_paths_uniform(widths, k)  # [B, k, S_max]
 
-        results: list[SegmentScores] = []
+        results: list[SegmentRewards] = []
         with torch.no_grad():
             for b in range(B):
                 item_idx = int(sample["indices"][b].item())
@@ -103,7 +103,7 @@ class SelfSupervisedModule(BaseLightningModule, RankingModule):
                     for j in range(k):
                         alt_idx = int(alts[rank_order[j]].item())
                         vec[alt_idx] += rewards[j].item()
-                    results.append(SegmentScores(item_idx, s, vec))
+                    results.append(SegmentRewards(item_idx, s, vec))
         return results
 
     def score_subpath(self, item_data: dict,
