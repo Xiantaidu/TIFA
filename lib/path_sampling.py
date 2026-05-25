@@ -1,19 +1,17 @@
 """Tensorized path sampling for text-only alignment.
 
-All operations are fully batched — no Python loops over items, paths, or
-segments (except :func:`sample_paths_uniform` with ``unique=True``, which
-loops over the batch dimension for per-item deduplication).
+All operations are fully batched — no Python loops.
 
 Three sampling strategies:
 
 - :func:`sample_paths_uniform`: each of *k* paths independently draws a random
   alt per segment.  Samples uniformly from the full product space.
 
-- :func:`sample_paths_randperm`: batched randperm via argsort.  Each alt of
-  every segment appears exactly once if unique = True.
+- :func:`sample_paths_randperm`: batched randperm via argsort.  Every alt of
+  every segment appears at least once.
 
-- :func:`sample_paths_enumerate`: deterministic cyclic enumeration repeated
-  *r* times over the largest width.  O(r · max(widths)).
+- :func:`sample_paths_enumerate`: cyclic enumeration over the largest width,
+  repeated *r* times with random phase offsets for *r* > 1.
 
 - :func:`extract_tokens`: gathers token sequences via the segments bridge,
   then compacts interspersed zeros to the right using a stable argsort
@@ -22,57 +20,31 @@ Three sampling strategies:
 import torch
 
 
-def sample_paths_uniform(widths: torch.Tensor, k: int, unique: bool = True) -> torch.Tensor:
-    """Sample up to *k* complete paths uniformly from the product space.
+def sample_paths_uniform(widths: torch.Tensor, k: int) -> torch.Tensor:
+    """Sample *k* complete paths uniformly from the product space.
 
     Each path draws an independent random alt per segment:
     ``choices[b, s, p] = floor(rand * widths[b, p])``.
 
     Args:
         widths: ``[B, S_max]`` padded with **1** (not 0).
-        k: max number of paths to sample per item.
-        unique: if True, deduplicate per item and pad to the batch-wide
-                max unique count.  This introduces a Python loop over B
-                (not trace-friendly; B ≈ few dozen is acceptable).
+        k: number of paths to sample per item.
 
     Returns:
-        choices ``[B, K, S_max]`` where *K* is ``k`` when ``unique=False``,
-        otherwise the maximum unique path count across all items.
+        choices ``[B, k, S_max]``.
     """
     B, S_max = widths.shape
     device = widths.device
     choices = (torch.rand(B, S_max, k, device=device) * widths.unsqueeze(-1)).long()
-    choices = choices.clamp(max=(widths.unsqueeze(-1) - 1).clamp(min=0))
-    choices = choices.permute(0, 2, 1)  # [B, k, S_max]
-
-    if not unique:
-        return choices
-
-    # Deduplicate per item; pad to max unique count.
-    # Per-slice unique is not available in PyTorch — encoding item identity
-    # into the rows and flattening is no simpler at these sizes.  Loop over B
-    # is acceptable since B ≈ few dozen, but also means this op is NOT
-    # trace-friendly (variable output size per slice).  If you ever wrap this
-    # with torch.compile / torch.export, pass unique=False and dedup outside
-    # the graph.
-    uniq_list = [torch.unique(choices[b], dim=0) for b in range(B)]
-    K = max(u.shape[0] for u in uniq_list)
-    out = torch.zeros(B, K, S_max, dtype=torch.long, device=device)
-    for b, u in enumerate(uniq_list):
-        Ku = u.shape[0]
-        out[b, :Ku] = u
-        if Ku < K:
-            out[b, Ku:] = u[-1:]  # repeat last path
-    return out
+    choices = choices.clamp(max=widths.unsqueeze(-1) - 1)  # guard rand*w rounding to w
+    return choices.permute(0, 2, 1)  # [B, k, S_max]
 
 
 def sample_paths_randperm(widths: torch.Tensor) -> torch.Tensor:
-    """Enumerate one path per alternative via batched randperm (coverage-based).
+    """Coverage-based sampling via batched randperm.
 
-    Each segment independently draws a random permutation of its alternatives.
-    Returns ``max(widths)`` paths, guaranteeing every alt of every segment
-    appears at least once.  Entries beyond a segment's width are garbage —
-    the caller must clamp with ``widths``.
+    Segments with the max width get a random permutation of all their
+    alternatives; others repeat alts within their width.
 
     Args:
         widths: ``[B, S_max]`` padded with **1** (not 0).
@@ -89,28 +61,37 @@ def sample_paths_randperm(widths: torch.Tensor) -> torch.Tensor:
     rand[~valid] = float("inf")
 
     perm = rand.argsort(dim=-1)  # [B, S_max, W_max]
-    return perm.permute(0, 2, 1)  # [B, W_max, S_max]
+    return (perm % widths.unsqueeze(-1)).permute(0, 2, 1)  # [B, W_max, S_max]
 
 
 def sample_paths_enumerate(widths: torch.Tensor, r: int = 1) -> torch.Tensor:
-    """Deterministic cyclic enumeration repeated *r* times.
+    """Cyclic enumeration with optional random phase offsets.
 
-    Cycles through alternatives in order ``[0, 1, 2, 0, 1, 2, …]`` across
-    ``r * W_max`` paths where ``W_max = max(widths)``.  Entries beyond a
-    segment's width are garbage — the caller must clamp with ``widths``.
+    When *r* = 1 all segments cycle in lockstep (deterministic).
+    When *r* > 1, the first cycle is lockstep and each subsequent cycle
+    shifts every segment by a random offset within its width.
 
     Args:
         widths: ``[B, S_max]`` padded with **1** (not 0).
         r: number of full cycles over the largest width.
 
     Returns:
-        choices ``[B, r * W_max, S_max]``.
+        choices ``[B, r * W_max, S_max]`` where ``W_max = max(widths)``.
     """
     B, S_max = widths.shape
-    W_max = widths.max()
     device = widths.device
-    cycle = torch.arange(W_max, device=device).repeat(r)  # [r * W_max]
-    return cycle.view(1, -1, 1).expand(B, -1, S_max)  # [B, r * W_max, S_max]
+    W_max = widths.max()
+
+    base = torch.arange(W_max, device=device)  # [W_max]
+    # Random offsets per (item, segment, cycle); cycle 0 = lockstep
+    offsets = (
+            torch.rand(B, S_max, r, device=device) * widths.float().unsqueeze(-1)
+    ).long()  # [B, S_max, r]
+    offsets[:, :, 0] = 0
+
+    # base [1, W_max, 1, 1] + offsets [B, 1, S_max, r] % widths [B, 1, S_max, 1]
+    result = (base.view(1, -1, 1, 1) + offsets.view(B, 1, -1, r)) % widths.view(B, 1, -1, 1)
+    return result.permute(0, 3, 1, 2).reshape(B, r * W_max, S_max)
 
 
 def extract_tokens(
@@ -124,8 +105,7 @@ def extract_tokens(
         paths: ``[B, N_max, W_max]`` token ids (0 = padding).
         segments: ``[B, N_max]`` 1-based segment indices (0 = padding).
                   Padding positions are identified by ``segments == 0``.
-        choices: ``[B, K, S_max]`` from :func:`sample_paths_uniform` or
-                :func:`sample_paths_randperm`.
+        choices: ``[B, K, S_max]`` from any of the sampling functions above.
 
     Returns:
         ``(compacted, lengths)`` where *compacted* is ``[B, K, max_len]``
