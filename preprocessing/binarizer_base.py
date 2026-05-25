@@ -109,8 +109,8 @@ class BaseBinarizer(abc.ABC):
         lengths = []
         attr_lengths = {}
         total_duration = 0
-        with tqdm.tqdm(iterable, total=len(items), desc=f"Processing {prefix} items") as progress:
-            for item, sample in zip(items, progress):
+        with tqdm.tqdm(zip(items, iterable), total=len(items), desc=f"Processing {prefix} items") as progress:
+            for item, sample in progress:
                 if isinstance(sample, FailedItem):
                     logging.error(
                         f"Worker failed: {sample.exception}\n{sample.traceback_str}",
