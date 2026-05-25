@@ -217,6 +217,14 @@ class RIRReverbAugmentationConfig(ConfigBaseModel):
         return self._kernel_file_list
 
 
+class SequenceEditAugmentationConfig(ConfigBaseModel):
+    enabled: bool = False
+    prob: float = Field(0.3, gt=0.0, le=1.0)
+    p_sub: float = Field(0.08, gt=0.0, le=1.0)
+    p_del: float = Field(0.08, gt=0.0, le=1.0)
+    p_ins: float = Field(0.05, gt=0.0, le=1.0)
+
+
 class AugmentationConfig(ConfigBaseModel):
     pitch_shifting: PitchShiftingAugmentationConfig = Field(...)
     time_stretching: TimeStretchingAugmentationConfig = Field(...)
@@ -225,6 +233,7 @@ class AugmentationConfig(ConfigBaseModel):
     colored_noise: ColoredNoiseAugmentationConfig = Field(...)
     natural_noise: NaturalNoiseAugmentationConfig = Field(...)
     rir_reverb: RIRReverbAugmentationConfig = Field(...)
+    sequence_edit: SequenceEditAugmentationConfig = Field(default_factory=SequenceEditAugmentationConfig)
 
     @property
     def has_destructive_augmentations(self) -> bool:

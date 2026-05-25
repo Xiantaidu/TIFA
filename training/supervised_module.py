@@ -1,7 +1,6 @@
 import pathlib
 
-import torch
-from torch import nn
+from torch import nn, Tensor
 from torch.utils.data import DataLoader
 
 from lib.config.schema import RootConfig
@@ -44,9 +43,13 @@ class SupervisedModule(BaseLightningModule):
                 augmentation_deterministic=True,
                 augmentation_destructive_only=True,
                 augmentation_return_dirty=True,
+                ensure_original_tokens=True,
             )
         else:
-            return PhonemeTimingDataset(self.data_dir, "valid")
+            return PhonemeTimingDataset(
+                self.data_dir, "valid",
+                ensure_original_tokens=True,
+            )
 
     def setup(self, stage: str) -> None:
         super().setup(stage)
@@ -98,6 +101,8 @@ class SupervisedModule(BaseLightningModule):
         else:
             main_sample = sample
             aux_sample = None
+        main_sample: dict[str, Tensor]
+        aux_sample: dict[str, Tensor] | None
         print(main_sample["spectrogram"].shape)
         print(aux_sample["tokens"].shape if aux_sample is not None else "No aux sample")
 

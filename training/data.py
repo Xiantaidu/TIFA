@@ -1,5 +1,7 @@
+import json
 import math
 import pathlib
+import random
 
 import librosa
 import numpy
@@ -10,6 +12,7 @@ from lib.config.io import load_raw_config
 from lib.config.schema import AugmentationConfig, BinarizerFeaturesConfig
 from lib.feature.mel import StretchableMelSpectrogram
 from lib.indexed_dataset import IndexedDataset
+from lib.sequence_edit import apply_sequence_edits
 from .augmentation import (
     AugmentationContext,
     ComposedAugmentation,
@@ -193,8 +196,9 @@ class BaseDataset(torch.utils.data.Dataset):
 
 
 class PhonemeTimingDataset(BaseDataset):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, ensure_original_tokens: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
+        self._ensure_original_tokens = ensure_original_tokens
         if (
             self.augmentation_config is not None
             and self.augmentation_config.time_stretching.enabled
@@ -202,6 +206,15 @@ class PhonemeTimingDataset(BaseDataset):
             raise ValueError(
                 "Time stretching is not supported for supervised dataset."
             )
+        self._vocab_size: int | None = None
+        if (
+            self.augmentation_config is not None
+            and self.augmentation_config.sequence_edit.enabled
+        ):
+            vocab_path = self.data_dir / "vocabulary.json"
+            with open(vocab_path, "r", encoding="utf8") as f:
+                vocab_data = json.load(f)
+            self._vocab_size = len(vocab_data["symbols"]) + 1
 
     def __getitem__(self, index: int) -> dict:
         sample = super().__getitem__(index)
@@ -218,7 +231,34 @@ class PhonemeTimingDataset(BaseDataset):
                 value=math.log(1e-5),
             )
 
-        sample["T"] = torch.tensor(max(T_spec, T), dtype=torch.long)
+        T_val = max(T_spec, T)
+
+        if self._vocab_size is not None and not self._ensure_original_tokens:
+            edit_cfg = self.augmentation_config.sequence_edit
+            if random.random() < edit_cfg.prob:
+                new_tokens, new_spans, new_regions, fake = apply_sequence_edits(
+                    tokens=sample["tokens"],
+                    spans=sample["spans"],
+                    regions=sample["regions"],
+                    vocab_size=self._vocab_size,
+                    p_sub=edit_cfg.p_sub,
+                    p_del=edit_cfg.p_del,
+                    p_ins=edit_cfg.p_ins,
+                )
+                sample["tokens"] = new_tokens
+                sample["spans"] = new_spans
+                sample["regions"] = new_regions
+                sample["fake"] = fake
+            else:
+                sample["fake"] = torch.zeros(
+                    sample["tokens"].shape[0], dtype=torch.bool,
+                )
+        else:
+            sample["fake"] = torch.zeros(
+                sample["tokens"].shape[0], dtype=torch.bool,
+            )
+
+        sample["T"] = torch.tensor(T_val, dtype=torch.long)
         sample["N"] = torch.tensor(sample["tokens"].shape[0], dtype=torch.long)
         return sample
 

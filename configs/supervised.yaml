@@ -1,6 +1,5 @@
-bases: [
-  "configs/base.yaml",
-]
+bases:
+  - "configs/base.yaml"
 
 binarizer:
   phoneme_timing_data_dir: "data/phones"
@@ -27,6 +26,12 @@ training:
   dataloader:
     aux_multiplier: 1.0
   augmentation:
+    sequence_edit:
+      enabled: false
+      prob: 0.3
+      p_sub: 0.08
+      p_del: 0.08
+      p_ins: 0.05
     time_stretching:
       enabled: false
   loss: {}
