@@ -2,16 +2,13 @@
 
 All operations are fully batched — no Python loops.
 
-Three sampling strategies:
+Two sampling strategies:
 
 - :func:`sample_paths_uniform`: each of *k* paths independently draws a random
   alt per segment.  Samples uniformly from the full product space.
 
-- :func:`sample_paths_randperm`: batched randperm via argsort.  Every alt of
+- :func:`sample_paths_perm`: batched randperm via argsort.  Every alt of
   every segment appears at least once.
-
-- :func:`sample_paths_enumerate`: cyclic enumeration over the largest width,
-  repeated *r* times with random phase offsets for *r* > 1.
 
 - :func:`extract_tokens`: gathers token sequences via the segments bridge,
   then compacts interspersed zeros to the right using a stable argsort
@@ -40,58 +37,30 @@ def sample_paths_uniform(widths: torch.Tensor, k: int) -> torch.Tensor:
     return choices.permute(0, 2, 1)  # [B, k, S_max]
 
 
-def sample_paths_randperm(widths: torch.Tensor) -> torch.Tensor:
-    """Coverage-based sampling via batched randperm.
+def sample_paths_perm(widths: torch.Tensor, r: int = 1) -> torch.Tensor:
+    """Coverage-based sampling via batched randperm, repeated *r* times.
 
-    Segments with the max width get a random permutation of all their
-    alternatives; others repeat alts within their width.
-
-    Args:
-        widths: ``[B, S_max]`` padded with **1** (not 0).
-
-    Returns:
-        choices ``[B, W_max, S_max]`` where ``W_max = max(widths)``.
-    """
-    B, S_max = widths.shape
-    W_max = widths.max()
-    device = widths.device
-
-    rand = torch.rand(B, S_max, W_max, device=device)
-    valid = torch.arange(W_max, device=device).view(1, 1, W_max) < widths.unsqueeze(-1)
-    rand[~valid] = float("inf")
-
-    perm = rand.argsort(dim=-1)  # [B, S_max, W_max]
-    return (perm % widths.unsqueeze(-1)).permute(0, 2, 1)  # [B, W_max, S_max]
-
-
-def sample_paths_enumerate(widths: torch.Tensor, r: int = 1) -> torch.Tensor:
-    """Cyclic enumeration with optional random phase offsets.
-
-    When *r* = 1 all segments cycle in lockstep (deterministic).
-    When *r* > 1, the first cycle is lockstep and each subsequent cycle
-    shifts every segment by a random offset within its width.
+    Each repeat is an independent random permutation, so increasing *r*
+    explores more cross-combinations.  Every alt of every segment appears
+    at least once.
 
     Args:
         widths: ``[B, S_max]`` padded with **1** (not 0).
-        r: number of full cycles over the largest width.
+        r: number of independent permutations.
 
     Returns:
         choices ``[B, r * W_max, S_max]`` where ``W_max = max(widths)``.
     """
     B, S_max = widths.shape
-    device = widths.device
     W_max = widths.max()
+    device = widths.device
 
-    base = torch.arange(W_max, device=device)  # [W_max]
-    # Random offsets per (item, segment, cycle); cycle 0 = lockstep
-    offsets = (
-            torch.rand(B, S_max, r, device=device) * widths.float().unsqueeze(-1)
-    ).long()  # [B, S_max, r]
-    offsets[:, :, 0] = 0
+    rand = torch.rand(B, S_max, W_max, r, device=device)  # [B, S_max, W_max, r]
+    valid = torch.arange(W_max, device=device).view(1, 1, W_max, 1) < widths.view(B, S_max, 1, 1)
+    rand[~valid.expand(-1, -1, -1, r)] = float("inf")
 
-    # base [1, W_max, 1, 1] + offsets [B, 1, S_max, r] % widths [B, 1, S_max, 1]
-    result = (base.view(1, -1, 1, 1) + offsets.view(B, 1, -1, r)) % widths.view(B, 1, -1, 1)
-    return result.permute(0, 3, 1, 2).reshape(B, r * W_max, S_max)
+    perm = rand.argsort(dim=2)  # [B, S_max, W_max, r]
+    return (perm % widths.view(B, S_max, 1, 1)).permute(0, 3, 2, 1).reshape(B, r * W_max, S_max)
 
 
 def extract_tokens(
