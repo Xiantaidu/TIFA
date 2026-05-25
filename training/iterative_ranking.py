@@ -30,7 +30,7 @@ class RankingModule(typing.Protocol):
 
 def rank_rewards(k: int) -> Tensor:
     """Rank-based rewards with step 2 centered on zero, best first. k=4 → [3,1,-1,-3]."""
-    return torch.arange(k - 1, -k, -2, dtype=torch.float32)
+    return torch.arange(k - 1, -k, -2, dtype=torch.long)
 
 
 class PathRanker:
@@ -60,28 +60,32 @@ class PathRanker:
         return {p: int(s.argmax().item()) for p, s in segs.items()}
 
     def update_scores(self, results: list[SegmentScores]) -> None:
-        """Accumulate per-segment score vectors."""
+        """Accumulate per-segment score vectors, clamped to [0, inf)."""
         for r in results:
             w = r.scores.numel()
             self._ensure_segment(r.item_idx, r.seg_idx, w)
-            self._scores[r.item_idx][r.seg_idx] += r.scores.cpu()
+            seg = self._scores[r.item_idx][r.seg_idx]
+            seg.add_(r.scores.cpu())
+            seg.clamp_(min=0)
 
     def _ensure_segment(self, item_idx: int, seg_idx: int, width: int):
         if item_idx not in self._scores:
             self._scores[item_idx] = {}
         segs = self._scores[item_idx]
         if seg_idx not in segs:
-            segs[seg_idx] = torch.zeros(width)
+            segs[seg_idx] = torch.zeros(width, dtype=torch.long)
         elif segs[seg_idx].numel() < width:
             old = segs[seg_idx]
-            new = torch.zeros(width)
+            new = torch.zeros(width, dtype=torch.long)
             new[:len(old)] = old
             segs[seg_idx] = new
 
     def decay_scores(self):
         for segs in self._scores.values():
             for seg_scores in segs.values():
-                seg_scores.mul_(self.gamma)
+                seg_scores.copy_(
+                    seg_scores.float().mul_(self.gamma).round_().long()
+                )
 
     def sync_batch_scores(self, device: torch.device, item_indices: list[int]):
         """All-gather batch item indices across DDP ranks, then all-reduce SUM
