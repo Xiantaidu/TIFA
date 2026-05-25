@@ -3,7 +3,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, model_validator
 
-from .ops import ConfigOperationContext, ConfigOperationBase, split_path
+from .ops import ConfigOperationBase, ConfigOperationContext, split_path
 
 __all__ = [
     "ConfigBaseModel",

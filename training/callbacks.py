@@ -1,6 +1,6 @@
 import base64
 from collections import deque
-from typing import Literal, Any
+from typing import Any, Literal
 
 import lightning.pytorch
 import lightning.pytorch.callbacks

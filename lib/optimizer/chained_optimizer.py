@@ -1,12 +1,12 @@
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from functools import partial
-from typing import Any, Dict, List, Type, Callable, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Type, Union
 
 import torch
 from torch.optim.optimizer import ParamsT
 
-from ..reflection import get_object_by_module_path, filter_kwargs_by_class
+from ..reflection import filter_kwargs_by_class, get_object_by_module_path
 
 __all__ = [
     "ChainedOptimizer",

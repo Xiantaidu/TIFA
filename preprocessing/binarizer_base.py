@@ -13,7 +13,7 @@ from lib import logging
 from lib.config.io import save_raw_config
 from lib.config.schema import BinarizerConfig
 from lib.indexed_dataset import IndexedDatasetBuilder
-from lib.multiprocess import chunked_multiprocess_run, FailedItem
+from lib.multiprocess import FailedItem, chunked_multiprocess_run
 from lib.plot import vocab_distribution_to_figure
 from lib.vocabulary import Vocabulary, VocabularyBuilder
 

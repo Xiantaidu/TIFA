@@ -70,11 +70,11 @@ def train_model(
 ):
     import lightning.pytorch
     import lightning.pytorch.loggers
-    from lightning_utilities.core.rank_zero import rank_zero_only, rank_zero_info
-    from training.pl_module_base import BaseLightningModule
+    from lightning_utilities.core.rank_zero import rank_zero_info, rank_zero_only
 
     from training.callbacks import PeriodicModelCheckpoint, ExpressionModelCheckpoint, FriendlyTQDMProgressBar
     from training.iterative_ranking import IterativeRanking
+    from training.pl_module_base import BaseLightningModule
     from training.strategy import get_strategy
 
     if not issubclass(pl_module_cls, BaseLightningModule):

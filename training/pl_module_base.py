@@ -1,19 +1,19 @@
 import abc
 import pathlib
-from fnmatch import fnmatch
 from typing import Any
+from fnmatch import fnmatch
 
 import lightning.pytorch
 import matplotlib
 import torch
-import tqdm
 from lightning_utilities.core.rank_zero import rank_zero_info
 from torch import nn
-from torchmetrics import Metric, MeanMetric
+from torchmetrics import MeanMetric, Metric
+import tqdm
 
 from lib import logging
 from lib.config.schema import ModelConfig, RootConfig, TrainingConfig
-from lib.reflection import build_optimizer_from_config, build_lr_scheduler_from_config
+from lib.reflection import build_lr_scheduler_from_config, build_optimizer_from_config
 from .data import BaseDataset, DynamicBatchSampler
 from .weight_averaging import ExponentialMovingAverage
 

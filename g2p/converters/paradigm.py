@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 
-from g2p.converters.base import Converter, G2PText, G2PWord
+from .base import Converter, G2PText, G2PWord
 
 
 class LexiconConverter(Converter, ABC):

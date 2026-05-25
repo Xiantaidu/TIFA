@@ -1,5 +1,4 @@
 from g2p.registry import tokenizer
-
 from .base import Tokenizer
 
 

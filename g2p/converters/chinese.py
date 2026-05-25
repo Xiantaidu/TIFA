@@ -11,7 +11,6 @@ from pathlib import Path
 from g2p.converters.cpp_pinyin import PinyinEngine
 from g2p.converters.cpp_pinyin.constants import STYLE_NORMAL
 from g2p.registry import converter
-
 from .dictionary import PronunciationScriptDictionaryConverter
 
 _CPP_PINYIN_DIR = Path(__file__).parent / "cpp_pinyin" / "dicts"

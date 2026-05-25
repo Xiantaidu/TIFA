@@ -7,12 +7,11 @@ from lib.config.schema import (
     PreprocessorConfig,
     TokenizerConfig,
 )
-
 from .converters.base import Converter
-from .preprocessors.base import Preprocessor
-from .registry import parse_language, get_converter, get_preprocessor, get_tokenizer
-from .tokenizers.base import Tokenizer
 from .pipeline import G2PPipeline
+from .preprocessors.base import Preprocessor
+from .registry import get_converter, get_preprocessor, get_tokenizer, parse_language
+from .tokenizers.base import Tokenizer
 
 
 def _resolve_path_refs(obj: Any, root: Path) -> Any:

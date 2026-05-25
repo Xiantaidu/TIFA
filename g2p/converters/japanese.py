@@ -1,9 +1,7 @@
 """Japanese kana G2P converter — kana → romaji → phonemes.
 """
 
-
 from g2p.registry import converter
-
 from .dictionary import PronunciationScriptDictionaryConverter
 
 # Small kana used in yōon digraphs and other digraphs.

@@ -5,7 +5,6 @@ from abc import ABC
 from pathlib import Path
 
 from g2p.registry import converter
-
 from .base import Converter, G2PText, G2PWord
 from .paradigm import PronunciationScriptConverter
 

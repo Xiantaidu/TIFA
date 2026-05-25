@@ -1,5 +1,4 @@
 from g2p.registry import converter
-
 from .base import Converter, G2PText, G2PWord
 
 

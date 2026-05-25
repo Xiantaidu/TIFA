@@ -1,6 +1,6 @@
 import pathlib
 
-from torch import nn, Tensor
+from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
 from lib.config.schema import RootConfig

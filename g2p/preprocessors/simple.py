@@ -2,7 +2,6 @@ import string
 import unicodedata
 
 from g2p.registry import preprocessor
-
 from .base import Preprocessor
 
 
