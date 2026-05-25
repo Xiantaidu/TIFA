@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy
 
 from g2p.api import build_pipeline_from_config
-from g2p.converters.base import PronunciationGroup
+from g2p.converters.base import G2PText
 from lib import logging
 from lib.levenshtein import segment_groups
 
@@ -26,7 +26,7 @@ TEXTS_ITEM_ATTRIBUTES = [
 @dataclass
 class TextMetadataItem(MetadataItem):
     text: str
-    pronunciations: list[PronunciationGroup] | None = None
+    g2p_texts: list[G2PText] | None = None
 
 
 class TextOnlyBinarizer(BaseBinarizer):
@@ -56,16 +56,17 @@ class TextOnlyBinarizer(BaseBinarizer):
             language = row["language"]
             text = row["text"]
             try:
-                groups = self.g2p.convert(text, languages=[language])
+                g2p_texts = self.g2p.convert(text, languages=[language])
             except Exception as e:
                 logging.warning(
                     f"G2P failed for item '{name}': {e}"
                 )
                 continue
             symbols: list[str] = []
-            for pg in groups:
-                for path in pg.paths:
-                    symbols.extend(path)
+            for gt in g2p_texts:
+                for gw in gt.words:
+                    for path in gw.phones:
+                        symbols.extend(path)
             estimated_duration = (
                 self.get_frame_count(waveform_fn) * self.timestep
             )
@@ -76,7 +77,7 @@ class TextOnlyBinarizer(BaseBinarizer):
                 estimated_duration=estimated_duration,
                 raw_symbols=symbols,
                 text=text,
-                pronunciations=groups,
+                g2p_texts=g2p_texts,
             ))
         return items
 
@@ -86,24 +87,25 @@ class TextOnlyBinarizer(BaseBinarizer):
 
         length = self.get_frame_count(item.waveform_fn)
 
-        groups = item.pronunciations
+        groups = item.g2p_texts
         if groups is None:
             raise RuntimeError(f"G2P not run for item '{item.name}'")
 
         encoded_groups: list[list[list[int]]] = []
-        for pg in groups:
+        for gt in groups:
             encoded_paths = []
-            for path in pg.paths:
-                tok_ids = []
-                for ph in path:
-                    tid = self.vocabulary.encode(ph, item.language)
-                    if tid is None:
-                        raise RuntimeError(
-                            f"Token '{ph}' not in vocabulary "
-                            f"for item '{item.name}'."
-                        )
-                    tok_ids.append(tid)
-                encoded_paths.append(tok_ids)
+            for gw in gt.words:
+                for path in gw.phones:
+                    tok_ids = []
+                    for ph in path:
+                        tid = self.vocabulary.encode(ph, item.language)
+                        if tid is None:
+                            raise RuntimeError(
+                                f"Token '{ph}' not in vocabulary "
+                                f"for item '{item.name}'."
+                            )
+                        tok_ids.append(tid)
+                    encoded_paths.append(tok_ids)
             encoded_groups.append(encoded_paths)
 
         all_segments = segment_groups(encoded_groups)

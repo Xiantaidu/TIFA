@@ -81,7 +81,7 @@ class PinyinConverter(_ChineseScriptConverter):
 
 
 @converter(id="cantonese-jyutping", language="yue")
-class CantoneseConverter(_ChineseScriptConverter):
+class JyutpingConverter(_ChineseScriptConverter):
     """Cantonese (Jyutping) converter.
 
     Config examples::

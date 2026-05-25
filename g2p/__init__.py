@@ -1,4 +1,4 @@
-from .converters.base import Converter, G2PConversionError, PronunciationGroup
+from .converters.base import Converter, G2PConversionError, G2PText, G2PWord
 from .pipeline import G2PPipeline
 from .preprocessors.base import Preprocessor
 from .registry import (

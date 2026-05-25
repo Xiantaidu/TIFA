@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 
-from g2p.converters.base import Converter, PronunciationGroup
+from g2p.converters.base import Converter, G2PText, G2PWord
 
 
 class LexiconConverter(Converter, ABC):
@@ -39,15 +39,15 @@ class LexiconConverter(Converter, ABC):
     # Converter interface
     # ------------------------------------------------------------------
 
-    def convert(self, tokens: list[str]) -> list[PronunciationGroup]:
-        result: list[PronunciationGroup] = []
+    def convert(self, tokens: list[str]) -> list[G2PText]:
+        result: list[G2PText] = []
         for token in tokens:
             pronunciations = self._dict.get(token)
             if pronunciations is not None:
                 paths = [list(p) for p in pronunciations]
             else:
                 paths = self.infer_oov(token)
-            result.append(PronunciationGroup(paths=paths))
+            result.append(G2PText(text=token, words=[G2PWord(word=token, phones=paths)]))
         return result
 
 
@@ -77,17 +77,23 @@ class PronunciationScriptConverter(Converter, ABC):
         """Map a single script token to its phoneme sequences."""
         ...
 
-    def convert(self, tokens: list[str]) -> list[PronunciationGroup]:
+    def convert(self, tokens: list[str]) -> list[G2PText]:
         scripts_per_token = self.text_to_script(tokens)
-        result: list[PronunciationGroup] = []
-        for scripts in scripts_per_token:
-            seen: set[tuple[str, ...]] = set()
-            paths: list[list[str]] = []
+        result: list[G2PText] = []
+        for token, scripts in zip(tokens, scripts_per_token):
+            words: list[G2PWord] = []
+            seen_words: set[str] = set()
             for s in scripts:
+                if s in seen_words:
+                    continue
+                seen_words.add(s)
+                seen_paths: set[tuple[str, ...]] = set()
+                phones: list[list[str]] = []
                 for phonemes in self.script_to_phonemes(s):
                     key = tuple(phonemes)
-                    if key not in seen:
-                        seen.add(key)
-                        paths.append(list(phonemes))
-            result.append(PronunciationGroup(paths=paths))
+                    if key not in seen_paths:
+                        seen_paths.add(key)
+                        phones.append(list(phonemes))
+                words.append(G2PWord(word=s, phones=phones))
+            result.append(G2PText(text=token, words=words))
         return result

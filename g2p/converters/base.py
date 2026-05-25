@@ -5,19 +5,31 @@ from ..preprocessors.base import Preprocessor
 
 
 @dataclass
-class PronunciationGroup:
-    """A collection of alternative phoneme sequences for one token.
+class G2PWord:
+    """A pronunciation-script word with its phoneme alternatives.
 
-    Each path in ``paths`` represents one possible pronunciation as a list
-    of phoneme strings.  Converters that only produce a single pronunciation
-    per token still wrap it in a one-element ``paths`` list.
+    ``word`` is the intermediate representation (pinyin, romaji, etc.).
+    ``phones`` holds alternative phoneme sequences for this word.
+    """
 
+    word: str
+    phones: list[list[str]] = field(default_factory=list)
+
+
+@dataclass
+class G2PText:
+    """Three-tier G2P output for one text token.
+
+    ``text`` is the original token from the tokenizer.
+    ``words`` holds one or more pronunciation-script words, each with
+    its own phoneme alternatives.
     *language* is set by the pipeline to the tag (e.g. ``"cmn"``) that
     caused this converter to be selected.  Converters with no language
     registration leave it ``None``.
     """
 
-    paths: list[list[str]] = field(default_factory=list)
+    text: str
+    words: list[G2PWord] = field(default_factory=list)
     language: str | None = None
 
 
@@ -33,7 +45,7 @@ class Converter(ABC):
         return []
 
     @abstractmethod
-    def convert(self, tokens: list[str]) -> list[PronunciationGroup]:
+    def convert(self, tokens: list[str]) -> list[G2PText]:
         ...
 
 

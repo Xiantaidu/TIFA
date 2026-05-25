@@ -9,27 +9,38 @@ flowchart LR
     Text["text<br/>(str)"] --> PP[preprocess]
     PP --> Tok[tokenize]
     Tok --> Conv[convert]
-    Conv --> Ph["PronunciationGroup sequences<br/>(list[PronunciationGroup])"]
+    Conv --> Ph["G2PText sequences<br/>(list[G2PText])"]
 ```
 
 | Stage      | Input                | Output                       | Purpose                                                   |
 |------------|----------------------|------------------------------|-----------------------------------------------------------|
 | Preprocess | raw text as `[text]` | modified `[text]`            | Clean text before tokenization (lowercase, strip, filter) |
 | Tokenize   | `list[str]`          | `list[str]`                  | Split text into tokens (words, characters, etc.)          |
-| Convert    | `list[str]`          | `list[PronunciationGroup]`   | Convert tokens to phoneme sequences with language tags    |
+| Convert    | `list[str]`          | `list[G2PText]`              | Convert tokens to three-tier G2P output with language tags    |
 
 Each stage runs its components sequentially — each feeds its output to the next.
 
-### PronunciationGroup
+### G2PText and G2PWord
 
 ```python
 @dataclass
-class PronunciationGroup:
-    paths: list[list[str]]     # alternative phoneme sequences for one token
-    language: str | None = None  # e.g. "cmn", "yue" — set by the pipeline
+class G2PWord:
+    """A pronunciation-script word with its phoneme alternatives."""
+    word: str                       # pronunciation-script word (pinyin, romaji, etc.)
+    phones: list[list[str]]         # alternative phoneme sequences
+
+@dataclass
+class G2PText:
+    """Three-tier G2P output for one text token."""
+    text: str                       # original token from the tokenizer
+    words: list[G2PWord]            # one or more pronunciation-script words
+    language: str | None = None     # e.g. "cmn", "yue" — set by the pipeline
 ```
 
-Pipeline output is `list[PronunciationGroup]`, one per token. Downstream code decides how to use the language tag (phoneme prefixing, filtering, etc.).
+Pipeline output is `list[G2PText]`, one per token. Each `G2PText` contains the original
+text, the intermediate pronunciation-script words (pinyin, romaji, etc.), and their
+phoneme alternatives. Binarizers flatten `words[*].phones[*]` for model input; the
+word-level structure is available for multi-tier inference output (e.g. TextGrids).
 
 ## Architecture
 
@@ -69,7 +80,7 @@ g2p/
 │   ├── base.py         # Preprocessor ABC
 │   └── simple.py       # FilterPunctuation, LowercasePreprocessor, StripWhitespacePreprocessor, RemoveAccentsPreprocessor
 └── converters/
-    ├── base.py         # Converter ABC, PronunciationGroup, G2PConversionError, resolve_language()
+    ├── base.py         # Converter ABC, G2PText, G2PWord, G2PConversionError, resolve_language()
     ├── paradigm.py     # LexiconConverter, PronunciationScriptConverter
     ├── dictionary.py   # load_pronunciation_dict(), DictionaryConverter, PronunciationScriptDictionaryConverter
     ├── chinese.py      # MandarinConverter (id=chinese-pinyin), CantoneseConverter (id=cantonese-jyutping)
@@ -110,10 +121,10 @@ Transforms a token sequence. Applied before tokenization — receives `[raw_text
 Converts tokens to phoneme sequences. Each converter implements:
 
 - `claim(token) → bool` — whether this converter handles the given token
-- `convert(tokens) → list[PronunciationGroup]` — convert tokens to phoneme groups
+- `convert(tokens) → list[G2PText]` — convert tokens to three-tier G2P output
 - `preprocessors() → list[Preprocessor]` (optional) — private preprocessors for claimed tokens
 
-`Converter.language` is a class attribute `tuple[str, ...] | None`. The pipeline resolves which specific tag matched and stamps it on each `PronunciationGroup.language`. Converters with `language=None` leave the field `None`.
+`Converter.language` is a class attribute `tuple[str, ...] | None`. The pipeline resolves which specific tag matched and stamps it on each `G2PText.language`. Converters with `language=None` leave the field `None`.
 
 **Built-in converters:**
 
@@ -169,7 +180,7 @@ When the pipeline runs with `languages=["cmn"]`:
 
 1. Converters are filtered: a converter runs if `language is None` or any of its tags are in the set.
 2. For each converter, `resolve_language(converter.language, language_set)` picks the single matching tag (or first tag when no filter is set).
-3. The tag is stamped on each output `PronunciationGroup.language`.
+3. The tag is stamped on each output `G2PText.language`.
 
 ### Convert algorithm
 
@@ -285,8 +296,8 @@ pipeline = G2PPipeline(
 )
 
 result = pipeline.convert("Hello world")
-# → [PronunciationGroup(paths=[["hh","ax","l","ow"],["hh","eh","l","ow"]], language=None),
-#    PronunciationGroup(paths=[["w","er","l","d"]], language=None)]
+# → [G2PText(text="hello", words=[G2PWord(word="hello", phones=[["hh","ax","l","ow"],["hh","eh","l","ow"]])], language=None),
+#    G2PText(text="world", words=[G2PWord(word="world", phones=[["w","er","l","d"]])], language=None)]
 ```
 
 Language filtering:
@@ -294,7 +305,7 @@ Language filtering:
 ```python
 result = pipeline.convert("你好", languages=["cmn"])
 # MandarinConverter matched with "cmn"
-# → [PronunciationGroup(paths=[["ni"]], language="cmn")]
+# → [G2PText(text="你", words=[G2PWord(word="ni3", phones=[["ni"]])], language="cmn")]
 ```
 
 Config-based:
@@ -314,15 +325,15 @@ Drop a file into `g2p/converters/`:
 ```python
 # g2p/converters/my_lang.py
 from g2p.registry import converter
-from g2p.converters.base import Converter, PronunciationGroup
+from g2p.converters.base import Converter, G2PText, G2PWord
 
 @converter(id="my-lang", language="xyz")
 class MyLangConverter(Converter):
     def claim(self, token: str) -> bool:
         return True
 
-    def convert(self, tokens: list[str]) -> list[PronunciationGroup]:
-        return [PronunciationGroup(paths=[[...]]) for t in tokens]
+    def convert(self, tokens: list[str]) -> list[G2PText]:
+        return [G2PText(text=t, words=[G2PWord(word=t, phones=[[...]])]) for t in tokens]
 ```
 
 Or derive from a paradigm:

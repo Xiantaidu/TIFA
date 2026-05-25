@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from .converters.base import (
     Converter,
     G2PConversionError,
-    PronunciationGroup,
+    G2PText,
     resolve_language,
 )
 from .preprocessors.base import Preprocessor
@@ -14,7 +14,7 @@ from .tokenizers.base import Tokenizer
 class _TokenState:
     text: str
     index: int
-    pronunciation: PronunciationGroup | None = None
+    result: G2PText | None = None
 
 
 class G2PPipeline:
@@ -30,7 +30,7 @@ class G2PPipeline:
 
     def convert(
         self, text: str, *, languages: list[str] | None = None,
-    ) -> list[PronunciationGroup]:
+    ) -> list[G2PText]:
         language_set = set(languages) if languages else None
         active = [
             c for c in self._converters
@@ -49,7 +49,7 @@ class G2PPipeline:
 
         states = [_TokenState(text=t, index=i) for i, t in enumerate(tokens)]
         for converter in active:
-            unconverted = [s for s in states if s.pronunciation is None]
+            unconverted = [s for s in states if s.result is None]
             i = 0
             while i < len(unconverted):
                 if not converter.claim(unconverted[i].text):
@@ -66,11 +66,11 @@ class G2PPipeline:
                 resolved = resolve_language(converter.language, language_set)
                 for state, result in zip(run_states, results):
                     result.language = resolved
-                    state.pronunciation = result
+                    state.result = result
                 i = j
 
-        unconverted = [s for s in states if s.pronunciation is None]
+        unconverted = [s for s in states if s.result is None]
         if unconverted:
             raise G2PConversionError([s.text for s in unconverted])
 
-        return [s.pronunciation for s in states]
+        return [s.result for s in states]
