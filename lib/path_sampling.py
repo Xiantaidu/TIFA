@@ -74,13 +74,16 @@ def extract_tokens(
         paths: ``[B, N_max, W_max]`` token ids (0 = padding).
         segments: ``[B, N_max]`` 1-based segment indices (0 = padding).
                   Padding positions are identified by ``segments == 0``.
-        choices: ``[B, K, S_max]`` from any of the sampling functions above.
+        choices: ``[B, ..., S_max]`` from any of the sampling functions above.
+                 All dimensions between *B* and *S_max* are flattened.
 
     Returns:
         ``(compacted, lengths)`` where *compacted* is ``[B, K, max_len]``
-        with no trailing zeros and *lengths* is ``[B, K]``.
+        (no trailing zeros) and *lengths* is ``[B, K]`` with *K* the
+        product of all non-batch, non-segment dimensions.
     """
     B_val, N_max, _W_max = paths.shape
+    choices = choices.reshape(choices.shape[0], -1, choices.shape[-1])  # [B, K, S_max]
     K = choices.shape[1]
 
     # seg_ids [B, N_max] — 0-based; padding → 0 after clamp

@@ -68,32 +68,39 @@ class SelfSupervisedModule(BaseLightningModule, RankingModule):
         widths = sample["widths"]  # [B, S_max] padded with 1
         ranking_cfg = self.training_config.iterative_ranking
         k = ranking_cfg.k
+        B = sample["size"]
+        S_max = widths.shape[1]
 
         choices = sample_paths_uniform(widths, k)  # [B, k, S_max]
 
+        # Augment with item index, flatten, dedup at path level
+        indices = sample["indices"].view(B, 1, 1).expand(-1, k, -1)  # [B, k, 1]
+        augmented = torch.cat([indices, choices], dim=-1)  # [B, k, S_max+1]
+        flat = augmented.reshape(B * k, S_max + 1)
+        unique_all = torch.unique(flat, dim=0)  # [K', S_max+1]
+
+        item_ids = unique_all[:, 0].long().tolist()  # [K']
+        deduped = unique_all[:, 1:]  # [K', S_max]
+
         with torch.no_grad():
-            for b in range(sample["size"]):
-                item_idx = sample["indices"][b].item()
-                for s in range(widths.shape[1]):
+            for i, item_idx in enumerate(item_ids):
+                # find batch position for this item
+                b = (sample["indices"] == item_idx).nonzero(as_tuple=True)[0].item()
+                path = deduped[i]  # [S_max]
+                for s in range(S_max):
                     w = int(widths[b, s].item())
                     if w <= 1:
                         continue
-                    k_eff = min(k, w)
-                    sampled = choices[b, :k_eff, s].unique()
-                    for alt_idx in sampled.tolist():
-                        score = self.score_subpath(
-                            {
-                                "spectrogram": sample["spectrogram"][b],
-                                "paths": sample["paths"][b],
-                                "segments": sample["segments"][b],
-                                "N": sample["N"][b].item(),
-                                "widths": widths[b]
-                            },
-                            s, alt_idx,
-                        )
-                        results.append(
-                            (item_idx, s, alt_idx, score)
-                        )
+                    alt_idx = int(path[s].item())
+                    score = self.score_subpath(
+                        {"spectrogram": sample["spectrogram"][b],
+                         "paths": sample["paths"][b],
+                         "segments": sample["segments"][b],
+                         "N": sample["N"][b].item(),
+                         "widths": widths[b]},
+                        s, alt_idx,
+                    )
+                    results.append((item_idx, s, alt_idx, score))
         return results
 
     def score_subpath(self, item_data: dict,
