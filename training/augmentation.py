@@ -125,13 +125,13 @@ class ColoredNoise(Augmentation):
 class NaturalNoise(Augmentation):
     _namespace: ClassVar[str] = "natural_noise"
 
-    class _Item(BaseModel):
+    class _Noise(BaseModel):
         path: str
         zoom: float
         offset: float
         scale: float
 
-    items: list[_Item] = None
+    items: list[_Noise] = None
     db: float = None
 
     def __init__(self, config: AugmentationConfig, generator: np.random.Generator, **kwargs):
@@ -143,7 +143,7 @@ class NaturalNoise(Augmentation):
             items = []
             repeats = generator.integers(1, config.natural_noise.max_repeats + 1)
             for _ in range(repeats):
-                items.append(NaturalNoise._Item(
+                items.append(NaturalNoise._Noise(
                     path=generator.choice(config.natural_noise.noise_file_list),
                     zoom=2 ** generator.uniform(-1, 1),
                     offset=generator.uniform(0, 1),
@@ -288,81 +288,94 @@ class LoudnessScaling(Augmentation):
 class SpectrogramMasking(Augmentation):
     _namespace: ClassVar[str] = "spectrogram_masking"
 
-    time_mask_offset: float = None
-    time_mask_width: int = None
-    time_mask_std: float = None
-    freq_mask_offset: int = None
-    freq_mask_width: int = None
-    freq_mask_mean: float = None
-    freq_mask_std: float = None
-    intersect: bool = None
-    seed: int | None = None
+    class _Mask(BaseModel):
+        time_mask_offset: float = None
+        time_mask_width: int = None
+        time_mask_std: float = None
+        freq_mask_offset: int = None
+        freq_mask_width: int = None
+        freq_mask_mean: float = None
+        freq_mask_std: float = None
+        intersect: bool = False
+        seed: int = None
+
+    masks: list[_Mask] = None
 
     def __init__(
             self, config: AugmentationConfig, generator: np.random.Generator,
             num_bins: int, **kwargs
     ):
         super().__init__(**kwargs)
-        if config.spectrogram_masking.enabled:
+        if not config.spectrogram_masking.enabled:
+            return
+        repeats = generator.integers(1, config.spectrogram_masking.max_repeats + 1)
+        masks = []
+        for _ in range(repeats):
             time_masked = generator.random() < config.spectrogram_masking.time_mask_prob
             freq_masked = generator.random() < config.spectrogram_masking.freq_mask_prob
+            mask = SpectrogramMasking._Mask()
             if time_masked:
-                self.time_mask_offset = generator.uniform(0, 1)
-                self.time_mask_width = int(generator.integers(
+                mask.time_mask_offset = generator.uniform(0, 1)
+                mask.time_mask_width = int(generator.integers(
                     1, config.spectrogram_masking.time_mask_max_width + 1,
                 ))
-                self.time_mask_std = generator.uniform(0, 1)
+                mask.time_mask_std = generator.uniform(0, 1)
             if freq_masked:
-                self.freq_mask_width = int(generator.integers(
+                mask.freq_mask_width = int(generator.integers(
                     1, config.spectrogram_masking.freq_mask_max_width + 1,
                 ))
-                self.freq_mask_offset = int(generator.integers(
-                    0, num_bins - self.freq_mask_width + 1,
+                mask.freq_mask_offset = int(generator.integers(
+                    0, num_bins - mask.freq_mask_width + 1,
                 ))
-                self.freq_mask_mean = generator.uniform(math.log(1e-5), 0)
-                self.freq_mask_std = generator.uniform(0, 1)
-            if time_masked and freq_masked and generator.random() < config.spectrogram_masking.intersect_prob:
-                self.intersect = True
-            if self.time_mask_width is not None or self.freq_mask_width is not None:
-                self.seed = int(generator.integers(0, 2 ** 31))
+                mask.freq_mask_mean = generator.uniform(math.log(1e-5), 0)
+                mask.freq_mask_std = generator.uniform(0, 1)
+            if (time_masked and freq_masked
+                    and generator.random() < config.spectrogram_masking.intersect_prob):
+                mask.intersect = True
+            if mask.time_mask_width is not None or mask.freq_mask_width is not None:
+                mask.seed = int(generator.integers(0, 2 ** 31))
+                masks.append(mask)
+        if masks:
+            self.masks = masks
 
     def should_apply(self) -> bool:
-        return self.time_mask_width is not None or self.freq_mask_width is not None
+        return self.masks is not None
 
     def apply(self, ctx: AugmentationContext) -> None:
-        rng = np.random.default_rng(self.seed)
         T, C = ctx.spectrogram.shape
         spec = ctx.spectrogram.cpu().numpy()
-        time_masked = self.time_mask_width is not None
-        freq_masked = self.freq_mask_width is not None
-        time_mask_start = time_mask_end = time_mask_width = None
-        freq_mask_start = freq_mask_end = None
-        if time_masked:
-            time_mask_width = min(self.time_mask_width, T)
-            time_mask_start = int(self.time_mask_offset * (T - time_mask_width))
-            time_mask_end = time_mask_start + time_mask_width
-        if freq_masked:
-            freq_mask_start = self.freq_mask_offset
-            freq_mask_end = self.freq_mask_offset + self.freq_mask_width
-        if time_masked and freq_masked and self.intersect:
-            spec[time_mask_start:time_mask_end, freq_mask_start:freq_mask_end] = (
-                    rng.standard_normal(
-                        size=(time_mask_width, self.freq_mask_width), dtype=np.float32,
-                    ) * self.freq_mask_std + self.freq_mask_mean
-            )
-        else:
+        for mask in self.masks:
+            rng = np.random.default_rng(mask.seed)
+            time_masked = mask.time_mask_width is not None
+            freq_masked = mask.freq_mask_width is not None
+            time_mask_start = time_mask_end = time_mask_width = None
+            freq_mask_start = freq_mask_end = None
             if time_masked:
-                spec[time_mask_start:time_mask_end, :] = (
-                        rng.standard_normal(
-                            size=(time_mask_width, C), dtype=np.float32,
-                        ) * self.time_mask_std
-                )
+                time_mask_width = min(mask.time_mask_width, T)
+                time_mask_start = int(mask.time_mask_offset * (T - time_mask_width))
+                time_mask_end = time_mask_start + time_mask_width
             if freq_masked:
-                spec[:, freq_mask_start:freq_mask_end] = (
+                freq_mask_start = mask.freq_mask_offset
+                freq_mask_end = mask.freq_mask_offset + mask.freq_mask_width
+            if time_masked and freq_masked and mask.intersect:
+                spec[time_mask_start:time_mask_end, freq_mask_start:freq_mask_end] = (
                         rng.standard_normal(
-                            size=(T, self.freq_mask_width), dtype=np.float32,
-                        ) * self.freq_mask_std + self.freq_mask_mean
+                            size=(time_mask_width, mask.freq_mask_width), dtype=np.float32,
+                        ) * mask.freq_mask_std + mask.freq_mask_mean
                 )
+            else:
+                if time_masked:
+                    spec[time_mask_start:time_mask_end, :] = (
+                            rng.standard_normal(
+                                size=(time_mask_width, C), dtype=np.float32,
+                            ) * mask.time_mask_std
+                    )
+                if freq_masked:
+                    spec[:, freq_mask_start:freq_mask_end] = (
+                            rng.standard_normal(
+                                size=(T, mask.freq_mask_width), dtype=np.float32,
+                            ) * mask.freq_mask_std + mask.freq_mask_mean
+                    )
         ctx.spectrogram = torch.from_numpy(spec).to(ctx.spectrogram.device)
 
 

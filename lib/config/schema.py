@@ -176,6 +176,7 @@ class SpectrogramMaskingAugmentationConfig(ConfigBaseModel):
         )
     })
     intersect_prob: float = Field(0.5, gt=0.0, le=1.0)
+    max_repeats: int = Field(1, ge=1)
 
 
 class ColoredNoiseAugmentationConfig(ConfigBaseModel):
