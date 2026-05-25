@@ -63,7 +63,7 @@ class SupervisedModule(BaseLightningModule):
     def train_dataloader(self):
         main_dl = super().train_dataloader()
         if self.aux_train_dataset is None:
-            return main_dl
+            return ZippedDataLoader(main_dl)
 
         dl_cfg = self.training_config.dataloader
         multiplier = dl_cfg.aux_multiplier
@@ -94,19 +94,25 @@ class SupervisedModule(BaseLightningModule):
         if self.aux_train_sampler is not None:
             self.aux_train_sampler.set_epoch(self.current_epoch)
 
+    def _is_aux_warmup(self) -> bool:
+        """Whether aux dataset exists but hasn't started contributing yet."""
+        return (
+            self.aux_data_dir is not None
+            and self.current_epoch < self.training_config.dataloader.aux_warmup_epochs
+        )
+
     def forward_model(self, sample, infer):
-        if isinstance(sample, dict) and "main" in sample:
-            main_sample = sample["main"]
-            aux_sample = sample["aux"]
-        else:
-            main_sample = sample
-            aux_sample = None
+        main_sample = sample["main"]
+        aux_sample = sample.get("aux")
         main_sample: dict[str, Tensor]
         aux_sample: dict[str, Tensor] | None
         print(main_sample["spectrogram"].shape)
         print(aux_sample["tokens"].shape if aux_sample is not None else "No aux sample")
 
-        # TODO: real model forward on main_sample and aux_sample
+        # TODO: real model forward on main_sample and aux_sample.
+        # When computing aux losses, zero them during warmup:
+        #   if self._is_aux_warmup():
+        #       aux_loss = torch.zeros_like(aux_loss)
         raise NotImplementedError("SupervisedModule.forward_model is a stub")
 
     def plot_validation_results(self, sample, outputs):

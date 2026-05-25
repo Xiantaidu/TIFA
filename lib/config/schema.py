@@ -272,6 +272,7 @@ class DataLoaderConfig(ConfigBaseModel):
     num_workers: int = Field(4, ge=0)
     prefetch_factor: int = Field(2, ge=0)
     aux_multiplier: float = Field(1.0, gt=0.0)
+    aux_warmup_epochs: int = Field(0, ge=0)
 
 
 class OptimizerConfig(ConfigBaseModel):

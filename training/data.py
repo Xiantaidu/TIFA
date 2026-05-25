@@ -499,16 +499,17 @@ class DynamicBatchSampler(torch.utils.data.distributed.DistributedSampler):
 
 class ZippedDataLoader:
     """
-    Zips a main DataLoader with an aux DataLoader.
+    Wraps a main DataLoader, optionally zipped with an aux DataLoader.
+    Batches are always wrapped as ``{"main": ..., "size": ...}``.
+    When aux is present, ``"aux"`` key is included.
     Epoch length is defined by the main DataLoader.
-    The aux sampler's ``target_num_batches`` is set dynamically to match.
     """
 
     def __init__(
             self,
             main_dataloader: torch.utils.data.DataLoader,
-            aux_dataloader: torch.utils.data.DataLoader,
-            aux_sampler: DynamicBatchSampler,
+            aux_dataloader: torch.utils.data.DataLoader | None = None,
+            aux_sampler: DynamicBatchSampler | None = None,
     ):
         self.main_dl = main_dataloader
         self.aux_dl = aux_dataloader
@@ -516,24 +517,31 @@ class ZippedDataLoader:
 
     def __iter__(self):
         main_iter = iter(self.main_dl)
-        n_batches = len(self.main_dl)
 
-        self.aux_sampler.target_num_batches = n_batches
-        self.aux_sampler.formed = None
-        aux_iter = iter(self.aux_dl)
+        if self.aux_dl is not None:
+            n_batches = len(self.main_dl)
+            self.aux_sampler.target_num_batches = n_batches
+            self.aux_sampler.formed = None
+            aux_iter = iter(self.aux_dl)
 
-        for main_batch in main_iter:
-            try:
-                aux_batch = next(aux_iter)
-            except StopIteration:
-                self.aux_sampler.formed = None
-                aux_iter = iter(self.aux_dl)
-                aux_batch = next(aux_iter)
-            yield {
-                "main": main_batch,
-                "aux": aux_batch,
-                "size": main_batch["size"],
-            }
+            for main_batch in main_iter:
+                try:
+                    aux_batch = next(aux_iter)
+                except StopIteration:
+                    self.aux_sampler.formed = None
+                    aux_iter = iter(self.aux_dl)
+                    aux_batch = next(aux_iter)
+                yield {
+                    "main": main_batch,
+                    "aux": aux_batch,
+                    "size": main_batch["size"],
+                }
+        else:
+            for main_batch in main_iter:
+                yield {
+                    "main": main_batch,
+                    "size": main_batch["size"],
+                }
 
     def __len__(self):
         return len(self.main_dl)
