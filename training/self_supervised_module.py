@@ -4,11 +4,12 @@ import torch
 from torch import nn
 
 from lib.config.schema import RootConfig
+from lib.path_sampling import sample_paths_uniform
 from training.data import (
     BaseDataset,
     TextOnlyDataset,
 )
-from training.iterative_ranking import RankingModule
+from training.iterative_ranking import RankingModule, SegmentRewards, rank_rewards
 from training.pl_module_base import BaseLightningModule
 
 
@@ -62,9 +63,6 @@ class SelfSupervisedModule(BaseLightningModule, RankingModule):
                                      requires_grad=True)}
 
     def _compute_ranking(self, sample):
-        from lib.path_sampling import sample_paths_uniform
-        from training.iterative_ranking import SegmentRewards, rank_rewards
-
         widths = sample["widths"]  # [B, S_max] padded with 1
         k = self.training_config.iterative_ranking.k
         B = sample["size"]

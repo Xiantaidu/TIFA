@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -40,7 +40,7 @@ class _Fmt:
             self.cur_width = 0
 
 
-def _get_width(fmt: _Fmt, key: Optional[str], value: Any) -> int:
+def _get_width(fmt: _Fmt, key: str | None, value: Any) -> int:
     cache_key = (key, id(value))
     if cache_key in fmt.width_cache:
         return fmt.width_cache[cache_key]
@@ -111,7 +111,7 @@ def _add_entries(fmt: _Fmt, entries: list):
                 fmt.cur_width += len(fmt.separator)
 
 
-def _add_entry(fmt: _Fmt, key: Optional[str], value: Any):
+def _add_entry(fmt: _Fmt, key: str | None, value: Any):
     width = _get_width(fmt, key, value)
     if width > fmt.remaining_width():
         fmt.flush_line()

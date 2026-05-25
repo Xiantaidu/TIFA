@@ -5,6 +5,7 @@ import random
 from dataclasses import dataclass
 
 import librosa
+import matplotlib.pyplot as plt
 import numpy
 import tqdm
 
@@ -179,7 +180,6 @@ class BaseBinarizer(abc.ABC):
         if fig is not None:
             filename = self.data_dir / "vocab_distribution.jpg"
             fig.savefig(fname=filename, bbox_inches="tight", pad_inches=0.25)
-            import matplotlib.pyplot as plt
             plt.close(fig)
             logging.info(f"Vocabulary distribution plot saved to '{filename.as_posix()}'.")
 
