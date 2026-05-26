@@ -72,8 +72,8 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         self.train_dataset: BaseDataset = None
         self.valid_dataset: BaseDataset = None
         self.train_sampler: DynamicBatchSampler = None
-        self.aux_train_dataset: BaseDataset = None
-        self.aux_train_sampler: DynamicBatchSampler = None
+        self.aux_dataset: BaseDataset = None
+        self.aux_sampler: DynamicBatchSampler = None
 
         self.logger_step = -1  # when accumulate_grad_batches > 1, this helps to avoid redundant logging
 
@@ -111,7 +111,9 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         return self.train_sampler.batches[group_start:group_start + A]
 
     @abc.abstractmethod
-    def forward_model(self, sample: dict[str, torch.Tensor], infer: bool, batch_idx: int | None = None) -> dict[str, LossValue]:
+    def forward_model(
+            self, sample: dict[str, torch.Tensor], infer: bool, batch_idx: int | None = None
+    ) -> dict[str, LossValue]:
         """
         Forward pass of the model.
         :param sample: the training or validation batch.

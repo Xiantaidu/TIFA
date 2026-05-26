@@ -16,3 +16,4 @@ venv
 .vscode
 .ipynb_checkpoints/
 .claude
+/assets/

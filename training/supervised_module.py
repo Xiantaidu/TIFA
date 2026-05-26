@@ -54,21 +54,21 @@ class SupervisedModule(BaseLightningModule):
     def setup(self, stage: str) -> None:
         super().setup(stage)
         if self.aux_data_dir is not None:
-            self.aux_train_dataset = TextOnlyDataset(
+            self.aux_dataset = TextOnlyDataset(
                 self.aux_data_dir, "aux",
                 augmentation_config=self.training_config.augmentation,
             )
-            self.aux_train_sampler = None
+            self.aux_sampler = None
 
     def train_dataloader(self):
         main_dl = super().train_dataloader()
-        if self.aux_train_dataset is None:
+        if self.aux_dataset is None:
             return ZippedDataLoader(main_dl)
 
         dl_cfg = self.training_config.dataloader
         multiplier = dl_cfg.aux_multiplier
-        self.aux_train_sampler = DynamicBatchSampler(
-            self.aux_train_dataset,
+        self.aux_sampler = DynamicBatchSampler(
+            self.aux_dataset,
             max_batch_size=int(dl_cfg.max_batch_size * multiplier),
             max_batch_frames=int(dl_cfg.max_batch_frames * multiplier),
             sort_by_len=True,
@@ -79,20 +79,20 @@ class SupervisedModule(BaseLightningModule):
             seed=42,
         )
         aux_dl = DataLoader(
-            self.aux_train_dataset,
-            collate_fn=self.aux_train_dataset.collate,
-            batch_sampler=self.aux_train_sampler,
+            self.aux_dataset,
+            collate_fn=self.aux_dataset.collate,
+            batch_sampler=self.aux_sampler,
             num_workers=dl_cfg.num_workers,
             prefetch_factor=dl_cfg.prefetch_factor if dl_cfg.num_workers > 0 else None,
             pin_memory=True,
             persistent_workers=dl_cfg.num_workers > 0,
         )
-        return ZippedDataLoader(main_dl, aux_dl, self.aux_train_sampler)
+        return ZippedDataLoader(main_dl, aux_dl, self.aux_sampler)
 
     def on_train_epoch_start(self):
         super().on_train_epoch_start()
-        if self.aux_train_sampler is not None:
-            self.aux_train_sampler.set_epoch(self.current_epoch)
+        if self.aux_sampler is not None:
+            self.aux_sampler.set_epoch(self.current_epoch)
 
     def _is_aux_warmup(self) -> bool:
         """Whether aux dataset exists but hasn't started contributing yet."""
