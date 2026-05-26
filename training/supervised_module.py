@@ -41,11 +41,11 @@ class SupervisedModule(BaseLightningModule):
     def build_valid_dataset(self) -> BaseDataset:
         dl_cfg = self.training_config.dataloader
         if self.use_parallel_dirty_metrics:
+            aug_cfg = self.training_config.augmentation.keep_destructive()
             return PhonemeTimingDataset(
                 self.data_dir, "valid",
-                augmentation_config=self.training_config.augmentation,
+                augmentation_config=aug_cfg,
                 augmentation_deterministic=True,
-                augmentation_destructive_only=True,
                 augmentation_return_dirty=True,
                 ensure_original_tokens=True,
                 max_concat_size=dl_cfg.max_concat_size,
@@ -99,6 +99,9 @@ class SupervisedModule(BaseLightningModule):
             persistent_workers=dl_cfg.num_workers > 0,
         )
         return ZippedDataLoader(main_dl, aux_dl, self.aux_sampler)
+
+    def val_dataloader(self):
+        return ZippedDataLoader(super().val_dataloader())
 
     def on_train_epoch_start(self):
         super().on_train_epoch_start()

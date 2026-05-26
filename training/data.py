@@ -18,7 +18,8 @@ from .augmentation import (
     AugmentationContext,
     ComposedAugmentation,
     SpectrogramStretching,
-    generate_seed, build_augmentation_chain,
+    generate_seed,
+    build_augmentation_chain,
 )
 
 __all__ = [
@@ -73,9 +74,9 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
             self,
             data_dir: pathlib.Path,
             prefix: str,
+            *,
             augmentation_config: AugmentationConfig = None,
             augmentation_deterministic: bool = False,
-            augmentation_destructive_only: bool = False,
             augmentation_return_dirty: bool = False,
             max_concat_size: int | None = None,
             max_concat_length: int | None = None,
@@ -91,7 +92,6 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
         self.epoch = torch.multiprocessing.Value("i", 0)
         self.augmentation_config = augmentation_config
         self.augmentation_deterministic = augmentation_deterministic
-        self.augmentation_destructive_only = augmentation_destructive_only
         self.augmentation_return_dirty = augmentation_return_dirty
         self.augmentation_chains: dict[int, ComposedAugmentation] = {}
         self.mel_spectrogram = None
@@ -216,9 +216,9 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
         self.augmentation_chains.clear()
         for index in range(self._n_original):
             self.augmentation_chains[index] = build_augmentation_chain(
-                self.augmentation_config, generator=generator,
+                self.augmentation_config,
                 mel_spectrogram=self.mel_spectrogram,
-                destructive_only=self.augmentation_destructive_only,
+                generator=generator,
             )
 
     def _get_single_item(self, index):
@@ -290,16 +290,21 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
 
 
 class PhonemeTimingDataset(BaseDataset):
-    def __init__(self, *args, ensure_original_tokens: bool = False, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        *args,
+        ensure_original_tokens: bool = False,
+        augmentation_config=None,
+        **kwargs,
+    ):
+        # Time stretching is not supported for token-spectrogram aligned datasets.
+        augmentation_config = augmentation_config.drop("time_stretching")
+        super().__init__(
+            *args,
+            augmentation_config=augmentation_config,
+            **kwargs,
+        )
         self._ensure_original_tokens = ensure_original_tokens
-        if (
-            self.augmentation_config is not None
-            and self.augmentation_config.time_stretching.enabled
-        ):
-            raise ValueError(
-                "Time stretching is not supported for supervised dataset."
-            )
         self._vocab_size: int | None = None
         if (
             self.augmentation_config is not None

@@ -385,9 +385,8 @@ class SpectrogramMasking(Augmentation):
 
 def build_augmentation_chain(
         config: AugmentationConfig,
+        mel_spectrogram: StretchableMelSpectrogram,
         generator: np.random.Generator,
-        mel_spectrogram,
-        destructive_only: bool = False,
 ) -> ComposedAugmentation:
     """Build a single unified augmentation chain for a sample.
 
@@ -410,12 +409,11 @@ def build_augmentation_chain(
     ))
 
     # Stage 3: mel → mel
-    if not destructive_only:
-        for aug in [
-            LoudnessScaling(config=config, generator=generator),
-            SpectrogramMasking(config=config, generator=generator, num_bins=mel_spectrogram.n_mels),
-        ]:
-            if aug.should_apply():
-                transforms.append(aug)
+    for aug in [
+        LoudnessScaling(config=config, generator=generator),
+        SpectrogramMasking(config=config, generator=generator, num_bins=mel_spectrogram.n_mels),
+    ]:
+        if aug.should_apply():
+            transforms.append(aug)
 
     return ComposedAugmentation(transforms=transforms)

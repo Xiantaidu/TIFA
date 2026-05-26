@@ -44,11 +44,11 @@ class SelfSupervisedModule(BaseLightningModule, RankingModule):
     def build_valid_dataset(self) -> BaseDataset:
         dl_cfg = self.training_config.dataloader
         if self.use_parallel_dirty_metrics:
+            aug_cfg = self.training_config.augmentation.keep_destructive()
             return TextOnlyDataset(
                 self.data_dir, "valid",
-                augmentation_config=self.training_config.augmentation,
+                augmentation_config=aug_cfg,
                 augmentation_deterministic=True,
-                augmentation_destructive_only=True,
                 augmentation_return_dirty=True,
                 max_concat_size=dl_cfg.max_concat_size,
                 max_concat_length=dl_cfg.max_concat_length,

@@ -1,5 +1,6 @@
 import glob
 import pathlib
+from collections.abc import Callable
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import Field, PrivateAttr, field_validator
@@ -250,6 +251,57 @@ class AugmentationConfig(ConfigBaseModel):
                 or self.colored_noise.enabled
                 or self.natural_noise.enabled
                 or self.rir_reverb.enabled
+        )
+
+    def _validate_names(self, names: tuple[str, ...]) -> set[str]:
+        valid_fields = set(self.model_fields.keys())
+        names_set = set(names)
+        unknown = names_set - valid_fields
+        if unknown:
+            raise ValueError(
+                f"Unknown augmentation types: {sorted(unknown)}. "
+                f"Valid: {sorted(valid_fields)}"
+            )
+        return names_set
+
+    def _clone_enabled(
+        self, compute: Callable[[str, bool], bool]
+    ) -> "AugmentationConfig":
+        updates: dict[str, object] = {}
+        for field_name in self.model_fields:
+            sub = getattr(self, field_name)
+            new_enabled = compute(field_name, sub.enabled)
+            if new_enabled != sub.enabled:
+                updates[field_name] = sub.model_copy(
+                    update={"enabled": new_enabled}
+                )
+        if not updates:
+            return self
+        return self.model_copy(update=updates)
+
+    def drop(self, *names: str) -> "AugmentationConfig":
+        """Return a copy with the named augmentations disabled."""
+        names_set = self._validate_names(names)
+        return self._clone_enabled(
+            lambda n, e: False if n in names_set else e
+        )
+
+    def keep(self, *names: str) -> "AugmentationConfig":
+        """Return a copy keeping only the named augmentations at their
+        current ``enabled`` state.  All other types are disabled."""
+        names_set = self._validate_names(names)
+        return self._clone_enabled(
+            lambda n, e: e and n in names_set
+        )
+
+    def keep_destructive(self) -> "AugmentationConfig":
+        """Keep only the destructive augmentation types at their current
+        ``enabled`` state.  Matches :attr:`has_destructive_augmentations`."""
+        return self.keep(
+            "colored_noise",
+            "natural_noise",
+            "rir_reverb",
+            "spectrogram_masking",
         )
 
 
