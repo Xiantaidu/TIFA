@@ -1,3 +1,4 @@
+import abc
 import json
 import math
 import pathlib
@@ -30,6 +31,16 @@ __all__ = [
 ]
 
 
+def _align_length(t: torch.Tensor, expected: int) -> torch.Tensor:
+    """Slice or pad *t* along dim 0 to exactly *expected* frames."""
+    n = t.shape[0]
+    if n > expected:
+        return t[:expected]
+    if n < expected:
+        return torch.nn.functional.pad(t, (0, 0, 0, expected - n), value=math.log(1e-5))
+    return t
+
+
 def collate_nd(values, pad_value=0, max_len=None, ndim=1):
     """
     Pad a list of Nd tensors on their first ``ndim`` dimensions and stack them
@@ -51,7 +62,7 @@ def collate_nd(values, pad_value=0, max_len=None, ndim=1):
     return res
 
 
-class BaseDataset(torch.utils.data.Dataset):
+class BaseDataset(torch.utils.data.Dataset, abc.ABC):
     __non_zero_paddings__ = {
         "spectrogram": math.log(1e-5),
         "spectrogram_dirty": math.log(1e-5),
@@ -66,6 +77,9 @@ class BaseDataset(torch.utils.data.Dataset):
             augmentation_deterministic: bool = False,
             augmentation_destructive_only: bool = False,
             augmentation_return_dirty: bool = False,
+            max_concat_size: int | None = None,
+            max_concat_length: int | None = None,
+            concat_deterministic: bool = False,
     ):
         super().__init__()
         self.info = {
@@ -81,53 +95,45 @@ class BaseDataset(torch.utils.data.Dataset):
         self.augmentation_return_dirty = augmentation_return_dirty
         self.augmentation_chains: dict[int, ComposedAugmentation] = {}
         self.mel_spectrogram = None
+        self.max_concat_size = max_concat_size
+        self.max_concat_length = max_concat_length
+        self.concat_deterministic = concat_deterministic
+        self._n_original = len(self.info["lengths"])
+        self._group_indices: list[list[int]] | None = None
         self._setup()
+        if self.max_concat_size is not None or self.max_concat_length is not None:
+            self._form_groups(0)
 
     def __getitem__(self, index):
-        sample = self.data[index]
-        waveform = self._load_waveform(index)
-        spectrogram_clean = None
-
-        augmentation = {}
-        if self.augmentation_config is not None:
-            chain = self.augmentation_chains[index]
-
-            wf_tensor = torch.from_numpy(waveform).unsqueeze(0)
-            if self.augmentation_return_dirty:
-                spectrogram_clean = self.mel_spectrogram(wf_tensor).squeeze(0).T
-
-            ctx = AugmentationContext(waveform=waveform, sr=self.sample_rate)
-            chain.apply(ctx)
-            spectrogram = ctx.spectrogram
-            augmentation = chain.args_dict()
-        else:
-            wf_tensor = torch.from_numpy(waveform).unsqueeze(0)
-            spectrogram = self.mel_spectrogram(wf_tensor).squeeze(0).T
-
-        spectrogram = torch.clamp(spectrogram, min=math.log(1e-5))
-
-        if self.augmentation_return_dirty:
-            sample["spectrogram"] = torch.clamp(spectrogram_clean, min=math.log(1e-5))
-            sample["spectrogram_dirty"] = spectrogram
-        else:
-            sample["spectrogram"] = spectrogram
-
-        return {
-            "_idx": index,
-            "_name": self.info["item_paths"][index],
-            "_augmentation": augmentation,
-            **sample,
-        }
+        if self._group_indices is not None:
+            samples = [self._get_single_item(i) for i in self._group_indices[index]]
+            result = self.concat_samples(samples)
+            result["_idx"] = index
+            result["_name"] = samples[0]["_name"]
+            result["_augmentation"] = {}
+            return result
+        return self._get_single_item(index)
 
     def __len__(self):
-        return self.info["lengths"].shape[0]
+        if self._group_indices is not None:
+            return len(self._group_indices)
+        return self._n_original
 
     def set_epoch(self, epoch: int):
         self.epoch.value = epoch
+        if self.max_concat_size is not None or self.max_concat_length is not None:
+            self._form_groups(epoch)
         if self.augmentation_config is not None and not self.augmentation_deterministic:
             self._build_chains(numpy.random.default_rng())
 
     def num_frames(self, index: int) -> int:
+        if self._group_indices is not None:
+            return sum(
+                self._single_num_frames(i) for i in self._group_indices[index]
+            )
+        return self._single_num_frames(index)
+
+    def _single_num_frames(self, index: int) -> int:
         base_len = int(self.info["lengths"][index])
         chain = self.augmentation_chains.get(index)
         if chain is not None:
@@ -135,6 +141,24 @@ class BaseDataset(torch.utils.data.Dataset):
                 if isinstance(t, SpectrogramStretching) and t.speed is not None:
                     return max(1, int(base_len / t.speed))
         return base_len
+
+    def get_metadata(self, key: str, index: int):
+        """Proxy for info[key][index] that handles group-to-original mapping."""
+        if self._group_indices is None:
+            return self.info[key][index]
+
+        values = [self.info[key][orig_idx] for orig_idx in self._group_indices[index]]
+        if key in ("item_paths", "item_texts"):
+            return " ".join(str(v) for v in values)
+        return sum(int(v) for v in values)
+
+    @abc.abstractmethod
+    def concat_samples(self, samples: list[dict]) -> dict:
+        """Merge individual sample dicts into one concatenated sample.
+
+        Each dict is the output of _get_single_item. samples is non-empty.
+        When len(samples) == 1 the result should be the sample unchanged.
+        """
 
     def _setup(self):
         feature_raw = load_raw_config(self.data_dir / "feature.yaml")
@@ -158,14 +182,84 @@ class BaseDataset(torch.utils.data.Dataset):
             seed = generate_seed(sorted(self.info.keys()))
             self._build_chains(numpy.random.default_rng(seed))
 
+    def _form_groups(self, epoch: int) -> None:
+        seed = 42 if self.concat_deterministic else 42 + epoch
+        rng = random.Random(seed)
+        indices = list(range(self._n_original))
+        rng.shuffle(indices)
+
+        groups = []
+        current = []
+        current_frames = 0
+        for idx in indices:
+            frames = self._single_num_frames(idx)
+            exceed_size = (
+                self.max_concat_size is not None
+                and len(current) >= self.max_concat_size
+            )
+            exceed_length = (
+                self.max_concat_length is not None
+                and current_frames + frames > self.max_concat_length
+            )
+            if current and (exceed_size or exceed_length):
+                groups.append(current)
+                current = []
+                current_frames = 0
+            current.append(idx)
+            current_frames += frames
+        if current:
+            groups.append(current)
+
+        self._group_indices = groups
+
     def _build_chains(self, generator: numpy.random.Generator):
         self.augmentation_chains.clear()
-        for index in range(len(self)):
+        for index in range(self._n_original):
             self.augmentation_chains[index] = build_augmentation_chain(
                 self.augmentation_config, generator=generator,
                 mel_spectrogram=self.mel_spectrogram,
                 destructive_only=self.augmentation_destructive_only,
             )
+
+    def _get_single_item(self, index):
+        sample = self.data[index]
+        waveform = self._load_waveform(index)
+        spectrogram_clean = None
+
+        augmentation = {}
+        if self.augmentation_config is not None:
+            chain = self.augmentation_chains[index]
+
+            wf_tensor = torch.from_numpy(waveform).unsqueeze(0)
+            if self.augmentation_return_dirty:
+                spectrogram_clean = self.mel_spectrogram(wf_tensor).squeeze(0).T
+
+            ctx = AugmentationContext(waveform=waveform, sr=self.sample_rate)
+            chain.apply(ctx)
+            spectrogram = ctx.spectrogram
+            augmentation = chain.args_dict()
+        else:
+            wf_tensor = torch.from_numpy(waveform).unsqueeze(0)
+            spectrogram = self.mel_spectrogram(wf_tensor).squeeze(0).T
+
+        spectrogram = torch.clamp(spectrogram, min=math.log(1e-5))
+        expected_len = int(self.info["lengths"][index])
+        spectrogram = _align_length(spectrogram, expected_len)
+
+        if self.augmentation_return_dirty:
+            spectrogram_clean = torch.clamp(spectrogram_clean, min=math.log(1e-5))
+            spectrogram_clean = _align_length(spectrogram_clean, expected_len)
+            sample["spectrogram"] = spectrogram_clean
+            sample["spectrogram_dirty"] = spectrogram
+        else:
+            sample["spectrogram"] = spectrogram
+
+        return {
+            "_idx": index,
+            "_name": self.info["item_paths"][index],
+            "_augmentation": augmentation,
+            **sample,
+        }
 
     def _load_waveform(self, index: int) -> numpy.ndarray:
         waveform_fn = self.data_dir / str(self.info["item_paths"][index])
@@ -230,21 +324,11 @@ class PhonemeTimingDataset(BaseDataset):
 
     def __getitem__(self, index: int) -> dict:
         sample = super().__getitem__(index)
-        # sample keys: spectrogram [T_spec, F], tokens [N], spans [N,2], regions [T]
+        if self._group_indices is not None:
+            return sample  # already processed by concat_samples
+        return self._prepare_item(sample)
 
-        T_spec = sample["spectrogram"].shape[0]
-        T = sample["regions"].shape[0]
-
-        if T_spec > T:
-            sample["spectrogram"] = sample["spectrogram"][:T]
-        elif T_spec < T:
-            sample["spectrogram"] = torch.nn.functional.pad(
-                sample["spectrogram"], (0, 0, 0, T - T_spec),
-                value=math.log(1e-5),
-            )
-
-        T_val = max(T_spec, T)
-
+    def _prepare_item(self, sample: dict) -> dict:
         if self._token_peers and not self._ensure_original_tokens:
             pert_cfg = self.augmentation_config.token_perturbation
             if random.random() < pert_cfg.prob:
@@ -282,9 +366,47 @@ class PhonemeTimingDataset(BaseDataset):
                 sample["tokens"].shape[0], dtype=torch.bool,
             )
 
-        sample["T"] = torch.tensor(T_val, dtype=torch.long)
+        sample["T"] = torch.tensor(sample["spectrogram"].shape[0], dtype=torch.long)
         sample["N"] = torch.tensor(sample["tokens"].shape[0], dtype=torch.long)
         return sample
+
+    def concat_samples(self, samples: list[dict]) -> dict:
+        if len(samples) == 1:
+            return self._prepare_item(samples[0])
+
+        processed = [self._prepare_item(s) for s in samples]
+
+        specs = [s["spectrogram"] for s in processed]
+        T_cumsum = [0]
+        for sp in specs[:-1]:
+            T_cumsum.append(T_cumsum[-1] + sp.shape[0])
+        N_vals = [int(s["N"].item()) for s in processed]
+        N_cumsum = [0]
+        for nv in N_vals[:-1]:
+            N_cumsum.append(N_cumsum[-1] + nv)
+
+        shifted_spans = []
+        for s, t_off in zip(processed, T_cumsum):
+            shifted_spans.append(s["spans"] + t_off if t_off > 0 else s["spans"])
+
+        shifted_regions = []
+        for s, n_off in zip(processed, N_cumsum):
+            r = s["regions"]
+            if n_off > 0:
+                r = r.clone()
+                mask = r > 0
+                r[mask] += n_off
+            shifted_regions.append(r)
+
+        return {
+            "spectrogram": torch.cat(specs, dim=0),
+            "tokens": torch.cat([s["tokens"] for s in processed]),
+            "spans": torch.cat(shifted_spans),
+            "regions": torch.cat(shifted_regions),
+            "fake": torch.cat([s["fake"] for s in processed]),
+            "T": torch.tensor(sum(s["T"].item() for s in processed)),
+            "N": torch.tensor(sum(N_vals)),
+        }
 
 
 class TextOnlyDataset(BaseDataset):
@@ -299,11 +421,64 @@ class TextOnlyDataset(BaseDataset):
 
     def __getitem__(self, index: int) -> dict:
         sample = super().__getitem__(index)
-        # sample keys: spectrogram [T_spec, F], paths [max_path_length, max_width],
-        #              segments [max_path_length], widths [max_segment_count]
+        if self._group_indices is not None:
+            return sample  # already processed by concat_samples
+        return self._prepare_item(sample)
+
+    # noinspection PyMethodMayBeStatic
+    def _prepare_item(self, sample: dict) -> dict:
         sample["T"] = torch.tensor(sample["spectrogram"].shape[0], dtype=torch.long)
         sample["N"] = torch.tensor(sample["paths"].shape[0], dtype=torch.long)
         return sample
+
+    def concat_samples(self, samples: list[dict]) -> dict:
+        if len(samples) == 1:
+            return self._prepare_item(samples[0])
+
+        processed = [self._prepare_item(s) for s in samples]
+
+        specs = [s["spectrogram"] for s in processed]
+        merged_spec = torch.cat(specs, dim=0)
+
+        S_vals = [int(s["segments"].max().item()) for s in processed]
+        S_cumsum = [0]
+        for sv in S_vals[:-1]:
+            S_cumsum.append(S_cumsum[-1] + sv)
+
+        segs = []
+        for s, offset in zip(processed, S_cumsum):
+            seg = s["segments"]
+            if offset > 0:
+                seg = seg.clone()
+                mask = seg > 0
+                seg[mask] += offset
+            segs.append(seg)
+        merged_segments = torch.cat(segs)
+
+        merged_widths = torch.cat([s["widths"] for s in processed])
+
+        max_width = max(s["paths"].shape[1] for s in processed)
+        padded = []
+        for s in processed:
+            pw = s["paths"].shape[1]
+            if pw < max_width:
+                p = torch.nn.functional.pad(s["paths"], (0, max_width - pw))
+            else:
+                p = s["paths"]
+            padded.append(p)
+        merged_paths = torch.cat(padded, dim=0)
+
+        T_vals = [s["T"].item() for s in processed]
+        N_vals = [s["N"].item() for s in processed]
+
+        return {
+            "spectrogram": merged_spec,
+            "paths": merged_paths,
+            "segments": merged_segments,
+            "widths": merged_widths,
+            "T": torch.tensor(sum(T_vals)),
+            "N": torch.tensor(sum(N_vals)),
+        }
 
 
 class DynamicBatchSampler(torch.utils.data.distributed.DistributedSampler):

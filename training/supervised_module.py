@@ -30,12 +30,16 @@ class SupervisedModule(BaseLightningModule):
         self.register_loss("dummy", nn.MSELoss())
 
     def build_train_dataset(self) -> BaseDataset:
+        dl_cfg = self.training_config.dataloader
         return PhonemeTimingDataset(
             self.data_dir, "train",
             augmentation_config=self.training_config.augmentation,
+            max_concat_size=dl_cfg.max_concat_size,
+            max_concat_length=dl_cfg.max_concat_length,
         )
 
     def build_valid_dataset(self) -> BaseDataset:
+        dl_cfg = self.training_config.dataloader
         if self.use_parallel_dirty_metrics:
             return PhonemeTimingDataset(
                 self.data_dir, "valid",
@@ -44,25 +48,32 @@ class SupervisedModule(BaseLightningModule):
                 augmentation_destructive_only=True,
                 augmentation_return_dirty=True,
                 ensure_original_tokens=True,
+                max_concat_size=dl_cfg.max_concat_size,
+                max_concat_length=dl_cfg.max_concat_length,
+                concat_deterministic=True,
             )
         else:
             return PhonemeTimingDataset(
                 self.data_dir, "valid",
                 ensure_original_tokens=True,
+                max_concat_size=dl_cfg.max_concat_size,
+                max_concat_length=dl_cfg.max_concat_length,
+                concat_deterministic=True,
             )
 
-    def setup(self, stage: str) -> None:
-        super().setup(stage)
-        if self.aux_data_dir is not None:
-            self.aux_dataset = TextOnlyDataset(
-                self.aux_data_dir, "aux",
-                augmentation_config=self.training_config.augmentation,
-            )
-            self.aux_sampler = None
+    def build_aux_dataset(self) -> BaseDataset | None:
+        dl_cfg = self.training_config.dataloader
+        return TextOnlyDataset(
+            self.aux_data_dir, "aux",
+            augmentation_config=self.training_config.augmentation,
+            max_concat_size=dl_cfg.max_concat_size,
+            max_concat_length=dl_cfg.max_concat_length,
+        )
 
     def train_dataloader(self):
         main_dl = super().train_dataloader()
         if self.aux_dataset is None:
+            # Always use ZippedDataLoader for consistent sample format in forward_model
             return ZippedDataLoader(main_dl)
 
         dl_cfg = self.training_config.dataloader

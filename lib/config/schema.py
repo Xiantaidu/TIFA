@@ -265,6 +265,8 @@ class LossConfig(ConfigBaseModel):
 
 
 class DataLoaderConfig(ConfigBaseModel):
+    max_concat_size: int | None = Field(None, ge=2)
+    max_concat_length: int | None = Field(None, ge=1)
     max_batch_frames: int = Field(50000, gt=0)
     max_batch_size: int = Field(64, gt=0)
     max_val_batch_frames: int = Field(20000, gt=0)

@@ -236,11 +236,17 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         """Build the validation dataset."""
         pass
 
+    def build_aux_dataset(self) -> BaseDataset | None:
+        """Build the aux dataset. Defaults to None; override in subclasses that need aux data."""
+        return None
+
     def setup(self, stage: str) -> None:
         if stage != "fit":
             raise ValueError("This module only supports the 'fit' stage.")
         self.train_dataset = self.build_train_dataset()
         self.valid_dataset = self.build_valid_dataset()
+        if self.aux_dataset is not None:
+            self.aux_dataset = self.build_aux_dataset()
 
     def train_dataloader(self):
         dataloader_config = self.training_config.dataloader

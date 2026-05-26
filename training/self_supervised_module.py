@@ -33,13 +33,34 @@ class SelfSupervisedModule(BaseLightningModule, RankingModule):
         self.register_loss("dummy", nn.MSELoss())
 
     def build_train_dataset(self) -> BaseDataset:
+        dl_cfg = self.training_config.dataloader
         return TextOnlyDataset(
             self.data_dir, "train",
             augmentation_config=self.training_config.augmentation,
+            max_concat_size=dl_cfg.max_concat_size,
+            max_concat_length=dl_cfg.max_concat_length,
         )
 
     def build_valid_dataset(self) -> BaseDataset:
-        return TextOnlyDataset(self.data_dir, "valid")
+        dl_cfg = self.training_config.dataloader
+        if self.use_parallel_dirty_metrics:
+            return TextOnlyDataset(
+                self.data_dir, "valid",
+                augmentation_config=self.training_config.augmentation,
+                augmentation_deterministic=True,
+                augmentation_destructive_only=True,
+                augmentation_return_dirty=True,
+                max_concat_size=dl_cfg.max_concat_size,
+                max_concat_length=dl_cfg.max_concat_length,
+                concat_deterministic=True,
+            )
+        else:
+            return TextOnlyDataset(
+                self.data_dir, "valid",
+                max_concat_size=dl_cfg.max_concat_size,
+                max_concat_length=dl_cfg.max_concat_length,
+                concat_deterministic=True,
+            )
 
     def set_best_paths(self, best_paths: dict[int, dict[int, int]] | None) -> None:
         self._best_paths = best_paths
