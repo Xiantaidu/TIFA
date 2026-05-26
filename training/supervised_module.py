@@ -101,7 +101,7 @@ class SupervisedModule(BaseLightningModule):
             and self.current_epoch < self.training_config.dataloader.aux_warmup_epochs
         )
 
-    def forward_model(self, sample, infer):
+    def forward_model(self, sample: dict[str, Tensor], infer: bool, batch_idx=None):
         main_sample = sample["main"]
         aux_sample = sample.get("aux")
         main_sample: dict[str, Tensor]

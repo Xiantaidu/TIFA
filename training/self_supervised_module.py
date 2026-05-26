@@ -1,7 +1,7 @@
 import pathlib
 
 import torch
-from torch import nn
+from torch import nn, Tensor
 
 from lib.config.schema import RootConfig
 from lib.path_sampling import sample_paths_uniform
@@ -10,7 +10,7 @@ from training.data import (
     TextOnlyDataset,
 )
 from training.iterative_ranking import RankingModule, SegmentRewards, rank_rewards
-from training.pl_module_base import BaseLightningModule
+from training.pl_module_base import BaseLightningModule, LossValue
 
 
 class SelfSupervisedModule(BaseLightningModule, RankingModule):
@@ -54,13 +54,17 @@ class SelfSupervisedModule(BaseLightningModule, RankingModule):
             }
         return total_loss
 
-    def forward_model(self, sample, infer):
+    def forward_model(self, sample: dict[str, Tensor], infer: bool, batch_idx=None):
         if infer:
             return {}
 
         # TODO: real model forward and loss computation using self._best_paths
-        return {"dummy": torch.zeros(1, device=sample["spectrogram"].device,
-                                     requires_grad=True)}
+        return {
+            "dummy": LossValue(
+                torch.zeros(1, device=sample["spectrogram"].device, requires_grad=True),
+                1, 1
+            )
+        }
 
     def _compute_ranking(self, sample):
         widths = sample["widths"]  # [B, S_max] padded with 1

@@ -1,6 +1,6 @@
 import abc
 import pathlib
-from typing import Any
+from typing import Any, NamedTuple
 from fnmatch import fnmatch
 
 import lightning.pytorch
@@ -19,8 +19,15 @@ from .weight_averaging import ExponentialMovingAverage
 
 __all__ = [
     "BaseLightningModule",
+    "LossValue",
 ]
 matplotlib.use("Agg")  # fix Tcl_AsyncDelete: async handler deleted by the wrong thread
+
+
+class LossValue(NamedTuple):
+    mean: torch.Tensor  # per-valid-element mean (interpretable, for logging)
+    batch_count: int  # valid elements in THIS micro-batch
+    group_count: int  # valid elements across ALL A micro-batches in the accumulation group
 
 
 class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
@@ -97,14 +104,21 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         """This method is called after the model is initialized, useful for custom initialization logic."""
         pass
 
+    def get_accumulation_group(self, batch_idx: int) -> list[list[int]]:
+        """Return the sample-indices lists for all micro-batches in this batch's accumulation group."""
+        A = self.training_config.trainer.accumulate_grad_batches
+        group_start = (batch_idx // A) * A
+        return self.train_sampler.batches[group_start:group_start + A]
+
     @abc.abstractmethod
-    def forward_model(self, sample: dict[str, torch.Tensor], infer: bool) -> dict[str, torch.Tensor]:
+    def forward_model(self, sample: dict[str, torch.Tensor], infer: bool, batch_idx: int | None = None) -> dict[str, LossValue]:
         """
         Forward pass of the model.
         :param sample: the training or validation batch.
         :param infer: whether in inference mode.
+        :param batch_idx: the batch index (provided during training for accumulation-group lookups).
         :return: if `infer` is True, update all registered metrics and return the model outputs;
-            otherwise, return a dictionary containing values of all registered losses.
+            otherwise, return a dictionary mapping loss names to LossValue named tuples.
         """
         pass
 
@@ -305,14 +319,21 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
             self.train_sampler.set_epoch(self.current_epoch)
 
     def training_step(self, sample: dict[str, torch.Tensor], batch_index: int):
-        losses = self.forward_model(sample, infer=False)
-        total_loss = sum(losses.values())
+        loss_values = self.forward_model(sample, infer=False, batch_idx=batch_index)
+        A = self.training_config.trainer.accumulate_grad_batches
+
+        total_loss = 0.0
+        for name, lv in loss_values.items():
+            weight = (A * lv.batch_count / lv.group_count) if lv.group_count > 0 else 1.0
+            total_loss += lv.mean * weight
+
+        unweighted_total = sum(lv.mean for lv in loss_values.values())
         log_outputs = {
-            **losses,
+            **{name: lv.mean for name, lv in loss_values.items()},
             "batch_size": sample["size"],
         }
         # logs to progress bar
-        self.log("total_loss", total_loss, prog_bar=True, logger=False, on_step=True, on_epoch=False)
+        self.log("total_loss", unweighted_total, prog_bar=True, logger=False, on_step=True, on_epoch=False)
         self.log("batch_size", sample["size"], prog_bar=True, logger=False, on_step=True, on_epoch=False)
         self.log("lr", self.lr_schedulers().get_last_lr()[0], prog_bar=True, logger=False, on_step=True, on_epoch=False)
         # logs to tensorboard
@@ -358,11 +379,14 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
                     obj=save_obj,
                     f=pathlib.Path(self.logger.log_dir) / filename,
                 )
-            losses = {
-                "total_loss": sum(losses.values()),
-                **losses,
+            loss_means = {
+                name: lv.mean for name, lv in losses.items()
             }
-            for k, v in losses.items():
+            loss_means = {
+                "total_loss": sum(loss_means.values()),
+                **loss_means,
+            }
+            for k, v in loss_means.items():
                 self.val_losses[k].update(v, weight=sample["size"])
 
     def on_validation_epoch_end(self):
