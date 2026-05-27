@@ -307,7 +307,7 @@ class AugmentationConfig(ConfigBaseModel):
 
 class IterativeRankingConfig(ConfigBaseModel):
     enabled: bool = False
-    k: int = Field(4, ge=2)
+    rank_size: int = Field(4, ge=2)
     gamma: float = Field(0.9, gt=0.0, le=1.0)
     update_every_n_epochs: int = Field(1, ge=1)
 
@@ -317,12 +317,12 @@ class LossConfig(ConfigBaseModel):
 
 
 class DataLoaderConfig(ConfigBaseModel):
-    max_concat_size: int | None = Field(None, ge=2)
-    max_concat_length: int | None = Field(None, ge=1)
-    max_batch_frames: int = Field(50000, gt=0)
+    max_concat_size: int | None = Field(None, ge=1)
+    max_concat_frames: int | None = Field(None, ge=1)
     max_batch_size: int = Field(64, gt=0)
-    max_val_batch_frames: int = Field(20000, gt=0)
+    max_batch_frames: int = Field(50000, gt=0)
     max_val_batch_size: int = Field(1, gt=0)
+    max_val_batch_frames: int = Field(20000, gt=0)
     frame_count_grid: int = Field(6, ge=1)
     num_workers: int = Field(4, ge=0)
     prefetch_factor: int = Field(2, ge=0)

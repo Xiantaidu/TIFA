@@ -17,7 +17,7 @@ training:
   loss: {}
   iterative_ranking:
     enabled: true
-    k: 4
+    rank_size: 4
     gamma: 0.9
     update_every_n_epochs: 1
   validation: {}

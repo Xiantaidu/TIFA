@@ -38,7 +38,7 @@ class SelfSupervisedModule(BaseLightningModule, RankingModule):
             self.data_dir, "train",
             augmentation_config=self.training_config.augmentation,
             max_concat_size=dl_cfg.max_concat_size,
-            max_concat_length=dl_cfg.max_concat_length,
+            max_concat_frames=dl_cfg.max_concat_frames,
         )
 
     def build_valid_dataset(self) -> BaseDataset:
@@ -51,14 +51,14 @@ class SelfSupervisedModule(BaseLightningModule, RankingModule):
                 augmentation_deterministic=True,
                 augmentation_return_dirty=True,
                 max_concat_size=dl_cfg.max_concat_size,
-                max_concat_length=dl_cfg.max_concat_length,
+                max_concat_frames=dl_cfg.max_concat_frames,
                 concat_deterministic=True,
             )
         else:
             return TextOnlyDataset(
                 self.data_dir, "valid",
                 max_concat_size=dl_cfg.max_concat_size,
-                max_concat_length=dl_cfg.max_concat_length,
+                max_concat_frames=dl_cfg.max_concat_frames,
                 concat_deterministic=True,
             )
 
@@ -89,12 +89,12 @@ class SelfSupervisedModule(BaseLightningModule, RankingModule):
 
     def _compute_ranking(self, sample):
         widths = sample["widths"]  # [B, S_max] padded with 1
-        k = self.training_config.iterative_ranking.k
+        rank_size = self.training_config.iterative_ranking.rank_size
         B = sample["size"]
         S_max = widths.shape[1]
         device = sample["spectrogram"].device
 
-        choices = sample_paths_uniform(widths, k)  # [B, k, S_max]
+        choices = sample_paths_uniform(widths, rank_size)  # [B, rank_size, S_max]
 
         results: list[SegmentRewards] = []
         with torch.no_grad():
@@ -111,19 +111,19 @@ class SelfSupervisedModule(BaseLightningModule, RankingModule):
                     w = int(widths[b, s].item())
                     if w <= 1:
                         continue
-                    # k alt choices for this segment, one per sampled path
-                    alts = choices[b, :, s]  # [k]
+                    # rank_size alt choices for this segment, one per sampled path
+                    alts = choices[b, :, s]  # [rank_size]
                     # Score each alt, then rank best→worst
-                    scores = torch.zeros(k, device=device, dtype=torch.long)
-                    for j in range(k):
+                    scores = torch.zeros(rank_size, device=device, dtype=torch.long)
+                    for j in range(rank_size):
                         scores[j] = self.score_subpath(
                             item_data, s, int(alts[j].item()),
                         )
                     _, rank_order = scores.sort(descending=True)
-                    rewards = rank_rewards(k).to(device)
+                    rewards = rank_rewards(rank_size).to(device)
                     # Accumulate rank-based rewards into segment vector
                     vec = torch.zeros(w, device=device, dtype=torch.long)
-                    for j in range(k):
+                    for j in range(rank_size):
                         alt_idx = int(alts[rank_order[j]].item())
                         vec[alt_idx] += rewards[j].item()
                     results.append(SegmentRewards(item_idx, s, vec))

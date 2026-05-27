@@ -79,7 +79,7 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
             augmentation_deterministic: bool = False,
             augmentation_return_dirty: bool = False,
             max_concat_size: int | None = None,
-            max_concat_length: int | None = None,
+            max_concat_frames: int | None = None,
             concat_deterministic: bool = False,
     ):
         super().__init__()
@@ -96,12 +96,12 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
         self.augmentation_chains: dict[int, ComposedAugmentation] = {}
         self.mel_spectrogram = None
         self.max_concat_size = max_concat_size
-        self.max_concat_length = max_concat_length
+        self.max_concat_frames = max_concat_frames
         self.concat_deterministic = concat_deterministic
         self._n_original = len(self.info["lengths"])
         self._group_indices: list[list[int]] | None = None
         self._setup()
-        if self.max_concat_size is not None or self.max_concat_length is not None:
+        if self.max_concat_size is not None or self.max_concat_frames is not None:
             self._form_groups(0)
 
     def __getitem__(self, index):
@@ -121,7 +121,7 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
 
     def set_epoch(self, epoch: int):
         self.epoch.value = epoch
-        if self.max_concat_size is not None or self.max_concat_length is not None:
+        if self.max_concat_size is not None or self.max_concat_frames is not None:
             self._form_groups(epoch)
         if self.augmentation_config is not None and not self.augmentation_deterministic:
             self._build_chains(numpy.random.default_rng())
@@ -197,11 +197,11 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
                 self.max_concat_size is not None
                 and len(current) >= self.max_concat_size
             )
-            exceed_length = (
-                self.max_concat_length is not None
-                and current_frames + frames > self.max_concat_length
+            exceed_frames = (
+                self.max_concat_frames is not None
+                and current_frames + frames > self.max_concat_frames
             )
-            if current and (exceed_size or exceed_length):
+            if current and (exceed_size or exceed_frames):
                 groups.append(current)
                 current = []
                 current_frames = 0

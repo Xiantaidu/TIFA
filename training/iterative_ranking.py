@@ -28,9 +28,9 @@ class RankingModule(typing.Protocol):
     def set_best_paths(self, best_paths: dict[int, dict[int, int]] | None) -> None: ...
 
 
-def rank_rewards(k: int) -> Tensor:
-    """Rank-based rewards with step 2 centered on zero, best first. k=4 → [3,1,-1,-3]."""
-    return torch.arange(k - 1, -k, -2, dtype=torch.long)
+def rank_rewards(rank_size: int) -> Tensor:
+    """Rank-based rewards with step 2 centered on zero, best first. rank_size=4 → [3,1,-1,-3]."""
+    return torch.arange(rank_size - 1, -rank_size, -2, dtype=torch.long)
 
 
 class PathRanker:

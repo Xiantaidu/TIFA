@@ -35,7 +35,7 @@ class SupervisedModule(BaseLightningModule):
             self.data_dir, "train",
             augmentation_config=self.training_config.augmentation,
             max_concat_size=dl_cfg.max_concat_size,
-            max_concat_length=dl_cfg.max_concat_length,
+            max_concat_frames=dl_cfg.max_concat_frames,
         )
 
     def build_valid_dataset(self) -> BaseDataset:
@@ -49,7 +49,7 @@ class SupervisedModule(BaseLightningModule):
                 augmentation_return_dirty=True,
                 ensure_original_tokens=True,
                 max_concat_size=dl_cfg.max_concat_size,
-                max_concat_length=dl_cfg.max_concat_length,
+                max_concat_frames=dl_cfg.max_concat_frames,
                 concat_deterministic=True,
             )
         else:
@@ -57,7 +57,7 @@ class SupervisedModule(BaseLightningModule):
                 self.data_dir, "valid",
                 ensure_original_tokens=True,
                 max_concat_size=dl_cfg.max_concat_size,
-                max_concat_length=dl_cfg.max_concat_length,
+                max_concat_frames=dl_cfg.max_concat_frames,
                 concat_deterministic=True,
             )
 
@@ -67,7 +67,7 @@ class SupervisedModule(BaseLightningModule):
             self.aux_data_dir, "aux",
             augmentation_config=self.training_config.augmentation,
             max_concat_size=dl_cfg.max_concat_size,
-            max_concat_length=dl_cfg.max_concat_length,
+            max_concat_frames=dl_cfg.max_concat_frames,
         )
 
     def train_dataloader(self):
