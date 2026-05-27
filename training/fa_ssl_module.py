@@ -13,7 +13,7 @@ from training.iterative_ranking import RankingModule, SegmentRewards, rank_rewar
 from training.pl_module_base import BaseLightningModule, LossValue
 
 
-class SelfSupervisedModule(BaseLightningModule, RankingModule):
+class ForcedAlignmentSSLModule(BaseLightningModule, RankingModule):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

@@ -62,7 +62,7 @@ def main(
         find_latest_checkpoints,
         train_model,
     )
-    from training.supervised_module import SupervisedModule
+    from training.fa_module import ForcedAlignmentModule
 
     config = load_config_for_training(config, overrides=override)
     ckpt_save_dir = work_dir / exp_name
@@ -86,7 +86,7 @@ def main(
             resume_from = latest_checkpoints[0]
 
     train_model(
-        config=config, pl_module_cls=SupervisedModule,
+        config=config, pl_module_cls=ForcedAlignmentModule,
         ckpt_save_dir=ckpt_save_dir, log_save_dir=log_save_dir,
         resume_from=resume_from
     )

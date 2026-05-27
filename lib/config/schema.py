@@ -323,11 +323,11 @@ class DataLoaderConfig(ConfigBaseModel):
     max_batch_frames: int = Field(50000, gt=0)
     max_val_batch_size: int = Field(1, gt=0)
     max_val_batch_frames: int = Field(20000, gt=0)
+    aux_multiplier: float = Field(1.0, gt=0.0)
+    aux_warmup_epochs: int = Field(0, ge=0)
     frame_count_grid: int = Field(6, ge=1)
     num_workers: int = Field(4, ge=0)
     prefetch_factor: int = Field(2, ge=0)
-    aux_multiplier: float = Field(1.0, gt=0.0)
-    aux_warmup_epochs: int = Field(0, ge=0)
 
 
 class OptimizerConfig(ConfigBaseModel):

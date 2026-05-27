@@ -14,7 +14,7 @@ from training.data import (
 from training.pl_module_base import BaseLightningModule
 
 
-class SupervisedModule(BaseLightningModule):
+class ForcedAlignmentModule(BaseLightningModule):
 
     @classmethod
     def resolve_data_dirs(cls, config: RootConfig) -> tuple[pathlib.Path, pathlib.Path | None]:
@@ -127,7 +127,7 @@ class SupervisedModule(BaseLightningModule):
         # When computing aux losses, zero them during warmup:
         #   if self._is_aux_warmup():
         #       aux_loss = torch.zeros_like(aux_loss)
-        raise NotImplementedError("SupervisedModule.forward_model is a stub")
+        raise NotImplementedError("ForcedAlignmentModule.forward_model is a stub")
 
     def plot_validation_results(self, sample, outputs):
         pass
