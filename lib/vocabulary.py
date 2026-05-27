@@ -181,7 +181,7 @@ def _disjoint_sets(
     All *names* that land in the same set map to the same sorted tuple.
 
     Elements not referenced by any union form a singleton set with no
-    name in the result (they still participate in union–find, so they can
+    name in the result (they still participate in union-find, so they can
     be pulled into a named set by a union that references them).
     """
     parent: dict[_T, _T] = {}

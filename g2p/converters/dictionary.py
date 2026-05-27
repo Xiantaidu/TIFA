@@ -17,7 +17,7 @@ def load_pronunciation_dict(path: str | Path) -> dict[str, list[list[str]]]:
     Format: ``<key>\\t<ph1> <ph2> ...``
     Duplicate keys accumulate pronunciations.
 
-    Returns ``{key: [[ph, ...], ...]}`` — a mapping from lookup keys to
+    Returns ``{key: [[ph, ...], ...]}``  --  a mapping from lookup keys to
     lists of alternative phoneme sequences.
     """
     result: dict[str, list[list[str]]] = {}

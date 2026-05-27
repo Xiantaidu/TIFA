@@ -1,7 +1,7 @@
-"""Mandarin and Cantonese G2P converters — delegate to the cpp-pinyin engine.
+"""Mandarin and Cantonese G2P converters  --  delegate to the cpp-pinyin engine.
 
-Both derive from ``PronunciationScriptDictionaryConverter``: hanzi → pinyin/jyutping
-(text-to-script, via the cpp-pinyin engine) then pinyin/jyutping → phonemes
+Both derive from ``PronunciationScriptDictionaryConverter``: hanzi -> pinyin/jyutping
+(text-to-script, via the cpp-pinyin engine) then pinyin/jyutping -> phonemes
 (script-to-phonemes, via dictionary lookup when *dict_path* is given).
 """
 

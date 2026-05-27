@@ -24,7 +24,7 @@ def encode_phrase_key(chars: list[str]) -> int:
 
 
 def load_word_dict(path: str | Path) -> dict[str, list[list[str]]]:
-    """Load word.txt → dict[char] = [[pron1], [pron2], ...].
+    """Load word.txt -> dict[char] = [[pron1], [pron2], ...].
 
     Original format: 汉字:拼音1,拼音2,...
     """
@@ -47,7 +47,7 @@ def load_word_dict(path: str | Path) -> dict[str, list[list[str]]]:
 
 
 def load_phrase_dict(path: str | Path) -> dict[int, list[list[str]]]:
-    """Load phrases_dict.txt → dict[int_key] = [[pron1, pron2, ...], ...].
+    """Load phrases_dict.txt -> dict[int_key] = [[pron1, pron2, ...], ...].
 
     Original format: 词组:拼音1,拼音2,拼音3,拼音4
     """
@@ -72,7 +72,7 @@ def load_phrase_dict(path: str | Path) -> dict[int, list[list[str]]]:
 
 
 def load_phrase_map(path: str | Path) -> set[str]:
-    """Load phrases_map.txt → set of polyphonic character strings.
+    """Load phrases_map.txt -> set of polyphonic character strings.
 
     Original format: 汉字:digits
     """
@@ -89,7 +89,7 @@ def load_phrase_map(path: str | Path) -> set[str]:
 
 
 def load_trans_dict(path: str | Path) -> dict[str, str]:
-    """Load trans_word.txt → dict[trad_char] = simp_char.
+    """Load trans_word.txt -> dict[trad_char] = simp_char.
 
     Original format: 繁体字:简体字
     """

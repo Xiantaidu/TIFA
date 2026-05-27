@@ -29,7 +29,7 @@ class RankingModule(typing.Protocol):
 
 
 def rank_rewards(rank_size: int) -> Tensor:
-    """Rank-based rewards with step 2 centered on zero, best first. rank_size=4 → [3,1,-1,-3]."""
+    """Rank-based rewards with step 2 centered on zero, best first. rank_size=4 -> [3,1,-1,-3]."""
     return torch.arange(rank_size - 1, -rank_size, -2, dtype=torch.long)
 
 

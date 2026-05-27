@@ -51,7 +51,7 @@ class StripWhitespacePreprocessor(Preprocessor):
 class RemoveAccentsPreprocessor(Preprocessor):
     """Decompose accented characters and strip combining marks.
 
-    ``café résumé naïve`` → ``cafe resume naive``.
+    ``café résumé naïve`` -> ``cafe resume naive``.
     """
 
     def process(self, tokens: list[str]) -> list[str]:

@@ -45,7 +45,7 @@ def apply_sequence_edits(
     device = tokens.device
 
     # ------------------------------------------------------------------
-    # Phase 1 — Sample edits and build target sequence
+    # Phase 1  --  Sample edits and build target sequence
     # ------------------------------------------------------------------
 
     do_sub = [random.random() < p_sub for _ in range(N)]
@@ -91,7 +91,7 @@ def apply_sequence_edits(
     M = len(tgt_tokens)
 
     # ------------------------------------------------------------------
-    # Phase 2 — Levenshtein DP alignment
+    # Phase 2  --  Levenshtein DP alignment
     # ------------------------------------------------------------------
 
     INF = N + M + 1
@@ -112,7 +112,7 @@ def apply_sequence_edits(
             insert = dp[i][j - 1] + 1
             dp[i][j] = min(match, delete, insert)
 
-    # Backtrack — prefer delete over match when both are optimal, so that
+    # Backtrack  --  prefer delete over match when both are optimal, so that
     # real target tokens match the *earliest* available original position
     # (leftmost-match = first-of-consecutive-identicals prior).
     alignment: list[int | None] = [None] * M
@@ -128,7 +128,7 @@ def apply_sequence_edits(
             j -= 1
 
     # ------------------------------------------------------------------
-    # Phase 3 — Assign spans and rebuild regions
+    # Phase 3  --  Assign spans and rebuild regions
     # ------------------------------------------------------------------
 
     orig_spans = spans.tolist()

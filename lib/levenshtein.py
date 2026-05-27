@@ -144,7 +144,7 @@ def _align_multipath(paths: list[list[str]]) -> list[list[list[str]]]:
     if len(paths) == 1:
         return [[list(paths[0])]]
 
-    # Progressive alignment — build profile row by row
+    # Progressive alignment  --  build profile row by row
     al_a, al_b = _levenshtein_align(paths[0], paths[1])
     rows: list[list[str | None]] = [
         list(al_a),

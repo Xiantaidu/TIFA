@@ -17,7 +17,7 @@ _TONE_VOWELS = frozenset("aeiouv")
 def _tone_mark_to_parts(pinyin: str) -> tuple[str, int]:
     """Convert tone-mark pinyin to (base, tone_number).
 
-    ``zhōng`` → ``(zhong, 1)``,  ``le`` → ``(le, 5)``
+    ``zhōng`` -> ``(zhong, 1)``,  ``le`` -> ``(le, 5)``
     """
     result: list[str] = []
     tone = 5
@@ -36,7 +36,7 @@ def _tone_mark_to_parts(pinyin: str) -> tuple[str, int]:
 def _tone3_to_parts(pinyin: str) -> tuple[str, int]:
     """Split TONE3 pinyin into (base, tone_number).
 
-    ``zhong1`` → ``(zhong, 1)``, ``zung1`` → ``(zung, 1)``
+    ``zhong1`` -> ``(zhong, 1)``, ``zung1`` -> ``(zung, 1)``
     """
     if pinyin and pinyin[-1].isdigit():
         return pinyin[:-1], int(pinyin[-1])
@@ -158,7 +158,7 @@ def _vowel_with_tone(vowel: str, tone: int) -> str:
 
 
 def _replace_u_v(s: str, v_to_u: bool) -> str:
-    """Replace ü ↔ v based on v_to_u flag."""
+    """Replace ü <-> v based on v_to_u flag."""
     if v_to_u:
         return s.replace("v", "ü")
     return s

@@ -56,9 +56,9 @@ class PronunciationScriptConverter(Converter, ABC):
 
     Two-phase convert:
 
-    1. ``text_to_script`` — text tokens are rendered into pronunciation-
-       script tokens (pinyin, jyutping, romaji, …).
-    2. ``script_to_phonemes`` — each script token is mapped to one or
+    1. ``text_to_script``  --  text tokens are rendered into pronunciation-
+       script tokens (pinyin, jyutping, romaji, ...).
+    2. ``script_to_phonemes``  --  each script token is mapped to one or
        more phoneme sequences (typically via dictionary lookup).
     """
 

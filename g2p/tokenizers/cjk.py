@@ -36,10 +36,10 @@ def _is_small_kana(c: str) -> bool:
 @tokenizer(id="cjk")
 class CJKTokenizer(Tokenizer):
     """Split CJK characters individually while grouping non-CJK characters into runs.
-    ``你好hello世界`` → ``[你, 好, hello, 世界]``.
+    ``你好hello世界`` -> ``[你, 好, hello, 世界]``.
 
     Kana digraphs (kana + small kana) are kept together:
-    ``きゃ`` → ``[きゃ]``."""
+    ``きゃ`` -> ``[きゃ]``."""
 
     def tokenize(self, tokens: list[str]) -> list[str]:
         result: list[str] = []
@@ -49,7 +49,7 @@ class CJKTokenizer(Tokenizer):
             while i < len(chars):
                 c = chars[i]
                 if _is_kana(c) and i + 1 < len(chars) and _is_small_kana(chars[i + 1]):
-                    # kana digraph — group with following small kana
+                    # kana digraph  --  group with following small kana
                     result.append(c + chars[i + 1])
                     i += 2
                 elif _is_cjk(c):

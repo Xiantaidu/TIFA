@@ -247,7 +247,7 @@ class SpectrogramStretching(Augmentation):
             ))
 
     def should_apply(self) -> bool:
-        return True  # always bridges wav → mel
+        return True  # always bridges wav -> mel
 
     def apply(self, ctx: AugmentationContext) -> None:
         waveform_tensor = torch.from_numpy(ctx.waveform).unsqueeze(0)
@@ -390,11 +390,11 @@ def build_augmentation_chain(
 ) -> ComposedAugmentation:
     """Build a single unified augmentation chain for a sample.
 
-    Stages: wav→wav, wav→mel (with optional time/pitch stretch), mel→mel.
+    Stages: wav->wav, wav->mel (with optional time/pitch stretch), mel->mel.
     """
     transforms: list[Augmentation] = []
 
-    # Stage 1: wav → wav
+    # Stage 1: wav -> wav
     for aug in [
         ColoredNoise(config=config, generator=generator),
         NaturalNoise(config=config, generator=generator),
@@ -403,12 +403,12 @@ def build_augmentation_chain(
         if aug.should_apply():
             transforms.append(aug)
 
-    # Stage 2: wav → mel (always, since mel is computed online)
+    # Stage 2: wav -> mel (always, since mel is computed online)
     transforms.append(SpectrogramStretching(
         config=config, generator=generator, mel_spectrogram=mel_spectrogram,
     ))
 
-    # Stage 3: mel → mel
+    # Stage 3: mel -> mel
     for aug in [
         LoudnessScaling(config=config, generator=generator),
         SpectrogramMasking(config=config, generator=generator, num_bins=mel_spectrogram.n_mels),

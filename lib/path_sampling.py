@@ -1,6 +1,6 @@
 """Tensorized path sampling for text-only alignment.
 
-All operations are fully batched — no Python loops.
+All operations are fully batched  --  no Python loops.
 
 Two sampling strategies:
 
@@ -86,7 +86,7 @@ def extract_tokens(
     choices = choices.reshape(choices.shape[0], -1, choices.shape[-1])  # [B, K, S_max]
     K = choices.shape[1]
 
-    # seg_ids [B, N_max] — 0-based; padding → 0 after clamp
+    # seg_ids [B, N_max]  --  0-based; padding -> 0 after clamp
     seg_ids = segments.clamp(min=1) - 1
 
     # alt per (item, path, grid_pos)

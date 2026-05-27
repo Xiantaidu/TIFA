@@ -113,7 +113,7 @@ class ForcedAlignmentSSLModule(BaseLightningModule, RankingModule):
                         continue
                     # rank_size alt choices for this segment, one per sampled path
                     alts = choices[b, :, s]  # [rank_size]
-                    # Score each alt, then rank best→worst
+                    # Score each alt, then rank best->worst
                     scores = torch.zeros(rank_size, device=device, dtype=torch.long)
                     for j in range(rank_size):
                         scores[j] = self.score_subpath(

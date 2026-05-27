@@ -17,9 +17,9 @@ from .binarizer_base import (
 )
 
 TEXTS_ITEM_ATTRIBUTES = [
-    "paths",  # [N, max(widths)] int64 — path grid, 0 = no token
-    "segments",  # [N] int64 — 1-based segment index per grid position
-    "widths",  # [max(segments)] int64 — number of alternative sub-paths per segment
+    "paths",  # [N, max(widths)] int64  --  path grid, 0 = no token
+    "segments",  # [N] int64  --  1-based segment index per grid position
+    "widths",  # [max(segments)] int64  --  number of alternative sub-paths per segment
 ]
 
 

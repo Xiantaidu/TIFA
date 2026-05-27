@@ -1,4 +1,4 @@
-"""Japanese kana G2P converter — kana → romaji → phonemes.
+"""Japanese kana G2P converter  --  kana -> romaji -> phonemes.
 """
 
 from g2p.registry import converter
@@ -123,13 +123,13 @@ def _apply_sokuon(romaji_list: list[str]) -> list[str]:
 class JapaneseKanaConverter(PronunciationScriptDictionaryConverter):
     """Japanese kana-to-phoneme converter.
 
-    Two-phase: kana → romaji (text-to-script), then
-    romaji → phonemes (script-to-phonemes via dictionary).
+    Two-phase: kana -> romaji (text-to-script), then
+    romaji -> phonemes (script-to-phonemes via dictionary).
 
     Parameters mirror cpp-kana:
         *dict_path*: romaji-to-phoneme dictionary.
         *double_written_sokuon*: enable gemination resolution
-          (``cl`` + consonant → consonant gemination).
+          (``cl`` + consonant -> consonant gemination).
     """
 
     def __init__(
@@ -170,7 +170,7 @@ class JapaneseKanaConverter(PronunciationScriptDictionaryConverter):
         # Convert katakana to hiragana for unified lookup
         hiragana_tokens = [_kata_to_hira(t) for t in tokens]
 
-        # Kana → romaji; ー (long vowel) and ゜ (handakuten) produce empty
+        # Kana -> romaji; ー (long vowel) and ゜ (handakuten) produce empty
         romaji_list: list[str] = []
         for t in hiragana_tokens:
             if t in ("ー", "゜"):
@@ -180,7 +180,7 @@ class JapaneseKanaConverter(PronunciationScriptDictionaryConverter):
             if r is not None:
                 romaji_list.append(r)
             else:
-                romaji_list.append(t)  # passthrough — shouldn't happen if claim() is correct
+                romaji_list.append(t)  # passthrough  --  shouldn't happen if claim() is correct
 
         if self._double_written_sokuon:
             romaji_list = _apply_sokuon(romaji_list)

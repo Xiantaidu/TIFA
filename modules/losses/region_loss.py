@@ -55,7 +55,7 @@ class FrameAlignmentLoss(nn.Module):
             ~mask_token.unsqueeze(1) & valid_frame.unsqueeze(2), float('-inf')
         )
 
-        target = regions - 1  # [B, T], gap → -1
+        target = regions - 1  # [B, T], gap -> -1
         loss = F.cross_entropy(
             sim.reshape(B * T, N),
             target.reshape(B * T),
@@ -70,7 +70,7 @@ class SpanContrastiveLoss(nn.Module):
     Bidirectional InfoNCE between span-pooled frame features and token embeddings.
 
     Pools frame features within each phoneme's [start, end) span, then computes
-    InfoNCE contrastive loss in both frame→token and token→frame directions.
+    InfoNCE contrastive loss in both frame->token and token->frame directions.
 
     Inputs:
         x_frame: [B, T, C] frame features from backbone
@@ -114,7 +114,7 @@ class SpanContrastiveLoss(nn.Module):
         S = S.masked_fill(~mask_token.unsqueeze(1), float('-inf'))  # invalid keys
         S = S.masked_fill(~mask_token.unsqueeze(2), float('-inf'))  # invalid queries
 
-        # F→T: each span picks its own token
+        # F->T: each span picks its own token
         log_prob_f2t = F.log_softmax(S, dim=-1)
         diag_f2t = log_prob_f2t.diagonal(dim1=-2, dim2=-1)
         loss_f2t = -diag_f2t[mask_token].mean()
@@ -122,7 +122,7 @@ class SpanContrastiveLoss(nn.Module):
         if not self.bidirectional:
             return loss_f2t
 
-        # T→F: each token picks its own span
+        # T->F: each token picks its own span
         log_prob_t2f = F.log_softmax(S.transpose(-1, -2), dim=-1)
         diag_t2f = log_prob_t2f.diagonal(dim1=-2, dim2=-1)
         loss_t2f = -diag_t2f[mask_token].mean()

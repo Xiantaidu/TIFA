@@ -592,7 +592,7 @@ class DynamicBatchSampler(torch.utils.data.distributed.DistributedSampler):
         batches = _greedy_pack()
 
         if self.target_num_batches is not None:
-            # Merge: too many batches — merge the smallest adjacent pairs
+            # Merge: too many batches  --  merge the smallest adjacent pairs
             while len(batches) > self.target_num_batches:
                 best_i = -1
                 best_size = float("inf")
@@ -614,7 +614,7 @@ class DynamicBatchSampler(torch.utils.data.distributed.DistributedSampler):
                 batches[best_i].extend(batches[best_i + 1])
                 del batches[best_i + 1]
 
-            # Reduce: too few batches — halve effective size and repack
+            # Reduce: too few batches  --  halve effective size and repack
             while len(batches) < self.target_num_batches:
                 if effective_max_batch_size <= 1:
                     raise RuntimeError(

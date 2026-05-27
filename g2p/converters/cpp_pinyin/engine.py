@@ -33,13 +33,13 @@ class PinyinEngine:
         self._phrases: dict[int, list[list[str]]] = {}
         self._polyphonic: set[str] = set()
         self._trans: dict[str, str] = {}
-        # word.txt → char -> [[pron1], [pron2], ...]
+        # word.txt -> char -> [[pron1], [pron2], ...]
         self._words: dict[str, list[list[str]]] = {}
-        # phrases_dict.txt + user_dict.txt → int_key -> [[p1,p2,...], ...]
+        # phrases_dict.txt + user_dict.txt -> int_key -> [[p1,p2,...], ...]
         self._phrases: dict[int, list[list[str]]] = {}
-        # phrases_map.txt → set of polyphonic chars
+        # phrases_map.txt -> set of polyphonic chars
         self._polyphonic: set[str] = set()
-        # trans_word.txt → trad -> simp
+        # trans_word.txt -> trad -> simp
         self._trans: dict[str, str] = {}
 
         self._load()
@@ -78,7 +78,7 @@ class PinyinEngine:
             neutral_tone5: Whether to append '5' for neutral tone.
 
         Returns:
-            list[list[str]] — one phoneme list per input char, in order.
+            list[list[str]]  --  one phoneme list per input char, in order.
         """
         result: list[list[str]] = []
         cursor = 0
@@ -93,7 +93,7 @@ class PinyinEngine:
                 cursor += 1
                 continue
 
-            # ---- Not polyphonic — fast path (first pronunciation) ----
+            # ---- Not polyphonic  --  fast path (first pronunciation) ----
             if ch not in self._polyphonic:
                 pron = apply_tone(
                     candidates[0][0], style,
@@ -103,7 +103,7 @@ class PinyinEngine:
                 cursor += 1
                 continue
 
-            # ---- Polyphonic — sliding-window phrase matching ----
+            # ---- Polyphonic  --  sliding-window phrase matching ----
             found = False
 
             # Closure matching cpp-pinyin's emitPhrase lambda
@@ -164,7 +164,7 @@ class PinyinEngine:
                         back_start, 2, False,
                     )
 
-            # ---- No phrase found — default pronunciation ----
+            # ---- No phrase found  --  default pronunciation ----
             if not found:
                 default = apply_tone(
                     candidates[0][0], style,
@@ -180,11 +180,11 @@ class PinyinEngine:
     # ------------------------------------------------------------------
 
     def _to_simplified(self, ch: str) -> str:
-        """Simplify a single character (trad → simp)."""
+        """Simplify a single character (trad -> simp)."""
         return self._trans.get(ch, ch)
 
     def simplify(self, chars: list[str]) -> list[str]:
-        """Apply traditional→simplified conversion to every char."""
+        """Apply traditional->simplified conversion to every char."""
         return [self._trans.get(ch, ch) for ch in chars]
 
     def has_polyphonic(self, ch: str) -> bool:

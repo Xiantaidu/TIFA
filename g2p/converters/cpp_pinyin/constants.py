@@ -25,7 +25,7 @@ SPECIAL_KANA = frozenset(
     "ャュョゃゅょァィゥェォぁぃぅぇぉ"
 )
 
-# ---- Tone mark → (base char, tone digit) ----
+# ---- Tone mark -> (base char, tone digit) ----
 # Covers the exact same set as ManTone.cpp tone_map
 TONE_MAP: dict[int, tuple[str, str]] = {}
 

@@ -89,7 +89,7 @@ class LSTMConverter(LexiconConverter):
             None, {"input_ids": src}
         )
 
-        # Decoder — autoregressive greedy
+        # Decoder  --  autoregressive greedy
         batch_size = 1
         decoder_input = np.full(
             (batch_size, 1), self._bos_idx, dtype=np.int64
