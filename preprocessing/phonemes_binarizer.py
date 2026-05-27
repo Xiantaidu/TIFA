@@ -83,6 +83,7 @@ class PhonemeTimingBinarizer(BaseBinarizer):
             regions[start:end] = len(tokens)
         tokens = numpy.array(tokens, dtype=numpy.int64)
         spans = numpy.array(spans, dtype=numpy.int64).reshape((-1, 2))
+        valid_frames = int((regions != 0).sum())
         data = {
             "tokens": tokens,
             "spans": spans,
@@ -94,4 +95,5 @@ class PhonemeTimingBinarizer(BaseBinarizer):
             length=length,
             text=" ".join(symbols),
             data=data,
+            derived={"valid_frames": valid_frames},
         )

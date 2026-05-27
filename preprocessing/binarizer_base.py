@@ -36,7 +36,12 @@ class DataSample:
     length: int
     text: str
     data: dict[str, int | float | numpy.ndarray]
+    derived: dict[str, int] = None
     error: str = None
+
+    def __post_init__(self):
+        if self.derived is None:
+            self.derived = {}
 
 
 class BaseBinarizer(abc.ABC):
@@ -134,6 +139,10 @@ class BaseBinarizer(abc.ABC):
                         if k not in attr_lengths:
                             attr_lengths[k] = []
                         attr_lengths[k].append(v.shape[0])
+                for k, v in sample.derived.items():
+                    if k not in attr_lengths:
+                        attr_lengths[k] = []
+                    attr_lengths[k].append(v)
                 duration = sample.length * self.timestep
                 total_duration += duration
         builder.finalize()

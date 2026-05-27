@@ -39,7 +39,7 @@ class VocabularyBuilder:
     def counter(self) -> Mapping[str, int]:
         return MappingProxyType(self._symbol_counts)
 
-    def build(self) -> Vocabulary:
+    def build(self) -> "Vocabulary":
         observed = set(self._symbol_counts.keys())
         seen_group_names: set[str] = set()
         for group in self.merged_groups:
