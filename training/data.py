@@ -349,7 +349,7 @@ class PhonemeTimingDataset(BaseDataset):
         if self._vocab_size is not None and not self._ensure_original_tokens:
             edit_cfg = self.augmentation_config.sequence_edit
             if random.random() < edit_cfg.prob:
-                new_tokens, new_spans, new_regions, fake = apply_sequence_edits(
+                new_tokens, new_spans, new_regions, authentic = apply_sequence_edits(
                     tokens=sample["tokens"],
                     spans=sample["spans"],
                     regions=sample["regions"],
@@ -361,13 +361,13 @@ class PhonemeTimingDataset(BaseDataset):
                 sample["tokens"] = new_tokens
                 sample["spans"] = new_spans
                 sample["regions"] = new_regions
-                sample["fake"] = fake
+                sample["authentic"] = authentic
             else:
-                sample["fake"] = torch.zeros(
+                sample["authentic"] = torch.ones(
                     sample["tokens"].shape[0], dtype=torch.bool,
                 )
         else:
-            sample["fake"] = torch.zeros(
+            sample["authentic"] = torch.ones(
                 sample["tokens"].shape[0], dtype=torch.bool,
             )
 
@@ -408,7 +408,7 @@ class PhonemeTimingDataset(BaseDataset):
             "tokens": torch.cat([s["tokens"] for s in processed]),
             "spans": torch.cat(shifted_spans),
             "regions": torch.cat(shifted_regions),
-            "fake": torch.cat([s["fake"] for s in processed]),
+            "authentic": torch.cat([s["authentic"] for s in processed]),
             "T": torch.tensor(sum(s["T"].item() for s in processed)),
             "N": torch.tensor(sum(N_vals)),
         }
