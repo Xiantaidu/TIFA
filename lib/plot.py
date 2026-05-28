@@ -23,7 +23,7 @@ def cross_similarity_to_figure(sim, regions=None, title=None) -> "plt.Figure":
     N, T = sim.shape
     fig_width = max(12, min(T / 60, 20))
     fig_height = max(4, min(N / 4, 10))
-    fig = plt.figure(figsize=(fig_width, fig_height), dpi=150)
+    fig = plt.figure(figsize=(fig_width, fig_height))
     plt.pcolormesh(sim, vmin=-1, vmax=1, cmap="RdBu_r", zorder=1)
     plt.colorbar(label="cosine similarity")
 
