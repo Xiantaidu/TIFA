@@ -14,6 +14,7 @@ import tqdm
 from lib import logging
 from lib.config.schema import ModelConfig, RootConfig, TrainingConfig
 from lib.reflection import build_lr_scheduler_from_config, build_optimizer_from_config
+from lib.vocabulary import Vocabulary
 from .data import BaseDataset, DynamicBatchSampler
 from .weight_averaging import ExponentialMovingAverage
 
@@ -46,6 +47,12 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         self.aux_data_dir = aux_data_dir
         self.model_config = model_config
         self.training_config = training_config
+        self.vocab = Vocabulary.from_file(self.data_dir / "vocabulary.json")
+        if self.vocab.vocab_size > model_config.max_vocab_size:
+            raise ValueError(
+                f"Vocabulary size {self.vocab.vocab_size} exceeds "
+                f"max_vocab_size {model_config.max_vocab_size}"
+            )
 
         self.model: nn.Module = self.build_model()
         self.losses: dict[str, nn.Module] = nn.ModuleDict()

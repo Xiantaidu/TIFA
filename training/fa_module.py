@@ -4,8 +4,7 @@ import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
-from lib.config.schema import RootConfig, ModelConfig, LossConfig
-from lib.vocabulary import Vocabulary
+from lib.config.schema import RootConfig, LossConfig
 from modules.forced_alignment import ForcedAlignmentModel
 from modules.losses.region_loss import FrameAlignmentLoss, SpanContrastiveLoss
 from modules.losses.token_loss import TokenAuthenticityLoss
@@ -29,13 +28,7 @@ class ForcedAlignmentModule(BaseLightningModule):
         )
 
     def build_model(self) -> nn.Module:
-        model_config: ModelConfig = self.model_config
-        vocab = Vocabulary.from_file(self.data_dir / "vocabulary.json")
-        if vocab.vocab_size > model_config.max_vocab_size:
-            raise ValueError(
-                f"Vocabulary size {vocab.vocab_size} exceeds max_vocab_size {model_config.max_vocab_size}"
-            )
-        return ForcedAlignmentModel(model_config)
+        return ForcedAlignmentModel(self.model_config)
 
     def register_losses_and_metrics(self) -> None:
         loss_cfg: LossConfig = self.training_config.loss
