@@ -179,14 +179,14 @@ class ForcedAlignmentModule(BaseLightningModule):
                 "token_logits": token_logits,
             }
 
-        batch_valid_frames = (t_mask & (regions > 0)).sum().item()
-        batch_tokens = n_mask.sum().item()
-        group_valid_frames = self._group_count(batch_idx, "valid_frames")
+        batch_frames = T.sum().item()
+        batch_tokens = N.sum().item()
+        group_frames = self._group_count(batch_idx, "lengths")
         group_tokens = self._group_count(batch_idx, "tokens")
 
         frame_alignment_loss = LossValue(
             mean=self.losses["frame_alignment"](x_features, token_features, regions, t_mask, n_mask),
-            batch_count=batch_valid_frames, group_count=group_valid_frames,
+            batch_count=batch_frames, group_count=group_frames,
         )
         span_contrastive_loss = LossValue(
             mean=self.losses["span_contrastive"](x_features, token_features, main_sample["spans"], t_mask, n_mask),
