@@ -1,5 +1,3 @@
-from typing import Optional
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -264,29 +262,29 @@ class EBF(nn.Module):
 
         if use_ls:
             if not skip_first_ffn:
-                self.lay_scale1 = LayerScale(dim)
-            self.lay_scale2 = LayerScale(dim)
+                self.layer_scale1 = LayerScale(dim)
+            self.layer_scale2 = LayerScale(dim)
             if not skip_out_ffn:
-                self.lay_scale3 = LayerScale(dim)
+                self.layer_scale3 = LayerScale(dim)
         else:
             if not skip_first_ffn:
-                self.lay_scale1 = nn.Identity()
-            self.lay_scale2 = nn.Identity()
+                self.layer_scale1 = nn.Identity()
+            self.layer_scale2 = nn.Identity()
             if not skip_out_ffn:
-                self.lay_scale3 = nn.Identity()
+                self.layer_scale3 = nn.Identity()
 
     def forward(self, x, mask=None):
         if not self.skip_first_ffn:
             if mask is not None:
                 x = x.masked_fill(~mask.unsqueeze(-1), 0)
-            x = self.lay_scale1(self.ffn1(self.norm1(x))) * 0.5 + x
+            x = self.layer_scale1(self.ffn1(self.norm1(x))) * 0.5 + x
         if mask is not None:
             x = x.masked_fill(~mask.unsqueeze(-1), 0)
-        x = self.lay_scale2(self.attn(x)) + x
+        x = self.layer_scale2(self.attn(x)) + x
         if mask is not None:
             x = x.masked_fill(~mask.unsqueeze(-1), 0)
         if not self.skip_out_ffn:
-            x = self.lay_scale3(self.ffn2(self.norm2(x))) * 0.5 + x
+            x = self.layer_scale3(self.ffn2(self.norm2(x))) * 0.5 + x
             if mask is not None:
                 x = x.masked_fill(~mask.unsqueeze(-1), 0)
         return x
@@ -480,7 +478,7 @@ class EBFAlignmentBackbone(nn.Module):
         # ============ Cross-Attention Layers (x <- token) ============
         self.cross_attn_layers = nn.ModuleList()
         self.ca_pre_norms = nn.ModuleList()
-        self.ca_lay_scales = nn.ModuleList()
+        self.ca_layer_scales = nn.ModuleList()
 
         for _ in range(num_ca_layers):
             self.cross_attn_layers.append(
@@ -491,7 +489,7 @@ class EBFAlignmentBackbone(nn.Module):
                 )
             )
             self.ca_pre_norms.append(RMSNorm(dim))
-            self.ca_lay_scales.append(LayerScale(dim) if use_ls else nn.Identity())
+            self.ca_layer_scales.append(LayerScale(dim) if use_ls else nn.Identity())
 
         # ============ Frame Decoder (kernel=31) ============
         self.audio_decoder = nn.ModuleList([
@@ -553,7 +551,7 @@ class EBFAlignmentBackbone(nn.Module):
             )
             attn.append(attn_w)
 
-            x = residual + self.ca_lay_scales[i](ca_out)
+            x = residual + self.ca_layer_scales[i](ca_out)
 
             if t_mask is not None:
                 x = x.masked_fill(~t_mask.unsqueeze(-1), 0)
