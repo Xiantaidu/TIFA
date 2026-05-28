@@ -173,12 +173,13 @@ class ForcedAlignmentModule(BaseLightningModule):
         t_mask = torch.arange(max_T, device=device).unsqueeze(0) < T.unsqueeze(1)
         n_mask = torch.arange(max_N, device=device).unsqueeze(0) < N.unsqueeze(1)
 
-        out_x, out_tok = self.model(spectrogram, tokens, t_mask, n_mask)
+        out_x, out_tok, attn = self.model(spectrogram, tokens, t_mask, n_mask)
 
         if infer:
             return {
                 "out_x": out_x,
                 "out_tok": out_tok,
+                "attn": attn,
             }
 
         loss_cfg: LossConfig = self.training_config.loss

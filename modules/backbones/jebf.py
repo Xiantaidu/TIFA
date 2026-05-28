@@ -265,17 +265,23 @@ class JEBF(nn.Module):
 class JEBFBackbone(nn.Module):
     """Two-stream joint-attention backbone.
 
-    Receives pre-embedded token and frame features, processes them through
+    Receives raw spectrogram (`x`, at `audio_in_dim`) and pre-embedded tokens
+    (`tok`, at `text_in_dim`), projects both to `dim`, then runs them through
     stacked JEBF layers with joint attention. No region-based masking --
     padding handled via masked_fill (EBF style).
 
-    Constructor signature: (in_dim, out_dim, **kwargs)
-    This matches the backbone protocol expected by ForcedAlignmentModel.
+    Constructor signature: (audio_in_dim, text_in_dim, out_dim, **kwargs)
+    Forward signature:     forward(x, tok, t_mask, n_mask)
+                           -> (out_x, out_tok, attn)
+    Matches the backbone protocol expected by ForcedAlignmentModel.
+    Note: JointAttention/SplitJointAttention do not expose an x->tok cross
+    attention matrix, so `attn` is always returned as an empty list.
     """
 
     def __init__(
             self,
-            in_dim: int,
+            audio_in_dim: int,
+            text_in_dim: int,
             out_dim: int,
             dim: int = 256,
             num_layers: int = 8,
@@ -310,9 +316,12 @@ class JEBFBackbone(nn.Module):
         self.use_out_norm = use_out_norm
         self.attn_type = attn_type
         self.dim = dim
+        self.audio_in_dim = audio_in_dim
+        self.text_in_dim = text_in_dim
         self.out_dim = out_dim
 
-        self.input_proj = nn.Linear(in_dim, dim)
+        self.audio_input_proj = nn.Linear(audio_in_dim, dim)
+        self.text_input_proj = nn.Linear(text_in_dim, dim)
 
         self.layers = nn.ModuleList([
             JEBF(
@@ -341,15 +350,17 @@ class JEBFBackbone(nn.Module):
     def forward(self, x, tok, t_mask, n_mask):
         """
         Args:
-            x:      [B, T, in_dim] frame features
-            tok:    [B, N, in_dim] token features (pre-embedded)
-            t_mask: [B, T]         valid mask for frames
-            n_mask: [B, N]         valid mask for tokens
+            x:      [B, T, audio_in_dim] raw spectrogram frames
+            tok:    [B, N, text_in_dim]  pre-embedded tokens
+            t_mask: [B, T]               valid mask for frames
+            n_mask: [B, N]               valid mask for tokens
         Returns:
             out_x:   [B, T, out_dim]
             out_tok: [B, N, out_dim]
+            attn:    [] (joint attention has no exposed x->tok matrix)
         """
-        x = self.input_proj(x)
+        x = self.audio_input_proj(x)
+        tok = self.text_input_proj(tok)
 
         for layer in self.layers:
             x, tok = layer(tok, x, t_mask, n_mask)
@@ -361,4 +372,4 @@ class JEBFBackbone(nn.Module):
         out_x = self.output_proj_x(x)
         out_tok = self.output_proj_tok(tok)
 
-        return out_x, out_tok
+        return out_x, out_tok, []
