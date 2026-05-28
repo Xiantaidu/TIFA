@@ -11,17 +11,19 @@ class ForcedAlignmentModel(nn.Module):
     backbone that owns the spectrogram input projection.
 
     The backbone must follow the protocol:
-        __init__(audio_in_dim, text_in_dim, out_dim, **kwargs)
-        forward(x, tok, t_mask, n_mask) -> (out_x, out_tok, attn)
+        __init__(x_in_dim, token_in_dim, x_out_dim, token_out_dim, **kwargs)
+        forward(x, token, t_mask, n_mask) -> (x_features, token_features)
 
     where
-        x:       [B, T, audio_in_dim] raw spectrogram frames
-        tok:     [B, N, text_in_dim]  pre-embedded phoneme tokens
-        t_mask:  [B, T] bool, True = valid frame
-        n_mask:  [B, N] bool, True = valid token
-        out_x:   [B, T, out_dim]
-        out_tok: [B, N, out_dim]
-        attn:    list of [B, H, T, N] cross-attention weights (one per CA layer)
+        x:             [B, T, x_in_dim]      raw spectrogram frames
+        token:         [B, N, token_in_dim]  pre-embedded phoneme tokens
+        t_mask:        [B, T] bool, True = valid frame
+        n_mask:        [B, N] bool, True = valid token
+        x_features:    [B, T, x_out_dim]
+        token_features:[B, N, token_out_dim]
+
+    token_out_dim is out_dim + 1: the last channel is the authenticity logit,
+    sliced off by the holder.
     """
 
     def __init__(self, config: ModelConfig):
@@ -29,12 +31,47 @@ class ForcedAlignmentModel(nn.Module):
         self.token_embedding = nn.Embedding(
             config.max_vocab_size, config.embedding_dim, padding_idx=0,
         )
-        self.token_head = nn.Linear(config.embedding_dim, 1)
         self.backbone = build_object_from_class_name(
             config.backbone.cls, nn.Module,
-            config.in_dim,         # audio_in_dim (raw spectrogram bins)
-            config.embedding_dim,  # text_in_dim  (token embedding dim)
-            config.embedding_dim,  # out_dim
+            config.in_dim,          # x_in_dim
+            config.embedding_dim,   # token_in_dim
+            config.out_dim,         # x_out_dim
+            config.out_dim + 1,     # token_out_dim (features + logit)
+            **config.backbone.kwargs,
+        )
+
+    def forward(
+        self,
+        spectrogram: Tensor,
+        tokens: Tensor,
+        t_mask: Tensor,
+        n_mask: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        token = self.token_embedding(tokens)
+        x_features, token_out = self.backbone(spectrogram, token, t_mask, n_mask)
+        token_features = token_out[..., :-1]               # [B, N, out_dim]
+        token_logits = token_out[..., -1]                  # [B, N]
+        return x_features, token_features, token_logits
+
+
+class ForcedAlignmentSSLModel(nn.Module):
+    """SSL backbone holder.
+
+    Forward returns (x_features, token_features, attn) where attn is a list
+    of [B, H, T, N] cross-attention weight tensors.
+    """
+
+    def __init__(self, config: ModelConfig):
+        super().__init__()
+        self.token_embedding = nn.Embedding(
+            config.max_vocab_size, config.embedding_dim, padding_idx=0,
+        )
+        self.backbone = build_object_from_class_name(
+            config.backbone.cls, nn.Module,
+            config.in_dim,          # x_in_dim
+            config.embedding_dim,   # token_in_dim
+            config.out_dim,         # x_out_dim
+            config.out_dim,         # token_out_dim (no extra logit)
             **config.backbone.kwargs,
         )
 
@@ -45,7 +82,6 @@ class ForcedAlignmentModel(nn.Module):
         t_mask: Tensor,
         n_mask: Tensor,
     ) -> tuple[Tensor, Tensor, list[Tensor]]:
-        tok = self.token_embedding(tokens)              # [B, N, embedding_dim]
-        out_x, out_tok, attn = self.backbone(spectrogram, tok, t_mask, n_mask)
-        out_tok = self.token_head(out_tok).squeeze(-1)  # [B, N]
-        return out_x, out_tok, attn
+        token = self.token_embedding(tokens)
+        x_features, token_features, attn = self.backbone(spectrogram, token, t_mask, n_mask)
+        return x_features, token_features, attn

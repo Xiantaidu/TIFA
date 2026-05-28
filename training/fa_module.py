@@ -130,7 +130,8 @@ class ForcedAlignmentModule(BaseLightningModule):
         return ZippedDataLoader(super().val_dataloader())
 
     def validation_step(self, sample, batch_index):
-        super().validation_step(sample["main"], batch_index)
+        sample["indices"] = sample["main"]["indices"]
+        super().validation_step(sample, batch_index)
 
     def on_train_epoch_start(self):
         super().on_train_epoch_start()
@@ -173,13 +174,13 @@ class ForcedAlignmentModule(BaseLightningModule):
         t_mask = torch.arange(max_T, device=device).unsqueeze(0) < T.unsqueeze(1)
         n_mask = torch.arange(max_N, device=device).unsqueeze(0) < N.unsqueeze(1)
 
-        out_x, out_tok, attn = self.model(spectrogram, tokens, t_mask, n_mask)
+        x_features, token_features, token_logits = self.model(spectrogram, tokens, t_mask, n_mask)
 
         if infer:
             return {
-                "out_x": out_x,
-                "out_tok": out_tok,
-                "attn": attn,
+                "x_features": x_features,
+                "token_features": token_features,
+                "token_logits": token_logits,
             }
 
         loss_cfg: LossConfig = self.training_config.loss
@@ -191,19 +192,19 @@ class ForcedAlignmentModule(BaseLightningModule):
 
         losses = {}
         losses["frame_alignment"] = LossValue(
-            mean=self.losses["frame_alignment"](out_x, out_tok, regions, t_mask, n_mask)
+            mean=self.losses["frame_alignment"](x_features, token_features, regions, t_mask, n_mask)
                  * loss_cfg.frame_alignment.weight,
             batch_count=n_frames, group_count=group_frames,
         )
         losses["span_contrastive"] = LossValue(
-            mean=self.losses["span_contrastive"](out_x, out_tok, main_sample["spans"], t_mask, n_mask)
+            mean=self.losses["span_contrastive"](x_features, token_features, main_sample["spans"], t_mask, n_mask)
                  * loss_cfg.span_contrastive.weight,
             batch_count=n_tokens, group_count=group_tokens,
         )
         if "token_authenticity" in self.losses:
             losses["token_authenticity"] = LossValue(
                 mean=self.losses["token_authenticity"](
-                    out_tok, main_sample["authentic"], n_mask,
+                    token_logits, main_sample["authentic"], n_mask,
                 ) * loss_cfg.token_authenticity.weight,
                 batch_count=n_tokens, group_count=group_tokens,
             )
