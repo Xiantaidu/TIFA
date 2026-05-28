@@ -35,9 +35,9 @@ class ForcedAlignmentModel(nn.Module):
         tokens: Tensor,
         t_mask: Tensor,
         n_mask: Tensor,
-    ) -> tuple[Tensor, Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor]:
         x = self.spectrogram_proj(spectrogram)       # [B, T, embedding_dim]
         tok = self.token_embedding(tokens)             # [B, N, embedding_dim]
         out_x, out_tok = self.backbone(x, tok, t_mask, n_mask)
-        token_logits = self.token_head(out_tok).squeeze(-1)  # [B, N]
-        return out_x, out_tok, token_logits
+        out_tok = self.token_head(out_tok).squeeze(-1)  # [B, N]
+        return out_x, out_tok

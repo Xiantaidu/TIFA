@@ -173,13 +173,12 @@ class ForcedAlignmentModule(BaseLightningModule):
         t_mask = torch.arange(max_T, device=device).unsqueeze(0) < T.unsqueeze(1)
         n_mask = torch.arange(max_N, device=device).unsqueeze(0) < N.unsqueeze(1)
 
-        out_x, out_tok, token_logits = self.model(spectrogram, tokens, t_mask, n_mask)
+        out_x, out_tok = self.model(spectrogram, tokens, t_mask, n_mask)
 
         if infer:
             return {
                 "out_x": out_x,
                 "out_tok": out_tok,
-                "token_logits": token_logits,
             }
 
         loss_cfg: LossConfig = self.training_config.loss
@@ -203,7 +202,7 @@ class ForcedAlignmentModule(BaseLightningModule):
         if "token_authenticity" in self.losses:
             losses["token_authenticity"] = LossValue(
                 mean=self.losses["token_authenticity"](
-                    token_logits, main_sample["authentic"], n_mask,
+                    out_tok, main_sample["authentic"], n_mask,
                 ) * loss_cfg.token_authenticity.weight,
                 batch_count=n_tokens, group_count=group_tokens,
             )
