@@ -45,15 +45,17 @@ class ForcedAlignmentModule(BaseLightningModule):
 
         self.register_loss("frame_alignment", FrameAlignmentLoss(
             temperature=loss_cfg.frame_alignment.temperature,
-        ))
+        ), weight=loss_cfg.frame_alignment.weight)
         self.register_loss("span_contrastive", SpanContrastiveLoss(
             temperature=loss_cfg.span_contrastive.temperature,
             bidirectional=loss_cfg.span_contrastive.bidirectional,
-        ))
+        ), weight=loss_cfg.span_contrastive.weight)
 
         aug_cfg = self.training_config.augmentation
         if aug_cfg.token_perturbation.enabled or aug_cfg.sequence_edit.enabled:
-            self.register_loss("token_authenticity", TokenAuthenticityLoss())
+            self.register_loss(
+                "token_authenticity", TokenAuthenticityLoss(), weight=loss_cfg.token_authenticity.weight
+            )
 
     def build_train_dataset(self) -> BaseDataset:
         dl_cfg = self.training_config.dataloader
@@ -183,31 +185,31 @@ class ForcedAlignmentModule(BaseLightningModule):
                 "token_logits": token_logits,
             }
 
-        loss_cfg: LossConfig = self.training_config.loss
-
-        n_frames = (t_mask & (regions > 0)).sum().item()
-        n_tokens = n_mask.sum().item()
-        group_frames = self._group_count(batch_idx, "regions")
+        batch_valid_frames = (t_mask & (regions > 0)).sum().item()
+        batch_tokens = n_mask.sum().item()
+        group_valid_frames = self._group_count(batch_idx, "valid_frames")
         group_tokens = self._group_count(batch_idx, "tokens")
 
-        losses = {}
-        losses["frame_alignment"] = LossValue(
-            mean=self.losses["frame_alignment"](x_features, token_features, regions, t_mask, n_mask)
-                 * loss_cfg.frame_alignment.weight,
-            batch_count=n_frames, group_count=group_frames,
+        frame_alignment_loss = LossValue(
+            mean=self.losses["frame_alignment"](x_features, token_features, regions, t_mask, n_mask),
+            batch_count=batch_valid_frames, group_count=group_valid_frames,
         )
-        losses["span_contrastive"] = LossValue(
-            mean=self.losses["span_contrastive"](x_features, token_features, main_sample["spans"], t_mask, n_mask)
-                 * loss_cfg.span_contrastive.weight,
-            batch_count=n_tokens, group_count=group_tokens,
+        span_contrastive_loss = LossValue(
+            mean=self.losses["span_contrastive"](x_features, token_features, main_sample["spans"], t_mask, n_mask),
+            batch_count=batch_tokens, group_count=group_tokens,
         )
+        losses = {
+            "frame_alignment": frame_alignment_loss,
+            "span_contrastive": span_contrastive_loss,
+        }
         if "token_authenticity" in self.losses:
-            losses["token_authenticity"] = LossValue(
+            token_authenticity_loss = LossValue(
                 mean=self.losses["token_authenticity"](
                     token_logits, main_sample["authentic"], n_mask,
-                ) * loss_cfg.token_authenticity.weight,
-                batch_count=n_tokens, group_count=group_tokens,
+                ),
+                batch_count=batch_tokens, group_count=group_tokens,
             )
+            losses["token_authenticity"] = token_authenticity_loss
 
         return losses
 
