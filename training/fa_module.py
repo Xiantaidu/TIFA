@@ -1,11 +1,15 @@
 import pathlib
 
+import matplotlib.pyplot as plt
 import torch
+from lightning.pytorch.loggers import TensorBoardLogger
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
 from lib.config.schema import RootConfig, LossConfig
+from lib.plot import cross_similarity_to_figure
 from modules.forced_alignment import ForcedAlignmentModel
+from modules.functional import cross_cosine_similarity
 from modules.losses.region_loss import FrameAlignmentLoss, SpanContrastiveLoss
 from modules.losses.token_loss import TokenAuthenticityLoss
 from training.data import (
@@ -204,4 +208,38 @@ class ForcedAlignmentModule(BaseLightningModule):
         return losses
 
     def plot_validation_results(self, sample, outputs):
-        pass
+        main = sample["main"]
+        indices = main["indices"]
+        max_plots = self.training_config.validation.max_plots
+
+        x_features = outputs["x_features"]
+        token_features = outputs["token_features"]
+        regions = main["regions"]
+        T_all = main["T"]
+        N_all = main["N"]
+
+        for i in range(indices.shape[0]):
+            data_idx = int(indices[i].item())
+            if data_idx >= max_plots:
+                continue
+
+            T_i = int(T_all[i].item())
+            N_i = int(N_all[i].item())
+            if T_i == 0 or N_i == 0:
+                continue
+
+            xf = x_features[i, :T_i]
+            tf = token_features[i, :N_i]
+
+            sim = cross_cosine_similarity(xf, tf)  # [T_i, N_i]
+
+            fig = cross_similarity_to_figure(
+                sim.float().detach().cpu().numpy().T,  # [N_i, T_i]
+                regions=regions[i, :T_i].detach().cpu().numpy(),
+                title=f"cross_cosine_similarity (idx={data_idx}, T={T_i}, N={N_i})",
+            )
+            logger: TensorBoardLogger = self.logger
+            logger.experiment.add_figure(
+                f"similarity/{data_idx}", fig, global_step=self.global_step,
+            )
+            plt.close(fig)
