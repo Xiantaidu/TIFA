@@ -1,5 +1,18 @@
 import torch
 from torch import Tensor
+import torch.nn.functional as F
+
+
+def cross_cosine_similarity(x: Tensor, y: Tensor, temperature: float = 1.0) -> Tensor:
+    """
+    Compute cross-sequence cosine similarity matrix.
+    x: [..., T, C]  (e.g. frame features)
+    y: [..., N, C]  (e.g. token embeddings)
+    Returns: [..., T, N]
+    """
+    x_norm = F.normalize(x.float(), p=2, dim=-1, eps=1e-8)
+    y_norm = F.normalize(y.float(), p=2, dim=-1, eps=1e-8)
+    return (x_norm @ y_norm.transpose(-1, -2)) / temperature
 
 
 def interleave_spaces(

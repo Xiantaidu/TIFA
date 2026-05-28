@@ -42,7 +42,7 @@ class ForcedAlignmentModule(BaseLightningModule):
         ), weight=loss_cfg.span_contrastive.weight)
 
         aug_cfg = self.training_config.augmentation
-        if aug_cfg.token_perturbation.enabled or aug_cfg.sequence_edit.enabled:
+        if aug_cfg.sequence_edit.enabled:
             self.register_loss(
                 "token_authenticity", TokenAuthenticityLoss(), weight=loss_cfg.token_authenticity.weight
             )

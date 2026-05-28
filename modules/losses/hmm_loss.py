@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from modules.functional import cross_cosine_similarity
+
 
 def hmm_forward_loss_with_emission(
     emission: torch.Tensor,
@@ -53,8 +55,5 @@ class HMMForwardLoss(nn.Module):
         frame_lens: torch.Tensor,
         token_lens: torch.Tensor,
     ) -> torch.Tensor:
-        emission = torch.bmm(
-            F.normalize(x_features, dim=-1),
-            F.normalize(token_features, dim=-1).transpose(1, 2),
-        )  # [B, T_max, N_max]
+        emission = cross_cosine_similarity(x_features, token_features)  # [B, T_max, N_max]
         return hmm_forward_loss_with_emission(emission, frame_lens, token_lens)
