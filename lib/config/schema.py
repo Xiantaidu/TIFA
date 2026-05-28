@@ -126,7 +126,12 @@ class BackboneConfig(ConfigBaseModel):
 
 
 class ModelConfig(ConfigBaseModel):
-    pass
+    in_dim: int = Field(None, json_schema_extra={
+        "dynamic_expr": ref("binarizer.features.spectrogram.num_bins")
+    })
+    embedding_dim: int = 256
+    max_vocab_size: int = 4096
+    backbone: BackboneConfig = Field(...)
 
 
 class PitchShiftingAugmentationConfig(ConfigBaseModel):
@@ -312,8 +317,25 @@ class IterativeRankingConfig(ConfigBaseModel):
     update_every_n_epochs: int = Field(1, ge=1)
 
 
+class FrameAlignmentLossConfig(ConfigBaseModel):
+    weight: float = 1.0
+    temperature: float = 0.1
+
+
+class SpanContrastiveLossConfig(ConfigBaseModel):
+    weight: float = 1.0
+    temperature: float = 0.1
+    bidirectional: bool = True
+
+
+class TokenAuthenticityLossConfig(ConfigBaseModel):
+    weight: float = 0.1
+
+
 class LossConfig(ConfigBaseModel):
-    pass
+    frame_alignment: FrameAlignmentLossConfig = Field(default_factory=FrameAlignmentLossConfig)
+    span_contrastive: SpanContrastiveLossConfig = Field(default_factory=SpanContrastiveLossConfig)
+    token_authenticity: TokenAuthenticityLossConfig = Field(default_factory=TokenAuthenticityLossConfig)
 
 
 class DataLoaderConfig(ConfigBaseModel):

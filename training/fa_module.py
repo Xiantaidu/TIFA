@@ -1,9 +1,14 @@
+import json
 import pathlib
 
+import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
-from lib.config.schema import RootConfig
+from lib.config.schema import RootConfig, ModelConfig, LossConfig
+from modules.forced_alignment import ForcedAlignmentModel
+from modules.losses.region_loss import FrameAlignmentLoss, SpanContrastiveLoss
+from modules.losses.token_loss import TokenAuthenticityLoss
 from training.data import (
     BaseDataset,
     PhonemeTimingDataset,
@@ -11,7 +16,7 @@ from training.data import (
     DynamicBatchSampler,
     ZippedDataLoader,
 )
-from training.pl_module_base import BaseLightningModule
+from training.pl_module_base import BaseLightningModule, LossValue
 
 
 class ForcedAlignmentModule(BaseLightningModule):
@@ -24,10 +29,31 @@ class ForcedAlignmentModule(BaseLightningModule):
         )
 
     def build_model(self) -> nn.Module:
-        return nn.Linear(1, 1)
+        model_config: ModelConfig = self.model_config
+        vocab_path = self.data_dir / "vocabulary.json"
+        with open(vocab_path, "r", encoding="utf8") as f:
+            vocab = json.load(f)
+        vocab_size = max(vocab["symbols"].values()) + 1  # +1 for padding index 0
+        if vocab_size > model_config.max_vocab_size:
+            raise ValueError(
+                f"Vocabulary size {vocab_size} exceeds max_vocab_size {model_config.max_vocab_size}"
+            )
+        return ForcedAlignmentModel(model_config)
 
     def register_losses_and_metrics(self) -> None:
-        self.register_loss("dummy", nn.MSELoss())
+        loss_cfg: LossConfig = self.training_config.loss
+
+        self.register_loss("frame_alignment", FrameAlignmentLoss(
+            temperature=loss_cfg.frame_alignment.temperature,
+        ))
+        self.register_loss("span_contrastive", SpanContrastiveLoss(
+            temperature=loss_cfg.span_contrastive.temperature,
+            bidirectional=loss_cfg.span_contrastive.bidirectional,
+        ))
+
+        aug_cfg = self.training_config.augmentation
+        if aug_cfg.token_perturbation.enabled or aug_cfg.sequence_edit.enabled:
+            self.register_loss("token_authenticity", TokenAuthenticityLoss())
 
     def build_train_dataset(self) -> BaseDataset:
         dl_cfg = self.training_config.dataloader
@@ -103,6 +129,9 @@ class ForcedAlignmentModule(BaseLightningModule):
     def val_dataloader(self):
         return ZippedDataLoader(super().val_dataloader())
 
+    def validation_step(self, sample, batch_index):
+        super().validation_step(sample["main"], batch_index)
+
     def on_train_epoch_start(self):
         super().on_train_epoch_start()
         if self.aux_sampler is not None:
@@ -115,19 +144,71 @@ class ForcedAlignmentModule(BaseLightningModule):
             and self.current_epoch < self.training_config.dataloader.aux_warmup_epochs
         )
 
+    def _group_count(self, batch_idx: int | None, key: str) -> int:
+        if batch_idx is None:
+            return 0  # validation: weight falls back to 1.0 in training_step
+        batches = self.get_accumulation_group(batch_idx)
+        return sum(
+            self.train_dataset.get_metadata(key, idx)
+            for batch in batches for idx in batch
+        )
+
     def forward_model(self, sample: dict[str, Tensor], infer: bool, batch_idx=None):
         main_sample = sample["main"]
-        aux_sample = sample.get("aux")
-        main_sample: dict[str, Tensor]
-        aux_sample: dict[str, Tensor] | None
-        print(main_sample["spectrogram"].shape)
-        print(aux_sample["tokens"].shape if aux_sample is not None else "No aux sample")
-
-        # TODO: real model forward on main_sample and aux_sample.
+        # TODO: aux_sample not used yet.
         # When computing aux losses, zero them during warmup:
         #   if self._is_aux_warmup():
         #       aux_loss = torch.zeros_like(aux_loss)
-        raise NotImplementedError("ForcedAlignmentModule.forward_model is a stub")
+
+        spectrogram = main_sample["spectrogram"]
+        tokens = main_sample["tokens"]
+        regions = main_sample["regions"]
+        T = main_sample["T"]
+        N = main_sample["N"]
+
+        device = spectrogram.device
+        B, max_T = spectrogram.shape[:2]
+        max_N = tokens.shape[1]
+
+        t_mask = torch.arange(max_T, device=device).unsqueeze(0) < T.unsqueeze(1)
+        n_mask = torch.arange(max_N, device=device).unsqueeze(0) < N.unsqueeze(1)
+
+        out_x, out_tok, token_logits = self.model(spectrogram, tokens, t_mask, n_mask)
+
+        if infer:
+            return {
+                "out_x": out_x,
+                "out_tok": out_tok,
+                "token_logits": token_logits,
+            }
+
+        loss_cfg: LossConfig = self.training_config.loss
+
+        n_frames = (t_mask & (regions > 0)).sum().item()
+        n_tokens = n_mask.sum().item()
+        group_frames = self._group_count(batch_idx, "regions")
+        group_tokens = self._group_count(batch_idx, "tokens")
+
+        losses = {}
+        losses["frame_alignment"] = LossValue(
+            mean=self.losses["frame_alignment"](out_x, out_tok, regions, t_mask, n_mask)
+                 * loss_cfg.frame_alignment.weight,
+            batch_count=n_frames, group_count=group_frames,
+        )
+        losses["span_contrastive"] = LossValue(
+            mean=self.losses["span_contrastive"](out_x, out_tok, main_sample["spans"], t_mask, n_mask)
+                 * loss_cfg.span_contrastive.weight,
+            batch_count=n_tokens, group_count=group_tokens,
+        )
+        if "token_authenticity" in self.losses:
+            losses["token_authenticity"] = LossValue(
+                mean=self.losses["token_authenticity"](
+                    token_logits, main_sample["authentic"], n_mask,
+                ) * loss_cfg.token_authenticity.weight,
+                batch_count=n_tokens, group_count=group_tokens,
+            )
+
+        return losses
 
     def plot_validation_results(self, sample, outputs):
         pass

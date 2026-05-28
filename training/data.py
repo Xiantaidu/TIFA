@@ -108,8 +108,7 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
         if self._group_indices is not None:
             samples = [self._get_single_item(i) for i in self._group_indices[index]]
             result = self.concat_samples(samples)
-            result["_idx"] = index
-            result["_name"] = samples[0]["_name"]
+            result["_idx"] = torch.tensor(index, dtype=torch.long)
             result["_augmentation"] = {}
             return result
         return self._get_single_item(index)
@@ -255,8 +254,7 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
             sample["spectrogram"] = spectrogram
 
         return {
-            "_idx": index,
-            "_name": self.info["item_paths"][index],
+            "_idx": torch.tensor(index, dtype=torch.long),
             "_augmentation": augmentation,
             **sample,
         }
@@ -274,8 +272,7 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
             s.pop("_augmentation", None)
         batch = {
             "size": len(samples),
-            "indices": torch.LongTensor([s.pop("_idx") for s in samples]),
-            "names": [s.pop("_name") for s in samples],
+            "indices": torch.stack([s.pop("_idx") for s in samples]),
         }
         if len(samples) == 0:
             return batch
@@ -298,7 +295,8 @@ class PhonemeTimingDataset(BaseDataset):
         **kwargs,
     ):
         # Time stretching is not supported for token-spectrogram aligned datasets.
-        augmentation_config = augmentation_config.drop("time_stretching")
+        if augmentation_config is not None:
+            augmentation_config = augmentation_config.drop("time_stretching")
         super().__init__(
             *args,
             augmentation_config=augmentation_config,
