@@ -11,104 +11,114 @@ from modules.functional import cross_cosine_similarity
 # ---------------------------------------------------------------------------
 
 
-@numba.njit
-def _viterbi_decode(
-    sim: np.ndarray,  # [T, N] float32
-    T: int,
-    N: int,
-) -> np.ndarray:      # [N, 2] int64
-    """Viterbi decode with monotonicity constraint.
+@numba.njit(parallel=True, cache=True)
+def _viterbi_decode_batch(
+    sim: np.ndarray,    # [B, max_T, max_N] float32
+    T_all: np.ndarray,  # [B] int64
+    N_all: np.ndarray,  # [B] int64
+    max_N: int,
+) -> np.ndarray:        # [B, max_N, 2] int64
+    """Viterbi decode with monotonicity constraint, batched over samples.
 
-    States:
+    States (per sample):
       G_i (0 <= i <= N): index i       - gap, next phoneme is i
       P_i (0 <= i < N):  index N+1+i   - inside phoneme i
     """
-    if N == 0:
-        return np.zeros((0, 2), dtype=np.int64)
-
-    S = 2 * N + 1  # total states
+    B = sim.shape[0]
+    spans_out = np.zeros((B, max_N, 2), dtype=np.int64)
     NEG_INF = np.float32(-1e9)
 
-    dp_prev = np.full(S, NEG_INF, dtype=np.float32)
-    dp_cur = np.full(S, NEG_INF, dtype=np.float32)
-    back = np.full((T, S), -1, dtype=np.int32)
+    for b in numba.prange(B):
+        Ti = int(T_all[b])
+        Ni = int(N_all[b])
+        if Ni == 0:
+            continue
 
-    # t = 0
-    dp_prev[0] = np.float32(0.0)  # G_0
-    p0 = N + 1
-    dp_prev[p0] = sim[0, 0]  # P_0 from G_0
-    back[0, p0] = 0
+        S = 2 * Ni + 1
+        dp_prev = np.full(S, NEG_INF, dtype=np.float32)
+        dp_cur = np.full(S, NEG_INF, dtype=np.float32)
+        back = np.full((Ti, S), -1, dtype=np.int32)
 
-    for t in range(1, T):
-        dp_cur[:] = NEG_INF
-        # G_0: from G_0 only
-        # (gap emission is 0)
-        if dp_prev[0] > dp_cur[0]:
-            dp_cur[0] = dp_prev[0]
-            back[t, 0] = 0
+        # t = 0
+        dp_prev[0] = np.float32(0.0)  # G_0
+        p0 = Ni + 1
+        dp_prev[p0] = np.float32(sim[b, 0, 0])  # P_0 from G_0
+        back[0, p0] = 0
 
-        for i in range(N):
-            p_idx = N + 1 + i  # P_i
-            g_next = i + 1     # G_{i+1}
+        for t in range(1, Ti):
+            dp_cur[:] = NEG_INF
+            # G_0: from G_0 only (gap emission is 0)
+            if dp_prev[0] > dp_cur[0]:
+                dp_cur[0] = dp_prev[0]
+                back[t, 0] = 0
 
-            # P_i: from P_i (stay), G_i (start), or P_{i-1} (advance)
-            emit = np.float32(sim[t, i])
+            for i in range(Ni):
+                p_idx = Ni + 1 + i  # P_i
+                g_next = i + 1      # G_{i+1}
+                emit = np.float32(sim[b, t, i])
 
-            # Stay in P_i
-            if dp_prev[p_idx] > NEG_INF:
-                s = dp_prev[p_idx] + emit
-                if s > dp_cur[p_idx]:
-                    dp_cur[p_idx] = s
-                    back[t, p_idx] = p_idx
-            # Start from G_i
-            if dp_prev[i] > NEG_INF:
-                s = dp_prev[i] + emit
-                if s > dp_cur[p_idx]:
-                    dp_cur[p_idx] = s
-                    back[t, p_idx] = i
-            # Advance from P_{i-1}
-            if i > 0:
-                prev_p = N + 1 + (i - 1)
-                if dp_prev[prev_p] > NEG_INF:
-                    s = dp_prev[prev_p] + emit
+                # P_i: stay in P_i
+                if dp_prev[p_idx] > NEG_INF:
+                    s = dp_prev[p_idx] + emit
                     if s > dp_cur[p_idx]:
                         dp_cur[p_idx] = s
-                        back[t, p_idx] = prev_p
+                        back[t, p_idx] = p_idx
+                # P_i: start from G_i
+                if dp_prev[i] > NEG_INF:
+                    s = dp_prev[i] + emit
+                    if s > dp_cur[p_idx]:
+                        dp_cur[p_idx] = s
+                        back[t, p_idx] = i
+                # P_i: advance from P_{i-1}
+                if i > 0:
+                    prev_p = Ni + 1 + (i - 1)
+                    if dp_prev[prev_p] > NEG_INF:
+                        s = dp_prev[prev_p] + emit
+                        if s > dp_cur[p_idx]:
+                            dp_cur[p_idx] = s
+                            back[t, p_idx] = prev_p
 
-            # G_{i+1}: from G_{i+1} (stay) or P_i (finish)
-            if dp_prev[g_next] > NEG_INF:
-                if dp_prev[g_next] > dp_cur[g_next]:
-                    dp_cur[g_next] = dp_prev[g_next]
-                    back[t, g_next] = g_next
-            if dp_prev[p_idx] > NEG_INF:
-                if dp_prev[p_idx] > dp_cur[g_next]:
-                    dp_cur[g_next] = dp_prev[p_idx]
-                    back[t, g_next] = p_idx
+                # G_{i+1}: stay in G_{i+1}
+                if dp_prev[g_next] > NEG_INF:
+                    if dp_prev[g_next] > dp_cur[g_next]:
+                        dp_cur[g_next] = dp_prev[g_next]
+                        back[t, g_next] = g_next
+                # G_{i+1}: finish P_i
+                if dp_prev[p_idx] > NEG_INF:
+                    if dp_prev[p_idx] > dp_cur[g_next]:
+                        dp_cur[g_next] = dp_prev[p_idx]
+                        back[t, g_next] = p_idx
 
-        dp_prev, dp_cur = dp_cur, dp_prev
+            dp_prev, dp_cur = dp_cur, dp_prev
 
-    # Best end state at last frame
-    best_s = np.argmax(dp_prev)
-    # Backtrack
-    states = np.empty(T, dtype=np.int32)
-    s = best_s
-    for t in range(T - 1, -1, -1):
-        states[t] = s
-        s = back[t, s]
+        # Best end state at last frame
+        best_s = np.argmax(dp_prev)
+        # Backtrack
+        states = np.empty(Ti, dtype=np.int32)
+        s = best_s
+        for t in range(Ti - 1, -1, -1):
+            states[t] = s
+            s = back[t, s]
 
-    # Extract spans
-    spans = np.zeros((N, 2), dtype=np.int64)
-    for i in range(N):
-        p_idx = N + 1 + i
-        frames = np.where(states == p_idx)[0]
-        if len(frames) > 0:
-            spans[i, 0] = frames[0]
-            spans[i, 1] = frames[-1] + 1
-        else:
-            # Unreached token (T exhausted before N): place at last frame
-            spans[i, 0] = T - 1
-            spans[i, 1] = T - 1
-    return spans
+        # Extract spans
+        for i in range(Ni):
+            p_idx = Ni + 1 + i
+            first = -1
+            last = -1
+            for t in range(Ti):
+                if states[t] == p_idx:
+                    if first < 0:
+                        first = t
+                    last = t
+            if first >= 0:
+                spans_out[b, i, 0] = first
+                spans_out[b, i, 1] = last + 1
+            else:
+                # Unreached token (T exhausted before N): place at last frame
+                spans_out[b, i, 0] = Ti - 1
+                spans_out[b, i, 1] = Ti - 1
+
+    return spans_out
 
 
 def decode_alignment(
@@ -136,23 +146,11 @@ def decode_alignment(
     """
     sim = cross_cosine_similarity(x_frame, x_token, temperature)  # [B, T, N]
 
-    T_all = frame_lengths.long().cpu()
-    N_all = token_lengths.long().cpu()
-    max_N = int(N_all.max().item())
+    T_all = frame_lengths.long().cpu().numpy()
+    N_all = token_lengths.long().cpu().numpy()
+    max_N = int(N_all.max())
     sim_np = sim.float().detach().cpu().numpy()
 
-    spans_list = []
-    for i in range(sim.shape[0]):
-        Ti = int(T_all[i].item())
-        Ni = int(N_all[i].item())
+    spans_np = _viterbi_decode_batch(sim_np, T_all, N_all, max_N)
 
-        spans_i = _viterbi_decode(np.ascontiguousarray(sim_np[i, :Ti, :Ni]), Ti, Ni)
-
-        if Ni < max_N:
-            padded = np.zeros((max_N, 2), dtype=np.int64)
-            padded[:Ni] = spans_i
-            spans_i = padded
-
-        spans_list.append(torch.from_numpy(spans_i).to(x_frame.device))
-
-    return torch.stack(spans_list, dim=0)
+    return torch.from_numpy(spans_np).to(x_frame.device)
