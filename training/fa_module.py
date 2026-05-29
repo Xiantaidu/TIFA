@@ -307,25 +307,25 @@ class ForcedAlignmentModule(BaseLightningModule):
         group_tokens = self._group_count(batch_idx, "tokens")
 
         frame_alignment_loss = LossValue(
-            mean=self.losses["frame_alignment"](x_features, token_features, regions, t_mask, n_mask),
+            mean=self.losses[_FRAME_ALIGNMENT](x_features, token_features, regions, t_mask, n_mask),
             batch_count=batch_frames, group_count=group_frames,
         )
         span_contrastive_loss = LossValue(
-            mean=self.losses["span_contrastive"](x_features, token_features, main_sample["spans"], t_mask, n_mask),
+            mean=self.losses[_SPAN_CONTRASTIVE](x_features, token_features, main_sample["spans"], t_mask, n_mask),
             batch_count=batch_tokens, group_count=group_tokens,
         )
         losses = {
-            "frame_alignment": frame_alignment_loss,
-            "span_contrastive": span_contrastive_loss,
+            _FRAME_ALIGNMENT: frame_alignment_loss,
+            _SPAN_CONTRASTIVE: span_contrastive_loss,
         }
-        if "token_authenticity" in self.losses:
+        if _TOKEN_AUTHENTICITY in self.losses:
             token_authenticity_loss = LossValue(
-                mean=self.losses["token_authenticity"](
+                mean=self.losses[_TOKEN_AUTHENTICITY](
                     token_logits, main_sample["authentic"], n_mask,
                 ),
                 batch_count=batch_tokens, group_count=group_tokens,
             )
-            losses["token_authenticity"] = token_authenticity_loss
+            losses[_TOKEN_AUTHENTICITY] = token_authenticity_loss
 
         return losses
 
