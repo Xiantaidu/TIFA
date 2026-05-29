@@ -13,9 +13,36 @@ binarizer:
 
 model:
   arch: ForcedAlignmentSSLModel
+  embedding_dim: 256
+  max_vocab_size: 4096
+  backbone:
+    cls: modules.backbones.ebf.EBFEncoderBackbone
+    kwargs:
+      dim: 256
+      num_heads: 8
+      head_dim: 64
+      token_num_layers: 4
+      token_c_kernel_size: 7
+      token_m_kernel_size: 7
+      x_enc_num_layers: 4
+      x_enc_c_kernel_size: 31
+      x_enc_m_kernel_size: 31
+      num_ca_layers: 2
+      use_rope: true
+      ffn_type: glu
+  reconstructor:
+    cls: modules.backbones.ebf.EBFDecoderBackbone
+    kwargs:
+      dim: 256
+      num_layers: 4
+      num_heads: 8
+      head_dim: 64
+      c_kernel_size: 31
+      m_kernel_size: 31
+      use_rope: true
+      ffn_type: glu
 
 training:
-  loss: {}
   iterative_ranking:
     enabled: true
     rank_size: 4
