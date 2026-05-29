@@ -334,6 +334,7 @@ class SpanContrastiveLossConfig(ConfigBaseModel):
 
 class TokenAuthenticityLossConfig(ConfigBaseModel):
     weight: float = 0.1
+    pos_weight: float | None = None
 
 
 class LossConfig(ConfigBaseModel):

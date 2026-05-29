@@ -38,10 +38,10 @@ training:
       p_sub: 0.05
     sequence_edit:
       enabled: true
-      prob: 0.2
-      p_sub: 0.03
-      p_del: 0.02
-      p_ins: 0.02
+      prob: 0.3
+      p_sub: 0.08
+      p_del: 0.05
+      p_ins: 0.05
   loss:
     frame_alignment:
       weight: 1.0
@@ -52,6 +52,7 @@ training:
       bidirectional: true
     token_authenticity:
       weight: 1.0
+      pos_weight: 0.04
   validation:
     metrics_ber_tolerance: 5
     metrics_k_values: [20]
