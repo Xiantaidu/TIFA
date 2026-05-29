@@ -134,7 +134,6 @@ class ModelConfig(ConfigBaseModel):
         "dynamic_expr": ref("binarizer.features.spectrogram.num_bins")
     })
     embedding_dim: int = 256
-    out_dim: int = 256
     max_vocab_size: int = 4096
     backbone: BackboneConfig = Field(...)
     reconstructor: BackboneConfig | None = None

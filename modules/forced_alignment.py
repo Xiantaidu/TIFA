@@ -22,15 +22,15 @@ class ForcedAlignmentModel(nn.Module):
         forward(x, token, t_mask, n_mask) -> (x_features, token_features)
 
     where
-        x:             [B, T, x_in_dim]      raw spectrogram frames
-        token:         [B, N, token_in_dim]  pre-embedded phoneme tokens
+        x:             [B, T, x_in_dim]             raw spectrogram frames
+        token:         [B, N, token_in_dim]         pre-embedded phoneme tokens
         t_mask:        [B, T] bool, True = valid frame
         n_mask:        [B, N] bool, True = valid token
-        x_features:    [B, T, x_out_dim]
-        token_features:[B, N, token_out_dim]
+        x_features:    [B, T, embedding_dim]
+        token_features:[B, N, embedding_dim + 1]
 
-    token_out_dim is out_dim + 1: the last channel is the authenticity logit,
-    sliced off by the holder.
+    token_out_dim is embedding_dim + 1: the last channel is the authenticity
+    logit, sliced off by the holder.
     """
 
     def __init__(self, config: ModelConfig):
@@ -43,10 +43,10 @@ class ForcedAlignmentModel(nn.Module):
         )
         self.backbone = build_object_from_class_name(
             config.backbone.cls, nn.Module,
-            config.in_dim,          # x_in_dim
-            config.embedding_dim,   # token_in_dim
-            config.out_dim,         # x_out_dim
-            config.out_dim + 1,     # token_out_dim (features + logit)
+            config.in_dim,              # x_in_dim
+            config.embedding_dim,       # token_in_dim
+            config.embedding_dim,       # x_out_dim
+            config.embedding_dim + 1,   # token_out_dim (features + logit)
             **config.backbone.kwargs,
         )
 
