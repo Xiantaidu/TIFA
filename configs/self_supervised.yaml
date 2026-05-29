@@ -3,7 +3,6 @@ bases:
   - "configs/g2p.yaml"
 
 binarizer:
-  phoneme_timing_data_dir: "data/phones"
   text_only_data_dir: "data/texts"
   vocabulary:
     global_symbols: [AP, SP, EP, GS, sil, br, pau, cl]
@@ -48,4 +47,3 @@ training:
     rank_size: 4
     gamma: 0.9
     update_every_n_epochs: 1
-  validation: {}

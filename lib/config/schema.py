@@ -14,7 +14,8 @@ from .ops import (
 
 
 class ConfigurationScope:
-    pass
+    FA = 0x1
+    FA_SSL = 0x2
 
 
 class DynamicCheck:
@@ -104,8 +105,13 @@ class BinarizerFeaturesConfig(ConfigBaseModel):
 
 
 class BinarizerConfig(ConfigBaseModel):
-    phoneme_timing_data_dir: str = Field(...)
-    text_only_data_dir: str | None = Field(None)
+    phoneme_timing_data_dir: str = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.FA,
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA),
+    })
+    text_only_data_dir: str | None = Field(None, json_schema_extra={
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA_SSL),
+    })
     g2p: G2PPipelineConfig | None = Field(None)
     vocabulary: VocabularyConfig = Field(default_factory=VocabularyConfig)
     validation_count: int = Field(20, gt=0)
@@ -136,7 +142,10 @@ class ModelConfig(ConfigBaseModel):
     embedding_dim: int = 256
     max_vocab_size: int = 4096
     backbone: BackboneConfig = Field(...)
-    reconstructor: BackboneConfig | None = None
+    reconstructor: BackboneConfig | None = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.FA_SSL,
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA_SSL),
+    })
 
 
 class PitchShiftingAugmentationConfig(ConfigBaseModel):
@@ -251,8 +260,11 @@ class AugmentationConfig(ConfigBaseModel):
     colored_noise: ColoredNoiseAugmentationConfig = Field(...)
     natural_noise: NaturalNoiseAugmentationConfig = Field(...)
     rir_reverb: RIRReverbAugmentationConfig = Field(...)
-    sequence_edit: SequenceEditAugmentationConfig = Field(default_factory=SequenceEditAugmentationConfig)
-    token_perturbation: TokenPerturbationConfig = Field(default_factory=TokenPerturbationConfig)
+    token_perturbation: TokenPerturbationConfig = Field(...)
+    sequence_edit: SequenceEditAugmentationConfig = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.FA,
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA),
+    })
 
     @property
     def has_destructive_augmentations(self) -> bool:
@@ -339,9 +351,18 @@ class TokenAuthenticityLossConfig(ConfigBaseModel):
 
 
 class LossConfig(ConfigBaseModel):
-    frame_alignment: FrameAlignmentLossConfig = Field(default_factory=FrameAlignmentLossConfig)
-    span_contrastive: SpanContrastiveLossConfig = Field(default_factory=SpanContrastiveLossConfig)
-    token_authenticity: TokenAuthenticityLossConfig = Field(default_factory=TokenAuthenticityLossConfig)
+    frame_alignment: FrameAlignmentLossConfig = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.FA,
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA),
+    })
+    span_contrastive: SpanContrastiveLossConfig = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.FA,
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA),
+    })
+    token_authenticity: TokenAuthenticityLossConfig = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.FA,
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA),
+    })
 
 
 class DataLoaderConfig(ConfigBaseModel):

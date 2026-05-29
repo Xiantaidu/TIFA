@@ -33,10 +33,6 @@ training:
     aux_multiplier: 1.0
     aux_warmup_epochs: 10
   augmentation:
-    token_perturbation:
-      enabled: false
-      prob: 0.2
-      p_sub: 0.05
     sequence_edit:
       enabled: true
       prob: 0.3
@@ -57,4 +53,4 @@ training:
   validation:
     metrics_ber_tolerance: 5
     metrics_k_values: [20]
-    metrics_conjunction_k_values: [50]
+    metrics_conjunction_k_values: [20]
