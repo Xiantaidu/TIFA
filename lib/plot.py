@@ -13,12 +13,13 @@ def spectrogram_to_figure(spectrogram, title=None):
     return fig
 
 
-def cross_similarity_to_figure(sim, regions=None, title=None) -> "plt.Figure":
+def cross_similarity_to_figure(sim, regions=None, title=None, token_labels=None) -> "plt.Figure":
     """Plot cross cosine similarity matrix [N, T].
 
     sim: [N, T] float array, values in [-1, 1]
     regions: [T] int array, 1-based region index (0=gap), optional GT overlay
     title: optional title string
+    token_labels: optional list of N strings for y-axis tick labels
     """
     N, T = sim.shape
     fig_width = max(12, min(T / 60, 20))
@@ -42,6 +43,8 @@ def cross_similarity_to_figure(sim, regions=None, title=None) -> "plt.Figure":
 
     plt.xlabel("Frame")
     plt.ylabel("Token")
+    if token_labels is not None:
+        plt.yticks(range(N), token_labels[:N], fontsize=8)
     plt.xlim(0, T)
     plt.ylim(0, N)
     if title is not None:
@@ -82,5 +85,39 @@ def vocab_distribution_to_figure(symbol_counts: dict[str, int]) -> "plt.Figure":
         ax.set_ylabel("Count")
         ax.grid(axis="y", alpha=0.3)
         ax.set_ylim(0, max_count * 1.15)
+    fig.tight_layout()
+    return fig
+
+
+def topk_bar_figure(
+    labels: list[str],
+    values: list[float],
+    title: str,
+    top_n: int = 20,
+) -> "plt.Figure":
+    """Horizontal bar chart of label -> value, sorted by value descending.
+
+    The caller is responsible for formatting labels (e.g. resolving token
+    IDs to human-readable symbols).  At most *top_n* bars are shown.
+    """
+    pairs = sorted(zip(labels, values), key=lambda x: x[1], reverse=True)[:top_n]
+    sorted_labels = [p[0] for p in pairs]
+    sorted_values = [p[1] for p in pairs]
+
+    n = len(sorted_labels)
+    fig_height = max(4, n * 0.35)
+    fig, ax = plt.subplots(figsize=(10, fig_height))
+
+    ys = range(n)
+    ax.barh(ys, sorted_values, align="center")
+    ax.set_yticks(ys)
+    ax.set_yticklabels(sorted_labels)
+    ax.invert_yaxis()  # worst at top
+    ax.set_title(title)
+    ax.grid(axis="x", alpha=0.3)
+
+    for i, v in enumerate(sorted_values):
+        ax.text(v, i, f" {v:.4f}", va="center", fontsize=8)
+
     fig.tight_layout()
     return fig

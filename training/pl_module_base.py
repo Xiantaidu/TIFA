@@ -141,6 +141,15 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         """
         pass
 
+    def plot_validation_metrics(self) -> None:
+        """Generate aggregate metric plots (bar charts, etc.).
+
+        Called after all metrics have been computed and synced across ranks,
+        so ``compute_top_k()`` can read globally-aggregated state directly.
+        Override in subclasses that register top-k metrics.
+        """
+        pass
+
     def freeze_parameters(self):
         if not self.training_config.finetuning.freezing_enabled:
             return
@@ -432,6 +441,7 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
                 outputs = obj["outputs"]
                 self.plot_validation_results(sample, outputs)
                 file.unlink()
+        self.plot_validation_metrics()
         if self.use_ema:
             self.ema.restore()  # restore original parameters after validation
 

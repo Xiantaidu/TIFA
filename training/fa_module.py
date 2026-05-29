@@ -7,7 +7,7 @@ from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
 from lib.config.schema import RootConfig, LossConfig
-from lib.plot import cross_similarity_to_figure
+from lib.plot import cross_similarity_to_figure, topk_bar_figure
 from modules.decoding import decode_alignment
 from modules.forced_alignment import ForcedAlignmentModel
 from modules.functional import cross_cosine_similarity
@@ -27,6 +27,17 @@ from training.data import (
     ZippedDataLoader,
 )
 from training.pl_module_base import BaseLightningModule, LossValue
+
+# Metric name bases shared between _register_fa_metrics and plot_validation_metrics.
+_BER_ONSET = "BER/onset"
+_BER_OFFSET = "BER/offset"
+_B_MAE_ONSET = "B-MAE/onset"
+_B_MAE_OFFSET = "B-MAE/offset"
+_OVERLAP = "Overlap"
+_CONJ_MAE = "Conj-MAE/"
+
+_METRIC_BASES_K = (_BER_ONSET, _BER_OFFSET, _B_MAE_ONSET, _B_MAE_OFFSET, _OVERLAP)
+_METRIC_BASES_KC = (_CONJ_MAE,)
 
 
 class ForcedAlignmentModule(BaseLightningModule):
@@ -70,63 +81,63 @@ class ForcedAlignmentModule(BaseLightningModule):
 
         # Boundary Error Rate -- onset
         self.register_metric(
-            f"BER/onset{postfix}",
+            f"{_BER_ONSET}{postfix}",
             BoundaryErrorRate(tolerance=T, mode="onset"),
         )
         for k in K:
             self.register_metric(
-                f"BER/onset@{k}{postfix}",
+                f"{_BER_ONSET}@{k}{postfix}",
                 BoundaryErrorRate(tolerance=T, mode="onset", vocab_size=V, k=k),
             )
 
         # Boundary Error Rate -- offset
         self.register_metric(
-            f"BER/offset{postfix}",
+            f"{_BER_OFFSET}{postfix}",
             BoundaryErrorRate(tolerance=T, mode="offset"),
         )
         for k in K:
             self.register_metric(
-                f"BER/offset@{k}{postfix}",
+                f"{_BER_OFFSET}@{k}{postfix}",
                 BoundaryErrorRate(tolerance=T, mode="offset", vocab_size=V, k=k),
             )
 
         # Boundary MAE -- onset
         self.register_metric(
-            f"B-MAE/onset{postfix}",
+            f"{_B_MAE_ONSET}{postfix}",
             BoundaryMAE(mode="onset"),
         )
         for k in K:
             self.register_metric(
-                f"B-MAE/onset@{k}{postfix}",
+                f"{_B_MAE_ONSET}@{k}{postfix}",
                 BoundaryMAE(mode="onset", vocab_size=V, k=k),
             )
 
         # Boundary MAE -- offset
         self.register_metric(
-            f"B-MAE/offset{postfix}",
+            f"{_B_MAE_OFFSET}{postfix}",
             BoundaryMAE(mode="offset"),
         )
         for k in K:
             self.register_metric(
-                f"B-MAE/offset@{k}{postfix}",
+                f"{_B_MAE_OFFSET}@{k}{postfix}",
                 BoundaryMAE(mode="offset", vocab_size=V, k=k),
             )
 
         # Pair Conjunction MAE
         for k in KC:
             self.register_metric(
-                f"Conj-MAE/@{k}{postfix}",
+                f"{_CONJ_MAE}@{k}{postfix}",
                 PairConjunctionMAE(vocab_size=V, k=k),
             )
 
         # Overlap Ratio Collection
         self.register_metric(
-            f"Overlap{postfix}",
+            f"{_OVERLAP}{postfix}",
             OverlapRatioCollection(template=f"Overlap/{{}}{postfix}"),
         )
         for k in K:
             self.register_metric(
-                f"Overlap@{k}{postfix}",
+                f"{_OVERLAP}@{k}{postfix}",
                 OverlapRatioCollection(
                     template=f"Overlap/{{}}@{k}{postfix}", vocab_size=V, k=k,
                 ),
@@ -338,15 +349,83 @@ class ForcedAlignmentModule(BaseLightningModule):
             xf = x_features[i, :T_i]
             tf = token_features[i, :N_i]
 
+            token_ids = main["tokens"][i, :N_i].tolist()
+            token_labels = [
+                self.vocab.decode(int(tid), stringfy=True) or str(tid)
+                for tid in token_ids
+            ]
+
             sim = cross_cosine_similarity(xf, tf)  # [T_i, N_i]
 
             fig = cross_similarity_to_figure(
                 sim.float().detach().cpu().numpy().T,  # [N_i, T_i]
                 regions=regions[i, :T_i].detach().cpu().numpy(),
                 title=f"cross_cosine_similarity (idx={data_idx}, T={T_i}, N={N_i})",
+                token_labels=token_labels,
             )
             logger: TensorBoardLogger = self.logger
             logger.experiment.add_figure(
                 f"similarity/{data_idx}", fig, global_step=self.global_step,
             )
             plt.close(fig)
+
+    def plot_validation_metrics(self) -> None:
+        K = self.training_config.validation.metrics_k_values
+        KC = self.training_config.validation.metrics_conjunction_k_values
+        postfixes = [""]
+        if self.use_parallel_dirty_metrics:
+            postfixes.append("_dirty")
+
+        names: list[str] = []
+        if K:
+            k_max = max(K)
+            for base in _METRIC_BASES_K:
+                for pf in postfixes:
+                    names.append(f"{base}@{k_max}{pf}")
+        if KC:
+            kc_max = max(KC)
+            for pf in postfixes:
+                names.append(f"{_CONJ_MAE}@{kc_max}{pf}")
+
+        logger: TensorBoardLogger = self.logger
+
+        for name in names:
+            metric = self.metrics[name]
+            data = metric.compute_top_k()
+            if not data:
+                continue
+
+            first_k = next(iter(data))
+            first_v = data[first_k]
+
+            if isinstance(first_v, dict):
+                # OverlapRatioCollection: {sub_name: {id: value}}
+                for sub_name, sub_data in data.items():
+                    labels = [self.vocab.decode(tid, stringfy=True) or str(tid) for tid in sub_data]
+                    values = [v.item() for v in sub_data.values()]
+                    fig = topk_bar_figure(labels, values, f"{name} {sub_name}")
+                    logger.experiment.add_figure(
+                        f"topk/{name}/{sub_name}", fig, global_step=self.global_step,
+                    )
+                    plt.close(fig)
+            elif isinstance(first_k, tuple):
+                # PairConjunctionMAE: {(i, j): value}
+                labels = [
+                    f"{self.vocab.decode(i, stringfy=True) or str(i)} -> {self.vocab.decode(j, stringfy=True) or str(j)}"
+                    for i, j in data
+                ]
+                values = [v.item() for v in data.values()]
+                fig = topk_bar_figure(labels, values, name)
+                logger.experiment.add_figure(
+                    f"topk/{name}", fig, global_step=self.global_step,
+                )
+                plt.close(fig)
+            else:
+                # BoundaryErrorRate / BoundaryMAE: {id: value}
+                labels = [self.vocab.decode(tid, stringfy=True) or str(tid) for tid in data]
+                values = [v.item() for v in data.values()]
+                fig = topk_bar_figure(labels, values, name)
+                logger.experiment.add_figure(
+                    f"topk/{name}", fig, global_step=self.global_step,
+                )
+                plt.close(fig)

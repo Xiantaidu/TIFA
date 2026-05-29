@@ -143,26 +143,47 @@ class Vocabulary:
             *,
             symbol_to_id: dict[str, int],
     ):
-        self.symbol_to_id = symbol_to_id
+        self._symbol_to_id = symbol_to_id
+        id_to_symbols: dict[int, list[str]] = {}
+        for sym, idx in symbol_to_id.items():
+            id_to_symbols.setdefault(idx, []).append(sym)
+        self._id_to_symbols: dict[int, tuple[str, ...]] = {
+            idx: tuple(syms) for idx, syms in id_to_symbols.items()
+        }
 
     @property
     def vocab_size(self) -> int:
-        ids = self.symbol_to_id.values()
+        ids = self._symbol_to_id.values()
         return max(SPACE, *ids) + 1 if ids else SPACE + 1
 
     def __len__(self) -> int:
         return self.vocab_size
 
     def encode(self, symbol: str, language: str | None) -> int | None:
-        if symbol in self.symbol_to_id:
-            return self.symbol_to_id[symbol]
-        if language is not None and (prefixed_symbol := f"{language}/{symbol}") in self.symbol_to_id:
-            return self.symbol_to_id[prefixed_symbol]
+        if symbol in self._symbol_to_id:
+            return self._symbol_to_id[symbol]
+        if language is not None and (prefixed_symbol := f"{language}/{symbol}") in self._symbol_to_id:
+            return self._symbol_to_id[prefixed_symbol]
         return None
+
+    def decode(self, token: int, stringfy: bool = False) -> "tuple[str, ...] | str":
+        """Return the symbol(s) mapped to *token*.
+
+        Returns a tuple of all symbols that share this ID (more than one
+        when the ID represents a merged group).  If *stringfy* is True,
+        joins them with ``, `` and returns a single string.
+        Returns ``None`` for unknown tokens.
+        """
+        syms = self._id_to_symbols.get(token)
+        if syms is None:
+            return None
+        if stringfy:
+            return ", ".join(syms)
+        return syms
 
     def to_dict(self) -> dict:
         return {
-            "symbols": dict(self.symbol_to_id),
+            "symbols": dict(self._symbol_to_id),
         }
 
     def dump(self, path: str | pathlib.Path) -> None:
