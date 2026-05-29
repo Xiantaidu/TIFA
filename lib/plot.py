@@ -94,13 +94,16 @@ def topk_bar_figure(
     values: list[float],
     title: str,
     top_n: int = 20,
+    reverse: bool = True,
 ) -> "plt.Figure":
-    """Horizontal bar chart of label -> value, sorted by value descending.
+    """Horizontal bar chart of label -> value.
 
     The caller is responsible for formatting labels (e.g. resolving token
     IDs to human-readable symbols).  At most *top_n* bars are shown.
+    By default the worst (largest value) is at the top; pass
+    *reverse=False* when lower values are worse.
     """
-    pairs = sorted(zip(labels, values), key=lambda x: x[1], reverse=True)[:top_n]
+    pairs = sorted(zip(labels, values), key=lambda x: x[1], reverse=reverse)[:top_n]
     sorted_labels = [p[0] for p in pairs]
     sorted_values = [p[1] for p in pairs]
 

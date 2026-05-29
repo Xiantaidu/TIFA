@@ -36,9 +36,6 @@ _B_MAE_OFFSET = "B-MAE_offset"
 _OVERLAP = "Overlap"
 _CONJ_MAE = "Conj-MAE_"
 
-_METRIC_BASES_K = (_BER_ONSET, _BER_OFFSET, _B_MAE_ONSET, _B_MAE_OFFSET, _OVERLAP)
-_METRIC_BASES_KC = (_CONJ_MAE,)
-
 
 class ForcedAlignmentModule(BaseLightningModule):
 
@@ -377,56 +374,54 @@ class ForcedAlignmentModule(BaseLightningModule):
         if self.use_parallel_dirty_metrics:
             postfixes.append("_dirty")
 
-        names: list[str] = []
         if K:
-            k_max = max(K)
-            for base in _METRIC_BASES_K:
-                for pf in postfixes:
-                    names.append(f"{base}@{k_max}{pf}")
-        if KC:
-            kc_max = max(KC)
+            k = max(K)
             for pf in postfixes:
-                names.append(f"{_CONJ_MAE}@{kc_max}{pf}")
+                self._plot_boundary_topk(f"{_BER_ONSET}@{k}{pf}")
+                self._plot_boundary_topk(f"{_BER_OFFSET}@{k}{pf}")
+                self._plot_boundary_topk(f"{_B_MAE_ONSET}@{k}{pf}")
+                self._plot_boundary_topk(f"{_B_MAE_OFFSET}@{k}{pf}")
+                self._plot_overlap_topk(f"{_OVERLAP}@{k}{pf}")
+        if KC:
+            k = max(KC)
+            for pf in postfixes:
+                self._plot_conjunction_topk(f"{_CONJ_MAE}@{k}{pf}")
 
+    def _plot_boundary_topk(self, name: str) -> None:
+        data = self.metrics[name].compute_top_k()
+        if not data:
+            return
+        labels = [self.vocab.decode(tid, stringfy=True) or str(tid) for tid in data]
+        values = [v.item() for v in data.values()]
+        fig = topk_bar_figure(labels, values, name)
         logger: TensorBoardLogger = self.logger
+        logger.experiment.add_figure(f"topk/{name}", fig, global_step=self.global_step)
+        plt.close(fig)
 
-        for name in names:
-            metric = self.metrics[name]
-            data = metric.compute_top_k()
-            if not data:
-                continue
+    def _plot_conjunction_topk(self, name: str) -> None:
+        data = self.metrics[name].compute_top_k()
+        if not data:
+            return
+        labels = [
+            f"{self.vocab.decode(i, stringfy=True) or str(i)} -> {self.vocab.decode(j, stringfy=True) or str(j)}"
+            for (i, j) in data
+        ]
+        values = [v.item() for v in data.values()]
+        fig = topk_bar_figure(labels, values, name)
+        logger: TensorBoardLogger = self.logger
+        logger.experiment.add_figure(f"topk/{name}", fig, global_step=self.global_step)
+        plt.close(fig)
 
-            first_k = next(iter(data))
-            first_v = data[first_k]
-
-            if isinstance(first_v, dict):
-                # OverlapRatioCollection: {sub_name: {id: value}}
-                for sub_name, sub_data in data.items():
-                    labels = [self.vocab.decode(tid, stringfy=True) or str(tid) for tid in sub_data]
-                    values = [v.item() for v in sub_data.values()]
-                    fig = topk_bar_figure(labels, values, f"{name} {sub_name}")
-                    logger.experiment.add_figure(
-                        f"topk/{name}/{sub_name}", fig, global_step=self.global_step,
-                    )
-                    plt.close(fig)
-            elif isinstance(first_k, tuple):
-                # PairConjunctionMAE: {(i, j): value}
-                labels = [
-                    f"{self.vocab.decode(i, stringfy=True) or str(i)} -> {self.vocab.decode(j, stringfy=True) or str(j)}"
-                    for i, j in data
-                ]
-                values = [v.item() for v in data.values()]
-                fig = topk_bar_figure(labels, values, name)
-                logger.experiment.add_figure(
-                    f"topk/{name}", fig, global_step=self.global_step,
-                )
-                plt.close(fig)
-            else:
-                # BoundaryErrorRate / BoundaryMAE: {id: value}
-                labels = [self.vocab.decode(tid, stringfy=True) or str(tid) for tid in data]
-                values = [v.item() for v in data.values()]
-                fig = topk_bar_figure(labels, values, name)
-                logger.experiment.add_figure(
-                    f"topk/{name}", fig, global_step=self.global_step,
-                )
-                plt.close(fig)
+    def _plot_overlap_topk(self, name: str) -> None:
+        data = self.metrics[name].compute_top_k()
+        if not data:
+            return
+        logger: TensorBoardLogger = self.logger
+        for sub_name, sub_data in data.items():
+            labels = [self.vocab.decode(tid, stringfy=True) or str(tid) for tid in sub_data]
+            values = [v.item() for v in sub_data.values()]
+            fig = topk_bar_figure(labels, values, f"{name} {sub_name}", reverse=False)
+            logger.experiment.add_figure(
+                f"topk/{name}/{sub_name}", fig, global_step=self.global_step,
+            )
+            plt.close(fig)
