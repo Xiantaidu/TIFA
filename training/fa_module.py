@@ -29,12 +29,12 @@ from training.data import (
 from training.pl_module_base import BaseLightningModule, LossValue
 
 # Metric name bases shared between _register_fa_metrics and plot_validation_metrics.
-_BER_ONSET = "BER/onset"
-_BER_OFFSET = "BER/offset"
-_B_MAE_ONSET = "B-MAE/onset"
-_B_MAE_OFFSET = "B-MAE/offset"
+_BER_ONSET = "BER_onset"
+_BER_OFFSET = "BER_offset"
+_B_MAE_ONSET = "B-MAE_onset"
+_B_MAE_OFFSET = "B-MAE_offset"
 _OVERLAP = "Overlap"
-_CONJ_MAE = "Conj-MAE/"
+_CONJ_MAE = "Conj-MAE_"
 
 _METRIC_BASES_K = (_BER_ONSET, _BER_OFFSET, _B_MAE_ONSET, _B_MAE_OFFSET, _OVERLAP)
 _METRIC_BASES_KC = (_CONJ_MAE,)
@@ -133,13 +133,13 @@ class ForcedAlignmentModule(BaseLightningModule):
         # Overlap Ratio Collection
         self.register_metric(
             f"{_OVERLAP}{postfix}",
-            OverlapRatioCollection(template=f"Overlap/{{}}{postfix}"),
+            OverlapRatioCollection(template=f"{_OVERLAP}_{{}}{postfix}"),
         )
         for k in K:
             self.register_metric(
                 f"{_OVERLAP}@{k}{postfix}",
                 OverlapRatioCollection(
-                    template=f"Overlap/{{}}@{k}{postfix}", vocab_size=V, k=k,
+                    template=f"{_OVERLAP}_{{}}@{k}{postfix}", vocab_size=V, k=k,
                 ),
             )
 
