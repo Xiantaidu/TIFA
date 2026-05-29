@@ -72,21 +72,6 @@ def fast_random_mask_with_mask_idx(x: torch.Tensor, target_len: int, masks: torc
     out_tensor = fast_batch_index_select(x, idx1, masks=masks)
     return out_tensor, idx1,mask_idx1,target_len
 
-# def Rfast_random_mask(x: torch.Tensor, target_len: int):
-#     '''
-#
-#     :param x: B T C
-#     :param target_len: int
-#     :return:
-#     '''
-#     B, T, C = x.size()
-#     assert T > target_len
-#
-#     idx = fast_batch_randperm(B, target_len=T, device=x.device)
-#     idx1, indices = torch.sort(idx[:, :target_len], dim=-1, descending=False)
-#     out_tensor = Rfast_batch_index_select(x, idx1)
-#     return out_tensor, idx1
-
 
 def batch_randperm(batch, target_len, device='cpu'):
     '''
@@ -102,19 +87,6 @@ def batch_randperm(batch, target_len, device='cpu'):
     return temp_tensor
 
 
-# def fast_batch_randperm(batch, target_len, device='cpu'):
-#     '''
-#
-#     :param batch:
-#     :param target_len:
-#     :param device:
-#     :return: B T
-#     '''
-#     rand_idx = torch.rand(batch, target_len, device=device)
-#     index = torch.argsort(rand_idx, dim=-1, descending=False).long()
-#     return index
-
-
 def batch_index_select(x: torch.Tensor, index: torch.Tensor):
     '''
 
@@ -128,20 +100,6 @@ def batch_index_select(x: torch.Tensor, index: torch.Tensor):
     for i in range(B):
         temp_tensor[i] = torch.index_select(x[i], 0, index[i])
     return temp_tensor
-
-
-# def fast_batch_index_select(x: torch.Tensor, index: torch.Tensor):
-#     '''
-#
-#     :param x: B T C
-#     :param index: B T
-#     :return: B T C
-#     '''
-#
-#     output = torch.gather(x, 1, index[..., None].repeat([1, 1, x.shape[-1]]))
-#
-#     return output
-
 
 def fast_batch_randperm(batch, target_len, device='cpu', masks=None):
     '''
@@ -176,19 +134,6 @@ def fast_batch_index_select(x: torch.Tensor, index: torch.Tensor, masks=None):
 
     return output
 
-
-# def Rfast_batch_index_select(x: torch.Tensor, index: torch.Tensor):
-#     '''
-#
-#     :param x: B T C
-#     :param index: B T
-#     :return: B T C
-#     '''
-#
-#     batch_ind = torch.arange(x.size()[0], device=x.device).unsqueeze(-1)
-#
-#     output = x[batch_ind, index]
-#     return output
 
 
 def re_mask(x: torch.Tensor, index: torch.Tensor, target_len: int, mask_: torch.Tensor = None):
@@ -225,40 +170,6 @@ def re_mask_with_tensor(x: torch.Tensor, index: torch.Tensor, target_tensor: tor
         target_tensor[i][index[i]] = x[i]
     return target_tensor
 
-
-# def fast_re_mask(x: torch.Tensor, index: torch.Tensor, target_len: int, mask_: torch.Tensor = None):
-#     '''
-#
-#     :param mask_: C
-#     :param target_len: int
-#     :param x: B T C
-#     :param index: B T
-#     :return: B T C
-#     '''
-#     B, _, C = x.size()
-#
-#     if mask_ is not None:
-#         temp_tensor = mask_.repeat(B, target_len, 1)
-#     else:
-#         temp_tensor = torch.zeros(B, target_len, C, dtype=x.dtype, device=x.device)
-#     batch_ind = torch.arange(B, device=x.device).unsqueeze(-1)
-#     temp_tensor[batch_ind, index] = x
-#     return temp_tensor
-#
-#
-# def fast_re_mask_with_tensor(x: torch.Tensor, index: torch.Tensor, target_tensor: torch.Tensor):
-#     '''
-#
-#     :param x: B T C
-#     :param index: B T
-#     :param target_tensor: B T1 C
-#     :return: B T1 C
-#     '''
-#     B, _, C = x.size()
-#
-#     batch_ind = torch.arange(B, device=x.device).unsqueeze(-1)
-#     target_tensor[batch_ind, index] = x
-#     return target_tensor
 
 
 def fast_re_mask(x: torch.Tensor, index: torch.Tensor, target_len: int, mask_: torch.Tensor = None, masks=None):
@@ -348,6 +259,7 @@ def random_index_cvec(x: torch.Tensor, masks=None):
 
 
 def etesst(x):
+    import time
     sx = int(1024 * 0.25)
     t1 = time.time()
     ins = x
@@ -471,6 +383,7 @@ class MaskUtil:
             raise NotImplementedError
 
 if __name__ == '__main__':
+    # etesst(torch.randn(2,100,48))
 
     mu=MaskUtil(configs={'mask_arg':{'mask_p':0.05,'mask_type':'chunk','mask_len':10}})
     x=torch.randn(2,100,48)
