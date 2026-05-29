@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
+from modules.backbones.attention import JointAttention, SplitJointAttention
 from modules.backbones.eglu import HalfCacheGLUFFN
-from modules.backbones.joint_attn import JointAttention, SplitJointAttention
 from modules.backbones.layers import LayerScale, RMSNorm, GLUFFN, FFN, CgMLP
 
 

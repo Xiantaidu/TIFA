@@ -7,6 +7,112 @@ from modules.backbones.layers import RMSNorm
 from modules.backbones.rope import SingleRoPosEmb
 
 
+class Attention(nn.Module):
+    """Single-stream multi-head self-attention with optional RoPE."""
+
+    def __init__(
+            self, dim, num_heads, head_dim,
+            use_rope=True, rope_cache=True,
+            dropout_attn: float = 0.0,
+            out_drop: float = 0.0
+    ):
+        super().__init__()
+
+        self.num_heads = num_heads
+        attn_dim = head_dim * num_heads
+        self.q_linear = nn.Linear(dim, out_features=attn_dim, bias=True)
+        self.kv_linear = nn.Linear(dim, out_features=attn_dim * 2, bias=True)
+
+        self.out_linear = nn.Linear(attn_dim, dim, bias=True)
+        self.dropout_attn = dropout_attn
+        self.out_drop = nn.Dropout(out_drop) if out_drop > 0. else nn.Identity()
+        if use_rope:
+            self.rope = SingleRoPosEmb(head_dim, use_cache=rope_cache)
+        else:
+            self.rope = None
+
+    def forward(self, x):
+
+        q = self.q_linear(x)
+
+        k, v = self.kv_linear(x).chunk(2, dim=-1)
+
+        q, k, v = map(
+            lambda t: rearrange(t, "b t (h c) -> b h t c", h=self.num_heads), (q, k, v)
+        )
+        if self.rope is not None:
+            q = self.rope(q)
+            k = self.rope(k)
+
+        with torch.backends.cuda.sdp_kernel():
+            out = F.scaled_dot_product_attention(
+                q, k, v,
+                dropout_p=self.dropout_attn,
+            )
+
+        out = rearrange(out, "b h t c -> b t (h c) ", h=self.num_heads, )
+        out = self.out_linear(out)
+        out = self.out_drop(out)
+        return out
+
+
+class CrossAttention(nn.Module):
+    """Cross-attention where x (query) attends to y (key/value).
+
+    mask is a bool tensor where True = padding positions in y.
+    """
+
+    def __init__(
+            self, dim, cross_dim, num_heads, head_dim,
+            dropout_attn: float = 0.0,
+            out_drop: float = 0.0
+    ):
+        super().__init__()
+
+        self.num_heads = num_heads
+        self.head_dim = head_dim
+        self.scale = head_dim ** -0.5
+        attn_dim = head_dim * num_heads
+
+        self.q_linear = nn.Linear(dim, attn_dim, bias=True)
+        self.kv_linear = nn.Linear(cross_dim, attn_dim * 2, bias=True)
+        self.out_linear = nn.Linear(attn_dim, dim, bias=True)
+
+        self.dropout_attn = nn.Dropout(dropout_attn) if dropout_attn > 0. else nn.Identity()
+        self.out_drop = nn.Dropout(out_drop) if out_drop > 0. else nn.Identity()
+
+    def forward(self, x, y, mask=None, return_attn=False):
+        """
+        x: [B, T, dim]       (query)
+        y: [B, S, cross_dim] (key / value)
+        mask: [B, S] bool, True = padding (optional)
+        """
+        q = self.q_linear(x)
+        k, v = self.kv_linear(y).chunk(2, dim=-1)
+
+        q = rearrange(q, "b t (h c) -> b h t c", h=self.num_heads)
+        k = rearrange(k, "b s (h c) -> b h s c", h=self.num_heads)
+        v = rearrange(v, "b s (h c) -> b h s c", h=self.num_heads)
+
+        attn_logits = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+
+        if mask is not None:
+            attn_logits = attn_logits.masked_fill(mask[:, None, None, :], -1e9)
+
+        attn_weights = F.softmax(attn_logits, dim=-1)
+        attn_weights = self.dropout_attn(attn_weights)
+
+        out = torch.matmul(attn_weights, v)
+
+        out = rearrange(out, "b h t c -> b t (h c)")
+        out = self.out_linear(out)
+        out = self.out_drop(out)
+
+        if return_attn:
+            return out, attn_weights
+        return out
+
+
 class JointAttention(nn.Module):
     """Joint attention between token stream and frame stream.
 
