@@ -118,6 +118,8 @@ class BinarizerConfig(ConfigBaseModel):
 
     @property
     def text_only_data_dir_resolved(self) -> pathlib.Path | None:
+        if self.text_only_data_dir is None:
+            return None
         return pathlib.Path(self.text_only_data_dir).resolve()
 
 

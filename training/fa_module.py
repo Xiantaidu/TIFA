@@ -34,7 +34,7 @@ _BER_OFFSET = "BER_offset"
 _B_MAE_ONSET = "B-MAE_onset"
 _B_MAE_OFFSET = "B-MAE_offset"
 _OVERLAP = "Overlap"
-_CONJ_MAE = "Conj-MAE_"
+_CONJ_MAE = "Conj-MAE"
 
 
 class ForcedAlignmentModule(BaseLightningModule):
@@ -422,6 +422,6 @@ class ForcedAlignmentModule(BaseLightningModule):
             values = [v.item() for v in sub_data.values()]
             fig = topk_bar_figure(labels, values, f"{name} {sub_name}", reverse=False)
             logger.experiment.add_figure(
-                f"topk/{name}/{sub_name}", fig, global_step=self.global_step,
+                f"topk/{sub_name}", fig, global_step=self.global_step,
             )
             plt.close(fig)

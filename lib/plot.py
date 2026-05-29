@@ -44,7 +44,8 @@ def cross_similarity_to_figure(sim, regions=None, title=None, token_labels=None)
     plt.xlabel("Frame")
     plt.ylabel("Token")
     if token_labels is not None:
-        plt.yticks(range(N), token_labels[:N], fontsize=8)
+        centers = [i + 0.5 for i in range(N)]
+        plt.yticks(centers, token_labels[:N], fontsize=8)
     plt.xlim(0, T)
     plt.ylim(0, N)
     if title is not None:
