@@ -398,7 +398,8 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         with torch.autocast(self.device.type, enabled=False):
             losses = self.forward_model(sample, infer=False)
             outputs = self.forward_model(sample, infer=True)
-            if min(sample["indices"]) < self.training_config.validation.max_plots:
+            stride = max(1, len(self.valid_dataset) // self.training_config.validation.max_plots)
+            if ((sample["indices"] % stride) == 0).any():
                 save_obj["sample"] = sample
                 save_obj["outputs"] = outputs
                 filename = f"validation_step{self.global_step}_rank{self.global_rank}_batch{batch_index}.pt"

@@ -329,6 +329,7 @@ class ForcedAlignmentModule(BaseLightningModule):
         main = sample["main"]
         indices = main["indices"]
         max_plots = self.training_config.validation.max_plots
+        stride = max(1, len(self.valid_dataset) // max_plots)
 
         x_features = outputs["x_features"]
         token_features = outputs["token_features"]
@@ -338,7 +339,7 @@ class ForcedAlignmentModule(BaseLightningModule):
 
         for i in range(indices.shape[0]):
             data_idx = int(indices[i].item())
-            if data_idx >= max_plots:
+            if data_idx % stride != 0:
                 continue
 
             T_i = int(T_all[i].item())
