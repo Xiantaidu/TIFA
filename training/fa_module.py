@@ -28,6 +28,11 @@ from training.data import (
 )
 from training.pl_module_base import BaseLightningModule, LossValue
 
+# Loss names shared between register_losses_and_metrics and forward_model.
+_FRAME_ALIGNMENT = "frame_alignment_loss"
+_SPAN_CONTRASTIVE = "span_contrastive_loss"
+_TOKEN_AUTHENTICITY = "token_authenticity_loss"
+
 # Metric name bases shared between _register_fa_metrics and plot_validation_metrics.
 _BER_ONSET = "BER_onset"
 _BER_OFFSET = "BER_offset"
@@ -52,10 +57,10 @@ class ForcedAlignmentModule(BaseLightningModule):
     def register_losses_and_metrics(self) -> None:
         loss_cfg: LossConfig = self.training_config.loss
 
-        self.register_loss("frame_alignment", FrameAlignmentLoss(
+        self.register_loss(_FRAME_ALIGNMENT, FrameAlignmentLoss(
             temperature=loss_cfg.frame_alignment.temperature,
         ), weight=loss_cfg.frame_alignment.weight)
-        self.register_loss("span_contrastive", SpanContrastiveLoss(
+        self.register_loss(_SPAN_CONTRASTIVE, SpanContrastiveLoss(
             temperature=loss_cfg.span_contrastive.temperature,
             bidirectional=loss_cfg.span_contrastive.bidirectional,
         ), weight=loss_cfg.span_contrastive.weight)
@@ -63,7 +68,7 @@ class ForcedAlignmentModule(BaseLightningModule):
         aug_cfg = self.training_config.augmentation
         if aug_cfg.sequence_edit.enabled:
             self.register_loss(
-                "token_authenticity", TokenAuthenticityLoss(), weight=loss_cfg.token_authenticity.weight
+                _TOKEN_AUTHENTICITY, TokenAuthenticityLoss(), weight=loss_cfg.token_authenticity.weight
             )
 
         self._register_fa_metrics()
