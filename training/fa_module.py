@@ -8,10 +8,17 @@ from torch.utils.data import DataLoader
 
 from lib.config.schema import RootConfig, LossConfig
 from lib.plot import cross_similarity_to_figure
+from modules.decoding import decode_alignment
 from modules.forced_alignment import ForcedAlignmentModel
 from modules.functional import cross_cosine_similarity
 from modules.losses.region_loss import FrameAlignmentLoss, SpanContrastiveLoss
 from modules.losses.token_loss import TokenAuthenticityLoss
+from modules.metrics import (
+    BoundaryErrorRate,
+    BoundaryMAE,
+    PairConjunctionMAE,
+    OverlapRatioCollection,
+)
 from training.data import (
     BaseDataset,
     PhonemeTimingDataset,
@@ -50,6 +57,87 @@ class ForcedAlignmentModule(BaseLightningModule):
             self.register_loss(
                 "token_authenticity", TokenAuthenticityLoss(), weight=loss_cfg.token_authenticity.weight
             )
+
+        self._register_fa_metrics()
+        if self.use_parallel_dirty_metrics:
+            self._register_fa_metrics(postfix="_dirty")
+
+    def _register_fa_metrics(self, postfix: str = "") -> None:
+        V = self.vocab.vocab_size
+        T = self.training_config.validation.metrics_ber_tolerance
+        K = self.training_config.validation.metrics_k_values
+        KC = self.training_config.validation.metrics_conjunction_k_values
+
+        # Boundary Error Rate -- onset
+        self.register_metric(
+            f"BER/onset{postfix}",
+            BoundaryErrorRate(tolerance=T, mode="onset"),
+        )
+        for k in K:
+            self.register_metric(
+                f"BER/onset@{k}{postfix}",
+                BoundaryErrorRate(tolerance=T, mode="onset", vocab_size=V, k=k),
+            )
+
+        # Boundary Error Rate -- offset
+        self.register_metric(
+            f"BER/offset{postfix}",
+            BoundaryErrorRate(tolerance=T, mode="offset"),
+        )
+        for k in K:
+            self.register_metric(
+                f"BER/offset@{k}{postfix}",
+                BoundaryErrorRate(tolerance=T, mode="offset", vocab_size=V, k=k),
+            )
+
+        # Boundary MAE -- onset
+        self.register_metric(
+            f"B-MAE/onset{postfix}",
+            BoundaryMAE(mode="onset"),
+        )
+        for k in K:
+            self.register_metric(
+                f"B-MAE/onset@{k}{postfix}",
+                BoundaryMAE(mode="onset", vocab_size=V, k=k),
+            )
+
+        # Boundary MAE -- offset
+        self.register_metric(
+            f"B-MAE/offset{postfix}",
+            BoundaryMAE(mode="offset"),
+        )
+        for k in K:
+            self.register_metric(
+                f"B-MAE/offset@{k}{postfix}",
+                BoundaryMAE(mode="offset", vocab_size=V, k=k),
+            )
+
+        # Pair Conjunction MAE
+        for k in KC:
+            self.register_metric(
+                f"Conj-MAE/@{k}{postfix}",
+                PairConjunctionMAE(vocab_size=V, k=k),
+            )
+
+        # Overlap Ratio Collection
+        self.register_metric(
+            f"Overlap{postfix}",
+            OverlapRatioCollection(template=f"Overlap/{{}}{postfix}"),
+        )
+        for k in K:
+            self.register_metric(
+                f"Overlap@{k}{postfix}",
+                OverlapRatioCollection(
+                    template=f"Overlap/{{}}@{k}{postfix}", vocab_size=V, k=k,
+                ),
+            )
+
+    def _update_fa_metrics(
+        self, pred_spans: Tensor, target_spans: Tensor, tokens: Tensor, postfix: str = ""
+    ) -> None:
+        for name, metric in self.metrics.items():
+            if name.endswith(postfix):
+                metric.update(pred_spans, target_spans, tokens)
 
     def build_train_dataset(self) -> BaseDataset:
         dl_cfg = self.training_config.dataloader
@@ -173,6 +261,25 @@ class ForcedAlignmentModule(BaseLightningModule):
         x_features, token_features, token_logits = self.model(spectrogram, tokens, t_mask, n_mask)
 
         if infer:
+            pred_spans = decode_alignment(
+                x_features, token_features, T, N,
+                temperature=self.training_config.loss.frame_alignment.temperature,
+            )
+            target_spans = main_sample["spans"]
+            self._update_fa_metrics(pred_spans, target_spans, tokens)
+
+            if self.use_parallel_dirty_metrics and "spectrogram_dirty" in main_sample:
+                xf_d, tf_d, _ = self.model(
+                    main_sample["spectrogram_dirty"], tokens, t_mask, n_mask,
+                )
+                pred_spans_dirty = decode_alignment(
+                    xf_d, tf_d, T, N,
+                    temperature=self.training_config.loss.frame_alignment.temperature,
+                )
+                self._update_fa_metrics(
+                    pred_spans_dirty, target_spans, tokens, postfix="_dirty",
+                )
+
             return {
                 "x_features": x_features,
                 "token_features": token_features,

@@ -52,4 +52,7 @@ training:
       bidirectional: true
     token_authenticity:
       weight: 0.1
-  validation: {}
+  validation:
+    metrics_ber_tolerance: 5
+    metrics_k_values: [5, 20]
+    metrics_conjunction_k_values: [5, 20]

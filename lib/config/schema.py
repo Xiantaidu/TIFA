@@ -453,16 +453,9 @@ class ValidationConfig(ConfigBaseModel):
     allow_amp: bool = Field(False)
     max_plots: int = Field(100, ge=0)
     parallel_dirty_metrics: bool = Field(True)
-
-    @property
-    def d3pm_sample_ts_resolved(self):
-        if self.d3pm_sample_ts is not None:
-            return self.d3pm_sample_ts
-        step = (1 - self.d3pm_sample_t0) / self.d3pm_sample_steps
-        return [
-            self.d3pm_sample_t0 + i * step
-            for i in range(self.d3pm_sample_steps)
-        ]
+    metrics_ber_tolerance: int = Field(5, ge=0)
+    metrics_k_values: list[int] = Field([5, 20])
+    metrics_conjunction_k_values: list[int] = Field([5, 20])
 
 
 class FinetuningConfig(ConfigBaseModel):
