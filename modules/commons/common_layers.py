@@ -44,6 +44,30 @@ class LocalDownsample(nn.Module):
 
 
 class TemporalMask(nn.Module):
+    """Time-domain masking for sequence features.
+
+    Supports two mask patterns:
+    - ``chunk``: Contiguous spans of length ``mask_len``, each starting
+      independently with probability ``mask_p`` per time step. Expected
+      masked fraction: approximately ``1 - (1 - mask_p) ^ mask_len``.
+    - ``random``: Scattered frames. Each position is independently kept
+      with probability ``1 - mask_p``, subject to the optional eligibility
+      mask.
+
+    Masked positions are replaced with a fill value: either a learnable
+    parameter of shape ``[channels]`` (``fill_method="learnable"``) or
+    fresh Gaussian noise per forward pass (``fill_method="randn"``).
+
+    This module is a no-op in eval mode (``m.eval()``).
+
+    :param channels: feature dimension C
+    :param mask_type: ``"chunk"`` or ``"random"``
+    :param fill_method: ``"learnable"`` or ``"randn"``
+    :param mask_len: span length for chunk masking
+    :param mask_p: probability of starting a chunk mask, or masking rate
+        for random masking
+    """
+
     def __init__(
             self, channels: int,
             mask_type: str = "chunk", fill_method: str = "learnable",
