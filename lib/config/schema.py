@@ -129,6 +129,7 @@ class BackboneConfig(ConfigBaseModel):
 
 
 class ModelConfig(ConfigBaseModel):
+    arch: str = Field(...)
     in_dim: int = Field(None, json_schema_extra={
         "dynamic_expr": ref("binarizer.features.spectrogram.num_bins")
     })

@@ -11,7 +11,8 @@ binarizer:
     merged_groups: []
     peers: []
 
-model: {}
+model:
+  arch: ForcedAlignmentSSLModel
 
 training:
   loss: {}

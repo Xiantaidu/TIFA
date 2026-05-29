@@ -28,6 +28,13 @@ class ForcedAlignmentModel(nn.Module):
 
     def __init__(self, config: ModelConfig):
         super().__init__()
+        expected = type(self).__name__
+        if config.arch != expected:
+            raise ValueError(
+                f"Unable to initialize '{expected}' architecture with "
+                f"configuration for '{config.arch}'. "
+                f"Be sure to call the correct entry point."
+            )
         self.token_embedding = nn.Embedding(
             config.max_vocab_size, config.embedding_dim, padding_idx=0,
         )
@@ -63,6 +70,13 @@ class ForcedAlignmentSSLModel(nn.Module):
 
     def __init__(self, config: ModelConfig):
         super().__init__()
+        expected = type(self).__name__
+        if config.arch != expected:
+            raise ValueError(
+                f"Unable to initialize '{expected}' architecture with "
+                f"configuration for '{config.arch}'. "
+                f"Be sure to call the correct entry point."
+            )
         self.token_embedding = nn.Embedding(
             config.max_vocab_size, config.embedding_dim, padding_idx=0,
         )
@@ -71,7 +85,7 @@ class ForcedAlignmentSSLModel(nn.Module):
             config.in_dim,          # x_in_dim
             config.embedding_dim,   # token_in_dim
             config.out_dim,         # x_out_dim
-            config.out_dim,         # token_out_dim (no extra logit)
+            config.out_dim,         # token_out_dim
             **config.backbone.kwargs,
         )
 

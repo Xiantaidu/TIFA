@@ -1,4 +1,6 @@
 import base64
+import datetime
+import pathlib
 from collections import deque
 from typing import Any, Literal
 
@@ -10,6 +12,8 @@ import torch
 from lightning_utilities.core.rank_zero import rank_zero_only
 
 from lib import logging
+from lib.config.io import save_raw_config
+from lib.config.schema import RootConfig
 
 
 class FriendlyModelCheckpoint(lightning.pytorch.callbacks.ModelCheckpoint):
@@ -208,3 +212,28 @@ class FriendlyTQDMProgressBar(lightning.pytorch.callbacks.TQDMProgressBar):
                     items[k] = numpy.format_float_scientific(v, precision=3, unique=True, min_digits=2, trim="-")
         items.pop("v_num", None)
         return items
+
+
+class SafeConfigDumpCallback(lightning.pytorch.callbacks.Callback):
+    """Dumps config files to the checkpoint directory on train start.
+
+    Runs after module setup, sanity checks, and checkpoint resuming,
+    so stale config files are never left behind from a failed init.
+    """
+
+    def __init__(self, config: RootConfig, save_dir: pathlib.Path):
+        super().__init__()
+        self.config = config
+        self.save_dir = save_dir
+
+    @rank_zero_only
+    def on_train_start(self, *args, **kwargs) -> None:
+        save_raw_config(
+            self.config.model_dump(include={"model", "inference"}),
+            self.save_dir / "config.yaml",
+        )
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        save_raw_config(
+            self.config.model_dump(),
+            self.save_dir / f"hparams-{timestamp}.yaml",
+        )

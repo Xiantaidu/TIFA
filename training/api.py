@@ -1,4 +1,3 @@
-import datetime
 import json
 import pathlib
 import re
@@ -9,8 +8,9 @@ from lightning_utilities.core.rank_zero import rank_zero_only
 from lib import logging
 from lib.config.core import ConfigBaseModel
 from lib.config.formatter import format_model
-from lib.config.io import load_raw_config, save_raw_config
+from lib.config.io import load_raw_config
 from lib.config.schema import RootConfig, PeriodicCheckpointConfig, ExpressionCheckpointConfig
+from training.callbacks import SafeConfigDumpCallback
 
 __all__ = [
     "load_config_for_training",
@@ -109,21 +109,12 @@ def train_model(
         else:
             shutil.copy(source_file, to_dir)
 
-    @rank_zero_only
-    def _config_dump(cfg: RootConfig, to_dir: pathlib.Path):
-        # config for inference and exporting
-        save_raw_config(cfg.model_dump(include={"model", "inference"}), to_dir / "config.yaml")
-        # config for debugging, add timestamp to avoid overwriting
-        current_time = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        save_raw_config(cfg.model_dump(), to_dir / f"hparams-{current_time}.yaml")
-
     data_dir, aux_data_dir = pl_module_cls.resolve_data_dirs(config)
     ckpt_save_dir.mkdir(parents=True, exist_ok=True)
     _check_file_and_config(data_dir / "feature.yaml", config.binarizer.features)
     if aux_data_dir is not None:
         _check_file_and_config(aux_data_dir / "feature.yaml", config.binarizer.features)
     _check_and_copy("vocabulary.json", data_dir, ckpt_save_dir)
-    _config_dump(config, ckpt_save_dir)
     model_config = config.model
     training_config = config.training
 
@@ -154,7 +145,8 @@ def train_model(
     else:
         raise ValueError(f"Unit must be 'step' or 'epoch', got '{training_config.trainer.unit}'.")
     callbacks = [
-        FriendlyTQDMProgressBar()
+        FriendlyTQDMProgressBar(),
+        SafeConfigDumpCallback(config=config, save_dir=ckpt_save_dir),
     ]
     for ckpt_config in training_config.trainer.checkpoints:
         if ckpt_config.type == "periodic":
