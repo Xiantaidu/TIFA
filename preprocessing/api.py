@@ -28,7 +28,7 @@ def load_config_for_binarization(
     return config.binarizer
 
 
-def build_shared_vocab(vocab_config, metadata_list) -> tuple[Vocabulary, Mapping]:
+def build_shared_vocab(vocab_config, metadata_list) -> tuple[Vocabulary, Mapping, VocabularyBuilder]:
     builder = VocabularyBuilder(
         global_symbols=vocab_config.global_symbols,
         stop_symbols=vocab_config.stop_symbols,
@@ -39,7 +39,7 @@ def build_shared_vocab(vocab_config, metadata_list) -> tuple[Vocabulary, Mapping
         builder.add(item.raw_symbols, default_language=item.language)
     vocab = builder.build()
     counter = builder.counter()
-    return vocab, counter
+    return vocab, counter, builder
 
 
 def build_vocab_from_datasets(
@@ -56,7 +56,7 @@ def build_vocab_from_datasets(
         )
         all_metadata.extend(metadata)
     logging.info(f"Collected {len(all_metadata)} metadata items in total.")
-    vocab, counter = build_shared_vocab(config.vocabulary, all_metadata)
+    vocab, counter, _ = build_shared_vocab(config.vocabulary, all_metadata)
     binarizers[0].save_vocab_plot(counter)
     logging.success("Vocabulary built and plot saved.")
 
@@ -94,9 +94,10 @@ def binarize_datasets(
         raise RuntimeError("No metadata items found in any dataset.")
 
     # Build shared vocabulary
-    shared_vocab, counter = build_shared_vocab(config.vocabulary, all_metadata)
+    shared_vocab, counter, builder = build_shared_vocab(config.vocabulary, all_metadata)
     for b in binarizers:
         b.vocabulary = shared_vocab
+        b.vocab_builder = builder
 
     # Main binarizer handles plot
     binarizers[0].save_vocab_plot(counter)

@@ -55,6 +55,7 @@ class BaseBinarizer(abc.ABC):
         self.timestep = config.features.timestep
 
         self.vocabulary: Vocabulary | None = None
+        self.vocab_builder: VocabularyBuilder | None = None
 
         self.valid_items: list[MetadataItem] = []
         self.train_items: list[MetadataItem] = []
@@ -181,6 +182,7 @@ class BaseBinarizer(abc.ABC):
         )
         for item in metadata_list:
             vocab_builder.add(item.raw_symbols, default_language=item.language)
+        self.vocab_builder = vocab_builder
         self.vocabulary = vocab_builder.build()
         self.save_vocab_plot(vocab_builder.counter())
 
@@ -201,7 +203,7 @@ class BaseBinarizer(abc.ABC):
     def save_auxiliary_files(self):
         save_raw_config(self.config.features.model_dump(), self.data_dir / "feature.yaml")
         self.vocabulary.dump(self.data_dir / "vocabulary.json")
-        self.vocabulary.dump_token_peers(self.data_dir / "token_peers.json")
+        self.vocab_builder.dump_token_peers(self.data_dir / "token_peers.json")
 
     def _process_datasets(self):
         if self.aux_mode:

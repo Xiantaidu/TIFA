@@ -5,7 +5,10 @@ from typing import Iterable, Mapping, Sequence, TypeVar
 
 from lib.config.schema import MergedSymbolGroupConfig
 
+SPACE = 1
+
 __all__ = [
+    "SPACE",
     "VocabularyBuilder",
     "Vocabulary",
 ]
@@ -83,7 +86,7 @@ class VocabularyBuilder:
                 group_map[s] = (s,)
 
         ordered_names = sorted(group_map)
-        name_to_id = {name: idx for idx, name in enumerate(ordered_names, start=1)}
+        name_to_id = {name: idx for idx, name in enumerate(ordered_names, start=SPACE + 1)}
 
         # Build symbol -> ID mapping
         symbol_to_id: dict[str, int] = {}
@@ -113,14 +116,25 @@ class VocabularyBuilder:
         peer_map = _disjoint_sets(all_peer_ids, resolved)
 
         # Filter singletons
-        peer_ids = tuple(
+        self._peer_ids = tuple(
             members for members in peer_map.values() if len(members) >= 2
         )
 
         return Vocabulary(
             symbol_to_id=symbol_to_id,
-            peer_ids=peer_ids,
         )
+
+    def dump_token_peers(self, path: str | pathlib.Path) -> None:
+        if not hasattr(self, "_peer_ids"):
+            raise RuntimeError(
+                "dump_token_peers() called before build(). "
+                "Call build() first to compute peer groups."
+            )
+        with open(path, "w", encoding="utf8") as f:
+            json.dump(
+                {"token_peer_ids": [list(ids) for ids in self._peer_ids]},
+                f, ensure_ascii=False, indent=2,
+            )
 
 
 class Vocabulary:
@@ -128,15 +142,13 @@ class Vocabulary:
             self,
             *,
             symbol_to_id: dict[str, int],
-            peer_ids: tuple[tuple[int, ...], ...],
     ):
         self.symbol_to_id = symbol_to_id
-        self.peer_ids = peer_ids
 
     @property
     def vocab_size(self) -> int:
-        ids = set(self.symbol_to_id.values())
-        return len(ids) + 1 if ids else 1
+        ids = self.symbol_to_id.values()
+        return max(SPACE, *ids) + 1 if ids else SPACE + 1
 
     def __len__(self) -> int:
         return self.vocab_size
@@ -153,18 +165,15 @@ class Vocabulary:
             "symbols": dict(self.symbol_to_id),
         }
 
-    def to_token_peers(self) -> dict:
-        return {
-            "token_peer_ids": [list(ids) for ids in self.peer_ids]
-        }
-
     def dump(self, path: str | pathlib.Path) -> None:
         with open(path, "w", encoding="utf8") as f:
             json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
 
-    def dump_token_peers(self, path: str | pathlib.Path) -> None:
-        with open(path, "w", encoding="utf8") as f:
-            json.dump(self.to_token_peers(), f, ensure_ascii=False, indent=2)
+    @classmethod
+    def from_file(cls, path: str | pathlib.Path) -> "Vocabulary":
+        with open(path, "r", encoding="utf8") as f:
+            data = json.load(f)
+        return cls(symbol_to_id=data["symbols"])
 
 
 _T = TypeVar("_T")

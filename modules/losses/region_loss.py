@@ -3,28 +3,20 @@ from torch import Tensor
 import torch.nn as nn
 from torch.nn import functional as F
 
-
-def cross_cosine_similarity(x: Tensor, y: Tensor, temperature: float = 1.0) -> Tensor:
-    """
-    Compute cross-sequence cosine similarity matrix.
-    x: [..., T, C]  (e.g. frame features)
-    y: [..., N, C]  (e.g. token embeddings)
-    Returns: [..., T, N]
-    """
-    x_norm = F.normalize(x.float(), p=2, dim=-1, eps=1e-8)
-    y_norm = F.normalize(y.float(), p=2, dim=-1, eps=1e-8)
-    return (x_norm @ y_norm.transpose(-1, -2)) / temperature
+from modules.functional import cross_cosine_similarity
 
 
 class FrameAlignmentLoss(nn.Module):
     """
-    Per-frame cross-entropy on the cross-modal similarity matrix [B, T, N].
-    Every non-gap frame classifies which of the N phoneme tokens it belongs to.
+    Per-frame cross-entropy over N+1 classes (gap + N phoneme tokens).
+
+    Gap (class 0) has a fixed logit of 0. A frame is classified as gap when
+    every token similarity is negative -- i.e. no phoneme matches.
 
     Inputs:
         x_frame: [B, T, C] frame features from backbone
         x_token: [B, N, C] token embeddings
-        regions: [B, T] 1-based region index (0 = gap between phonemes)
+        regions: [B, T] 0 = gap, 1..N = phoneme occurrence index
         mask_frame: [B, T] bool, non-padding frames
         mask_token: [B, N] bool, non-padding tokens
     Returns:
@@ -43,23 +35,28 @@ class FrameAlignmentLoss(nn.Module):
         mask_frame: Tensor,
         mask_token: Tensor,
     ) -> Tensor:
-        B, T, N = x_token.shape[0], x_frame.shape[1], x_token.shape[1]
-        valid_frame = mask_frame & (regions > 0)  # [B, T]
-        if valid_frame.sum() == 0:
+        B, T = x_frame.shape[:2]
+        N = x_token.shape[1]
+        if mask_frame.sum() == 0:
             return x_frame.new_zeros(())
 
-        sim = cross_cosine_similarity(x_frame, x_token, self.temperature)  # [B, T, N]
+        token_sim = cross_cosine_similarity(x_frame, x_token, self.temperature)  # [B, T, N]
+        gap_col = x_frame.new_zeros(B, T, 1)  # fixed zero logit
+        sim = torch.cat([gap_col, token_sim], dim=-1)  # [B, T, N+1]
 
-        # Mask invalid tokens as keys, but only for frames that participate
+        # Gap class (index 0) is always valid
+        mask_logit = torch.cat([mask_token.new_ones(B, 1, dtype=torch.bool), mask_token], dim=1)
         sim = sim.masked_fill(
-            ~mask_token.unsqueeze(1) & valid_frame.unsqueeze(2), float('-inf')
+            ~mask_logit.unsqueeze(1) & mask_frame.unsqueeze(2), float('-inf')
         )
+        sim[~mask_frame] = 0.0  # well-defined log-softmax for padding frames
 
-        target = regions - 1  # [B, T], gap -> -1
+        target = regions.clone()  # [B, T], 0 = gap
+        target[~mask_frame] = -100
         loss = F.cross_entropy(
-            sim.reshape(B * T, N),
+            sim.reshape(B * T, N + 1),
             target.reshape(B * T),
-            ignore_index=-1,
+            ignore_index=-100,
             reduction='mean',
         )
         return loss

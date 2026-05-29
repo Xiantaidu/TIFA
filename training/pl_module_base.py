@@ -14,6 +14,7 @@ import tqdm
 from lib import logging
 from lib.config.schema import ModelConfig, RootConfig, TrainingConfig
 from lib.reflection import build_lr_scheduler_from_config, build_optimizer_from_config
+from lib.vocabulary import Vocabulary
 from .data import BaseDataset, DynamicBatchSampler
 from .weight_averaging import ExponentialMovingAverage
 
@@ -46,10 +47,17 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         self.aux_data_dir = aux_data_dir
         self.model_config = model_config
         self.training_config = training_config
+        self.vocab = Vocabulary.from_file(self.data_dir / "vocabulary.json")
+        if self.vocab.vocab_size > model_config.max_vocab_size:
+            raise ValueError(
+                f"Vocabulary size {self.vocab.vocab_size} exceeds "
+                f"max_vocab_size {model_config.max_vocab_size}"
+            )
 
         self.model: nn.Module = self.build_model()
         self.losses: dict[str, nn.Module] = nn.ModuleDict()
         self.metrics: dict[str, Metric] = nn.ModuleDict()
+        self.loss_weights: dict[str, float] = {}
         self.val_losses: dict[str, Metric] = {  # use built-in dict to not be printed in the model summary
             "total_loss": MeanMetric()
         }
@@ -205,15 +213,18 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
                 callback=rank_zero_info
             )
 
-    def register_loss(self, name: str, loss: nn.Module) -> None:
+    def register_loss(self, name: str, loss: nn.Module, weight: float = 1.0) -> None:
         """
         Register a loss module that can be accessed via `self.losses`.
+        The *weight* is applied in `training_step`; `forward_model` should
+        return raw (unweighted) loss means.
         """
         if name in self.losses:
             raise ValueError(f"Loss '{name}' already registered.")
         if name in self.metrics:
             raise ValueError(f"Loss name '{name}' is already used by a metric.")
         self.losses[name] = loss
+        self.loss_weights[name] = weight
         self.val_losses[name] = MeanMetric()  # for validation logging
 
     def register_metric(self, name: str, metric: Metric) -> None:
@@ -332,8 +343,8 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
 
         total_loss = 0.0
         for name, lv in loss_values.items():
-            weight = (A * lv.batch_count / lv.group_count) if lv.group_count > 0 else 1.0
-            total_loss += lv.mean * weight
+            grad_weight = (A * lv.batch_count / lv.group_count) if lv.group_count > 0 else 1.0
+            total_loss += lv.mean * self.loss_weights[name] * grad_weight
 
         unweighted_total = sum(lv.mean for lv in loss_values.values())
         log_outputs = {

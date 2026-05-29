@@ -1,12 +1,15 @@
-import json
 import pathlib
 
+import matplotlib.pyplot as plt
 import torch
+from lightning.pytorch.loggers import TensorBoardLogger
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
-from lib.config.schema import RootConfig, ModelConfig, LossConfig
+from lib.config.schema import RootConfig, LossConfig
+from lib.plot import cross_similarity_to_figure
 from modules.forced_alignment import ForcedAlignmentModel
+from modules.functional import cross_cosine_similarity
 from modules.losses.region_loss import FrameAlignmentLoss, SpanContrastiveLoss
 from modules.losses.token_loss import TokenAuthenticityLoss
 from training.data import (
@@ -29,31 +32,24 @@ class ForcedAlignmentModule(BaseLightningModule):
         )
 
     def build_model(self) -> nn.Module:
-        model_config: ModelConfig = self.model_config
-        vocab_path = self.data_dir / "vocabulary.json"
-        with open(vocab_path, "r", encoding="utf8") as f:
-            vocab = json.load(f)
-        vocab_size = max(vocab["symbols"].values()) + 1  # +1 for padding index 0
-        if vocab_size > model_config.max_vocab_size:
-            raise ValueError(
-                f"Vocabulary size {vocab_size} exceeds max_vocab_size {model_config.max_vocab_size}"
-            )
-        return ForcedAlignmentModel(model_config)
+        return ForcedAlignmentModel(self.model_config)
 
     def register_losses_and_metrics(self) -> None:
         loss_cfg: LossConfig = self.training_config.loss
 
         self.register_loss("frame_alignment", FrameAlignmentLoss(
             temperature=loss_cfg.frame_alignment.temperature,
-        ))
+        ), weight=loss_cfg.frame_alignment.weight)
         self.register_loss("span_contrastive", SpanContrastiveLoss(
             temperature=loss_cfg.span_contrastive.temperature,
             bidirectional=loss_cfg.span_contrastive.bidirectional,
-        ))
+        ), weight=loss_cfg.span_contrastive.weight)
 
         aug_cfg = self.training_config.augmentation
-        if aug_cfg.token_perturbation.enabled or aug_cfg.sequence_edit.enabled:
-            self.register_loss("token_authenticity", TokenAuthenticityLoss())
+        if aug_cfg.sequence_edit.enabled:
+            self.register_loss(
+                "token_authenticity", TokenAuthenticityLoss(), weight=loss_cfg.token_authenticity.weight
+            )
 
     def build_train_dataset(self) -> BaseDataset:
         dl_cfg = self.training_config.dataloader
@@ -130,7 +126,8 @@ class ForcedAlignmentModule(BaseLightningModule):
         return ZippedDataLoader(super().val_dataloader())
 
     def validation_step(self, sample, batch_index):
-        super().validation_step(sample["main"], batch_index)
+        sample["indices"] = sample["main"]["indices"]
+        super().validation_step(sample, batch_index)
 
     def on_train_epoch_start(self):
         super().on_train_epoch_start()
@@ -173,42 +170,76 @@ class ForcedAlignmentModule(BaseLightningModule):
         t_mask = torch.arange(max_T, device=device).unsqueeze(0) < T.unsqueeze(1)
         n_mask = torch.arange(max_N, device=device).unsqueeze(0) < N.unsqueeze(1)
 
-        out_x, out_tok, attn = self.model(spectrogram, tokens, t_mask, n_mask)
+        x_features, token_features, token_logits = self.model(spectrogram, tokens, t_mask, n_mask)
 
         if infer:
             return {
-                "out_x": out_x,
-                "out_tok": out_tok,
-                "attn": attn,
+                "x_features": x_features,
+                "token_features": token_features,
+                "token_logits": token_logits,
             }
 
-        loss_cfg: LossConfig = self.training_config.loss
-
-        n_frames = (t_mask & (regions > 0)).sum().item()
-        n_tokens = n_mask.sum().item()
-        group_frames = self._group_count(batch_idx, "regions")
+        batch_frames = T.sum().item()
+        batch_tokens = N.sum().item()
+        group_frames = self._group_count(batch_idx, "lengths")
         group_tokens = self._group_count(batch_idx, "tokens")
 
-        losses = {}
-        losses["frame_alignment"] = LossValue(
-            mean=self.losses["frame_alignment"](out_x, out_tok, regions, t_mask, n_mask)
-                 * loss_cfg.frame_alignment.weight,
-            batch_count=n_frames, group_count=group_frames,
+        frame_alignment_loss = LossValue(
+            mean=self.losses["frame_alignment"](x_features, token_features, regions, t_mask, n_mask),
+            batch_count=batch_frames, group_count=group_frames,
         )
-        losses["span_contrastive"] = LossValue(
-            mean=self.losses["span_contrastive"](out_x, out_tok, main_sample["spans"], t_mask, n_mask)
-                 * loss_cfg.span_contrastive.weight,
-            batch_count=n_tokens, group_count=group_tokens,
+        span_contrastive_loss = LossValue(
+            mean=self.losses["span_contrastive"](x_features, token_features, main_sample["spans"], t_mask, n_mask),
+            batch_count=batch_tokens, group_count=group_tokens,
         )
+        losses = {
+            "frame_alignment": frame_alignment_loss,
+            "span_contrastive": span_contrastive_loss,
+        }
         if "token_authenticity" in self.losses:
-            losses["token_authenticity"] = LossValue(
+            token_authenticity_loss = LossValue(
                 mean=self.losses["token_authenticity"](
-                    out_tok, main_sample["authentic"], n_mask,
-                ) * loss_cfg.token_authenticity.weight,
-                batch_count=n_tokens, group_count=group_tokens,
+                    token_logits, main_sample["authentic"], n_mask,
+                ),
+                batch_count=batch_tokens, group_count=group_tokens,
             )
+            losses["token_authenticity"] = token_authenticity_loss
 
         return losses
 
     def plot_validation_results(self, sample, outputs):
-        pass
+        main = sample["main"]
+        indices = main["indices"]
+        max_plots = self.training_config.validation.max_plots
+
+        x_features = outputs["x_features"]
+        token_features = outputs["token_features"]
+        regions = main["regions"]
+        T_all = main["T"]
+        N_all = main["N"]
+
+        for i in range(indices.shape[0]):
+            data_idx = int(indices[i].item())
+            if data_idx >= max_plots:
+                continue
+
+            T_i = int(T_all[i].item())
+            N_i = int(N_all[i].item())
+            if T_i == 0 or N_i == 0:
+                continue
+
+            xf = x_features[i, :T_i]
+            tf = token_features[i, :N_i]
+
+            sim = cross_cosine_similarity(xf, tf)  # [T_i, N_i]
+
+            fig = cross_similarity_to_figure(
+                sim.float().detach().cpu().numpy().T,  # [N_i, T_i]
+                regions=regions[i, :T_i].detach().cpu().numpy(),
+                title=f"cross_cosine_similarity (idx={data_idx}, T={T_i}, N={N_i})",
+            )
+            logger: TensorBoardLogger = self.logger
+            logger.experiment.add_figure(
+                f"similarity/{data_idx}", fig, global_step=self.global_step,
+            )
+            plt.close(fig)

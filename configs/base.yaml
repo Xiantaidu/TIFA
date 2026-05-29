@@ -14,8 +14,8 @@ binarizer:
 
 training:
   dataloader:
-    max_batch_size: 24
-    max_batch_frames: 24000
+    max_batch_size: 8
+    max_batch_frames: 8000
     max_val_batch_size: 16
     max_val_batch_frames: 16000
     frame_count_grid: 6

@@ -14,6 +14,7 @@ from lib.config.schema import AugmentationConfig, BinarizerFeaturesConfig
 from lib.feature.mel import StretchableMelSpectrogram
 from lib.indexed_dataset import IndexedDataset
 from lib.sequence_edit import apply_sequence_edits
+from lib.vocabulary import Vocabulary
 from .augmentation import (
     AugmentationContext,
     ComposedAugmentation,
@@ -308,10 +309,9 @@ class PhonemeTimingDataset(BaseDataset):
             self.augmentation_config is not None
             and self.augmentation_config.sequence_edit.enabled
         ):
-            vocab_path = self.data_dir / "vocabulary.json"
-            with open(vocab_path, "r", encoding="utf8") as f:
-                vocab_data = json.load(f)
-            self._vocab_size = len(vocab_data["symbols"]) + 1
+            self._vocab_size = Vocabulary.from_file(
+                self.data_dir / "vocabulary.json"
+            ).vocab_size
 
         self._token_peers: dict[int, list[int]] = {}
         if (
