@@ -9,6 +9,11 @@ binarizer:
     stop_symbols: [AP, SP, EP, GS, sil, br, pau, cl]
     merged_groups: []
     peers: []
+  features:
+    f0:
+      method: parselmouth
+      f0_min: 65
+      f0_max: 1600
 
 model:
   arch: ForcedAlignmentSSLModel

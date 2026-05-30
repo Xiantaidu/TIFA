@@ -16,6 +16,7 @@ omegaconf
 onnx
 onnxscript
 onnxslim
+praat-parselmouth
 pydantic>=2.11,<3.0
 resampy
 scipy>=1.10.0

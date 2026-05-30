@@ -254,6 +254,15 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
         else:
             sample["spectrogram"] = spectrogram
 
+        if "f0" in sample:
+            f0_val = sample["f0"].float()
+            if f0_val.shape[0] != spectrogram.shape[0]:
+                f0_val = torch.nn.functional.interpolate(
+                    f0_val.view(1, 1, -1), size=spectrogram.shape[0],
+                    mode="linear", align_corners=True,
+                ).view(-1)
+            sample["f0"] = f0_val
+
         return {
             "_idx": torch.tensor(index, dtype=torch.long),
             "_augmentation": augmentation,
@@ -401,7 +410,7 @@ class PhonemeTimingDataset(BaseDataset):
                 r[mask] += n_off
             shifted_regions.append(r)
 
-        return {
+        result = {
             "spectrogram": torch.cat(specs, dim=0),
             "tokens": torch.cat([s["tokens"] for s in processed]),
             "spans": torch.cat(shifted_spans),
@@ -410,6 +419,9 @@ class PhonemeTimingDataset(BaseDataset):
             "T": torch.tensor(sum(s["T"].item() for s in processed)),
             "N": torch.tensor(sum(N_vals)),
         }
+        if "f0" in processed[0]:
+            result["f0"] = torch.cat([s["f0"] for s in processed], dim=0)
+        return result
 
 
 class TextOnlyDataset(BaseDataset):
@@ -474,7 +486,7 @@ class TextOnlyDataset(BaseDataset):
         T_vals = [s["T"].item() for s in processed]
         N_vals = [s["N"].item() for s in processed]
 
-        return {
+        result = {
             "spectrogram": merged_spec,
             "paths": merged_paths,
             "segments": merged_segments,
@@ -482,6 +494,9 @@ class TextOnlyDataset(BaseDataset):
             "T": torch.tensor(sum(T_vals)),
             "N": torch.tensor(sum(N_vals)),
         }
+        if "f0" in processed[0]:
+            result["f0"] = torch.cat([s["f0"] for s in processed], dim=0)
+        return result
 
 
 class DynamicBatchSampler(torch.utils.data.distributed.DistributedSampler):

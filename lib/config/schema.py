@@ -85,12 +85,31 @@ class SpectrogramConfig(ConfigBaseModel):
     fmax: float = Field(8000, ge=0)
 
 
+class F0Config(ConfigBaseModel):
+    enabled: bool = Field(False, json_schema_extra={
+        "dynamic_expr": (ctx("scope") & ConfigurationScope.FA_SSL) != 0
+    })
+    method: Literal["parselmouth"] = Field("parselmouth")
+    f0_min: float = Field(65, gt=0)
+    f0_max: float = Field(1600, gt=0, json_schema_extra={
+        "dynamic_check": DynamicCheck(
+            expr=if_(
+                ref("binarizer.features.f0.enabled"),
+                this() > ref("binarizer.features.f0.f0_min"),
+                True
+            ),
+            message="f0_max must be greater than f0_min."
+        )
+    })
+
+
 class BinarizerFeaturesConfig(ConfigBaseModel):
     audio_sample_rate: int = Field(44100, gt=0)
     hop_size: int = Field(441, gt=0)
     fft_size: int = Field(2048, gt=0)
     win_size: int = Field(2048, gt=0)
     spectrogram: SpectrogramConfig = Field(...)
+    f0: F0Config = Field(default_factory=F0Config)
 
     @property
     def timestep(self):

@@ -2,11 +2,14 @@ import csv
 import pathlib
 from dataclasses import dataclass
 
+import librosa
 import numpy
 
 from g2p.api import build_pipeline_from_config
 from g2p.converters.base import G2PText
 from lib import logging
+from lib.audio import load_audio
+from lib.feature.pitch import get_pitch_parselmouth
 from lib.levenshtein import segment_groups
 
 from .binarizer_base import (
@@ -20,6 +23,7 @@ TEXTS_ITEM_ATTRIBUTES = [
     "paths",  # [N, max(widths)] int64  --  path grid, 0 = no token
     "segments",  # [N] int64  --  1-based segment index per grid position
     "widths",  # [max(segments)] int64  --  number of alternative sub-paths per segment
+    "f0",  # [T] float32, pitch in Hz
 ]
 
 
@@ -87,6 +91,18 @@ class TextOnlyBinarizer(BaseBinarizer):
 
         length = self.get_frame_count(item.waveform_fn)
 
+        f0_cfg = self.config.features.f0
+        f0 = None
+        if f0_cfg.enabled:
+            waveform, sr = load_audio(item.waveform_fn)
+            if sr != self.config.features.audio_sample_rate:
+                waveform = librosa.resample(waveform, orig_sr=sr, target_sr=self.config.features.audio_sample_rate)
+            f0, _uv = get_pitch_parselmouth(
+                waveform, self.config.features.audio_sample_rate, length,
+                hop_size=self.config.features.hop_size,
+                f0_min=f0_cfg.f0_min, f0_max=f0_cfg.f0_max,
+            )
+
         groups = item.g2p_texts
         if groups is None:
             raise RuntimeError(f"G2P not run for item '{item.name}'")
@@ -134,14 +150,17 @@ class TextOnlyBinarizer(BaseBinarizer):
                     paths[col + pos, alt_idx] = tok_id
             col += L
 
+        data = {
+            "paths": paths,
+            "segments": segments_arr,
+            "widths": widths,
+        }
+        if f0 is not None:
+            data["f0"] = f0
         return DataSample(
             path=item.waveform_fn.relative_to(self.data_dir).as_posix(),
             name=item.name,
             length=length,
             text=item.text,
-            data={
-                "paths": paths,
-                "segments": segments_arr,
-                "widths": widths,
-            },
+            data=data,
         )
