@@ -64,18 +64,22 @@ class CrossAttention(nn.Module):
 
     def __init__(
             self, dim, cross_dim, num_heads, head_dim,
+            qk_head_dim=None,
             dropout_attn: float = 0.0,
             out_drop: float = 0.0
     ):
         super().__init__()
-
+        if qk_head_dim is None:
+            qk_head_dim = head_dim
         self.num_heads = num_heads
         self.head_dim = head_dim
         self.scale = head_dim ** -0.5
         attn_dim = head_dim * num_heads
+        qk_attn_dim = qk_head_dim * num_heads
 
-        self.q_linear = nn.Linear(dim, attn_dim, bias=True)
-        self.kv_linear = nn.Linear(cross_dim, attn_dim * 2, bias=True)
+        self.q_linear = nn.Linear(dim, qk_attn_dim, bias=True)
+        self.k_linear = nn.Linear(cross_dim, qk_attn_dim, bias=True)
+        self.v_linear = nn.Linear(cross_dim, attn_dim, bias=True)
         self.out_linear = nn.Linear(attn_dim, dim, bias=True)
 
         self.dropout_attn = nn.Dropout(dropout_attn) if dropout_attn > 0. else nn.Identity()
@@ -88,7 +92,8 @@ class CrossAttention(nn.Module):
         mask: [B, S] bool, True = padding (optional)
         """
         q = self.q_linear(x)
-        k, v = self.kv_linear(y).chunk(2, dim=-1)
+        k = self.k_linear(y)
+        v = self.v_linear(y)
 
         q = rearrange(q, "b t (h c) -> b h t c", h=self.num_heads)
         k = rearrange(k, "b s (h c) -> b h s c", h=self.num_heads)
