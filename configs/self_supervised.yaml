@@ -34,6 +34,7 @@ model:
       num_ca_layers: 2
       use_rope: true
       ffn_type: glu
+      qk_head_dim: null
   reconstructor:
     cls: modules.backbones.ebf.EBFDecoderBackbone
     kwargs:

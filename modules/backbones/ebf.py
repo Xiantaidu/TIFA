@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-
+from typing import Optional
 from modules.backbones.attention import Attention, CrossAttention
 from modules.backbones.layers import LayerScale, RMSNorm, GLUFFN, FFN, CgMLP
 
@@ -180,6 +180,7 @@ class EBFEncoderBackbone(nn.Module):
             num_ca_layers: int = 1,
             ca_dropout_attn: float = 0.0,
             ca_out_drop: float = 0.0,
+            qk_head_dim:Optional[int]=None,
             # general EBF params
             use_rope: bool = True,
             rope_cache: bool = True,
@@ -241,7 +242,7 @@ class EBFEncoderBackbone(nn.Module):
         for _ in range(num_ca_layers):
             self.cross_attn_layers.append(
                 CrossAttention(
-                    dim=dim, cross_dim=dim,
+                    dim=dim, cross_dim=dim,qk_head_dim=qk_head_dim,
                     num_heads=num_heads, head_dim=head_dim,
                     dropout_attn=ca_dropout_attn, out_drop=ca_out_drop
                 )
