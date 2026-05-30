@@ -25,6 +25,7 @@ model:
       dim: 256
       num_heads: 8
       head_dim: 64
+      qk_head_dim: null
       token_num_layers: 4
       token_c_kernel_size: 7
       token_m_kernel_size: 7
@@ -34,7 +35,6 @@ model:
       num_ca_layers: 2
       use_rope: true
       ffn_type: glu
-      qk_head_dim: null
   reconstructor:
     cls: modules.backbones.ebf.EBFDecoderBackbone
     kwargs:

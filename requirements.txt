@@ -6,7 +6,7 @@ colorednoise
 dask
 einops>=0.7.0
 h5py
-librosa
+librosa>=0.10.0
 lightning
 loguru
 matplotlib
