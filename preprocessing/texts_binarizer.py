@@ -93,7 +93,7 @@ class TextOnlyBinarizer(BaseBinarizer):
 
         f0_cfg = self.config.features.f0
         f0 = None
-        if f0_cfg.enabled:
+        if f0_cfg is not None and f0_cfg.enabled:
             waveform, sr = load_audio(item.waveform_fn)
             if sr != self.config.features.audio_sample_rate:
                 waveform = librosa.resample(waveform, orig_sr=sr, target_sr=self.config.features.audio_sample_rate)

@@ -9,7 +9,7 @@ from pydantic import Field, PrivateAttr, field_validator
 from .core import ConfigBaseModel
 from .ops import (
     ConfigOperationBase, ConfigOperationContext,
-    ref, this, ctx, if_, exists, coalesce
+    ref, this, ctx, if_, exists, coalesce, func
 )
 
 
@@ -109,7 +109,9 @@ class BinarizerFeaturesConfig(ConfigBaseModel):
     fft_size: int = Field(2048, gt=0)
     win_size: int = Field(2048, gt=0)
     spectrogram: SpectrogramConfig = Field(...)
-    f0: F0Config = Field(default_factory=F0Config)
+    f0: F0Config | None = Field(None, json_schema_extra={
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA_SSL),
+    })
 
     @property
     def timestep(self):
@@ -121,6 +123,13 @@ class BinarizerFeaturesConfig(ConfigBaseModel):
         if v.fmin >= v.fmax:
             raise ValueError("fmin must be less than fmax.")
         return v
+
+    def to_inference_config(self) -> "BinarizerFeaturesConfig":
+        """Return an InferenceConfig-compatible copy of this config, with any
+        training-only features disabled."""
+        copy = self.model_copy()
+        copy.f0 = None
+        return copy
 
 
 class BinarizerConfig(ConfigBaseModel):
@@ -542,7 +551,7 @@ class InferenceConfig(ConfigBaseModel):
         "dynamic_expr": ref("binarizer.g2p")
     })
     features: BinarizerFeaturesConfig = Field(None, json_schema_extra={
-        "dynamic_expr": ref("binarizer.features")
+        "dynamic_expr": func(lambda c: c.to_inference_config(), ref("binarizer.features"))
     })
 
 
