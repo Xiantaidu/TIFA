@@ -109,7 +109,7 @@ class CrossAttention(nn.Module):
         out = self.out_drop(out)
 
         if return_attn:
-            return out, attn_weights
+            return out, attn_logits
         return out
 
 
