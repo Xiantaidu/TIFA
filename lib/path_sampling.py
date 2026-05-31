@@ -10,9 +10,11 @@ Two sampling strategies:
 - :func:`sample_paths_perm`: batched randperm via argsort.  Every alt of
   every segment appears at least once.
 
-- :func:`extract_tokens`: gathers token sequences via the segments bridge,
-  then compacts interspersed zeros to the right using a stable argsort
-  re-mapping.
+- :func:`extract_tokens`: gathers token sequences via the segments bridge
+  (un-compacted).
+
+- :func:`compact_sequences`: compacts interspersed zeros to the right via
+  stable argsort across the last dim, truncating to the max non-zero count.
 """
 import torch
 
@@ -67,34 +69,29 @@ def extract_tokens(
         paths: torch.Tensor,
         segments: torch.Tensor,
         choices: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Extract and compact token sequences for sampled paths.
+) -> torch.Tensor:
+    """Extract token sequences for sampled paths (un-compacted).
 
     Args:
         paths: ``[B, N_max, W_max]`` token ids (0 = padding).
         segments: ``[B, N_max]`` 1-based segment indices (0 = padding).
-                  Padding positions are identified by ``segments == 0``.
-        choices: ``[B, ..., S_max]`` from any of the sampling functions above.
-                 All dimensions between *B* and *S_max* are flattened.
+        choices: ``[B, ..., S_max]`` from any sampling function.
 
     Returns:
-        ``(compacted, lengths)`` where *compacted* is ``[B, K, max_len]``
-        (no trailing zeros) and *lengths* is ``[B, K]`` with *K* the
-        product of all non-batch, non-segment dimensions.
+        tokens ``[B, ..., N_max]`` matching the dims of *choices*,
+        0-padded.
     """
     B_val, N_max, _W_max = paths.shape
+    mid_dims = choices.shape[1:-1]  # dimensions between B and S_max
     choices = choices.reshape(choices.shape[0], -1, choices.shape[-1])  # [B, K, S_max]
     K = choices.shape[1]
 
-    # seg_ids [B, N_max]  --  0-based; padding -> 0 after clamp
-    seg_ids = segments.clamp(min=1) - 1
+    seg_ids = segments.clamp(min=1) - 1  # 0-based; padding -> 0
 
-    # alt per (item, path, grid_pos)
     alt_per_pos = torch.gather(
         choices, 2, seg_ids.unsqueeze(1).expand(-1, K, -1)
     )  # [B, K, N_max]
 
-    # gather tokens
     b_idx = torch.arange(B_val).view(B_val, 1, 1).expand(-1, K, N_max)
     n_idx = torch.arange(N_max).view(1, 1, N_max).expand(B_val, K, -1)
     tokens = paths[b_idx, n_idx, alt_per_pos]  # [B, K, N_max]
@@ -102,18 +99,45 @@ def extract_tokens(
     # zero out batch-padding positions
     tokens[(segments == 0).unsqueeze(1).expand(-1, K, -1)] = 0
 
-    # compact interspersed zeros to the right via stable sort
+    out_shape = (B_val, *mid_dims, N_max)
+    return tokens.reshape(out_shape)
+
+
+def compact_sequences(
+        tokens: torch.Tensor, *args: torch.Tensor,
+) -> tuple[torch.Tensor, ...]:
+    """Compact sequences via stable sort on the token mask.
+
+    All inputs must be 0-padded and have the same shape.  The first
+    argument (tokens) determines the compaction mask.
+
+    Args:
+        tokens: ``[..., N]``, 0 = padding.
+        *args: ``[..., N]``, same shape as tokens, 0-padded.
+
+    Returns:
+        ``(compacted_tokens, *compacted_args)`` — ``[..., M]``
+        where ``M = mask.sum(dim=-1).max()``.
+    """
     mask = tokens != 0
+    N_max = tokens.shape[-1]
+
     priority = torch.where(
         mask,
-        torch.arange(N_max, device=tokens.device).view(1, 1, N_max),
+        torch.arange(N_max, device=tokens.device).expand_as(tokens),
         N_max,
     )
     perm = priority.argsort(dim=-1, stable=True)
-    compacted = tokens.gather(-1, perm)
+    compacted_tokens = tokens.gather(-1, perm)
 
-    lengths = mask.sum(dim=-1)  # [B, K]
-    max_len = lengths.max()
-    compacted = compacted[:, :, :max_len]
+    compacted_args: list[torch.Tensor] = []
+    for arg in args:
+        arg = arg.clone()
+        arg[~mask] = 0
+        compacted_args.append(arg.gather(-1, perm))
 
-    return compacted, lengths
+    max_len = mask.sum(dim=-1).max()
+    compacted_tokens = compacted_tokens[..., :max_len]
+    compacted_args = [a[..., :max_len] for a in compacted_args]
+
+    return compacted_tokens, *compacted_args
