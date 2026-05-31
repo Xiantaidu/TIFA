@@ -276,9 +276,8 @@ class ForcedAlignmentModule(BaseLightningModule):
         x_features, token_features, token_logits = self.model(spectrogram, tokens, t_mask, n_mask)
 
         if infer:
-            temperature = self.training_config.loss.frame_alignment.temperature
             sim = cross_cosine_similarity(x_features, token_features)  # [-1, 1]
-            pred_spans = decode_alignment_flat(sim / temperature, T, N)
+            pred_spans = decode_alignment_flat(sim, T, N)
             target_spans = main_sample["spans"]
             self._update_fa_metrics(pred_spans, target_spans, tokens)
 
@@ -287,7 +286,7 @@ class ForcedAlignmentModule(BaseLightningModule):
                     main_sample["spectrogram_dirty"], tokens, t_mask, n_mask,
                 )
                 sim_dirty = cross_cosine_similarity(xf_d, tf_d)
-                pred_spans_dirty = decode_alignment_flat(sim_dirty / temperature, T, N)
+                pred_spans_dirty = decode_alignment_flat(sim_dirty, T, N)
                 self._update_fa_metrics(
                     pred_spans_dirty, target_spans, tokens, postfix="_dirty",
                 )
