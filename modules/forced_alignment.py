@@ -45,8 +45,8 @@ class ForcedAlignmentModel(nn.Module):
             config.backbone.cls, nn.Module,
             config.in_dim,              # x_in_dim
             config.embedding_dim,       # token_in_dim
-            config.embedding_dim,       # x_out_dim
-            config.embedding_dim + 1,   # token_out_dim (features + logit)
+            config.out_dim,             # x_out_dim
+            config.out_dim + 1,         # token_out_dim (features + logit)
             **config.backbone.kwargs,
         )
 
