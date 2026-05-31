@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 
 from lib.config.schema import RootConfig, LossConfig
 from lib.plot import cross_similarity_to_figure, topk_bar_figure
-from modules.decoding import decode_alignment
+from modules.decoding import decode_alignment_flat
 from modules.forced_alignment import ForcedAlignmentModel
 from modules.functional import cross_cosine_similarity
 from modules.losses.region_loss import FrameAlignmentLoss, SpanContrastiveLoss
@@ -276,10 +276,11 @@ class ForcedAlignmentModule(BaseLightningModule):
         x_features, token_features, token_logits = self.model(spectrogram, tokens, t_mask, n_mask)
 
         if infer:
-            pred_spans = decode_alignment(
-                x_features, token_features, T, N,
+            sim = cross_cosine_similarity(
+                x_features, token_features,
                 temperature=self.training_config.loss.frame_alignment.temperature,
             )
+            pred_spans = decode_alignment_flat(sim, T, N)
             target_spans = main_sample["spans"]
             self._update_fa_metrics(pred_spans, target_spans, tokens)
 
@@ -287,10 +288,11 @@ class ForcedAlignmentModule(BaseLightningModule):
                 xf_d, tf_d, _ = self.model(
                     main_sample["spectrogram_dirty"], tokens, t_mask, n_mask,
                 )
-                pred_spans_dirty = decode_alignment(
-                    xf_d, tf_d, T, N,
+                sim_dirty = cross_cosine_similarity(
+                    xf_d, tf_d,
                     temperature=self.training_config.loss.frame_alignment.temperature,
                 )
+                pred_spans_dirty = decode_alignment_flat(sim_dirty, T, N)
                 self._update_fa_metrics(
                     pred_spans_dirty, target_spans, tokens, postfix="_dirty",
                 )

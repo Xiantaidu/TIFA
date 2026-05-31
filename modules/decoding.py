@@ -3,154 +3,345 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from modules.functional import cross_cosine_similarity
+MAX_PREDS = 3  # max predecessors per state across all variants
 
 
 # ---------------------------------------------------------------------------
-# Alignment decoding from cross-cosine-similarity
+# Generic Viterbi decoder
+# ---------------------------------------------------------------------------
+
+
+@numba.njit(cache=True)
+def viterbi(
+    emission: np.ndarray,
+    predecessors: np.ndarray,
+    num_preds: np.ndarray,
+    p_init: np.ndarray,
+) -> np.ndarray:
+    """Generic single-sequence Viterbi decoder with sparse predecessors.
+
+    emission[s, t]: additive score for state s at time t (higher = better).
+    predecessors[s, :]: valid prior states for state s (padded with -1).
+    num_preds[s]: number of valid entries in predecessors[s, :].
+    p_init[s]: initial additive score for state s.
+
+    Returns states[t]: best state at each time step.
+    """
+    S, T_ = emission.shape
+    NEG_INF = np.float32(-1e9)
+
+    dp_prev = p_init.copy()
+    dp_cur = np.empty(S, dtype=np.float32)
+    back = np.empty((T_, S), dtype=np.int32)
+
+    for t in range(T_):
+        if t > 0:
+            dp_prev[:] = dp_cur
+        for j in range(S):
+            best_score = NEG_INF
+            best_i = -1
+            for k in range(num_preds[j]):
+                i = predecessors[j, k]
+                score = dp_prev[i]
+                if score > best_score:
+                    best_score = score
+                    best_i = i
+            dp_cur[j] = best_score + emission[j, t]
+            back[t, j] = best_i
+
+    states = np.empty(T_, dtype=np.int32)
+    best_s = np.argmax(dp_cur)
+    for t_ in range(T_ - 1, -1, -1):
+        states[t_] = best_s
+        best_s = back[t_, best_s]
+
+    return states
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
+@numba.njit(cache=True)
+def _extract_spans(states: np.ndarray, T: int, N: int) -> np.ndarray:
+    """Extract per-token [onset, offset) spans from a state sequence.
+
+    P_i is at index N+1+i. Unreached tokens get degenerate span (T-1, T-1).
+    """
+    spans = np.empty((N, 2), dtype=np.int64)
+    for i in range(N):
+        p_idx = N + 1 + i
+        first = -1
+        last = -1
+        for t in range(T):
+            if states[t] == p_idx:
+                if first < 0:
+                    first = t
+                last = t
+        if first >= 0:
+            spans[i, 0] = first
+            spans[i, 1] = last + 1
+        else:
+            spans[i, 0] = T - 1
+            spans[i, 1] = T - 1
+    return spans
+
+
+@numba.njit(cache=True)
+def _add_predecessor(
+    predecessors: np.ndarray, num_preds: np.ndarray, state: int, pred: int,
+) -> None:
+    """Append a predecessor to a state's predecessor list."""
+    k = num_preds[state]
+    predecessors[state, k] = pred
+    num_preds[state] = k + 1
+
+
+@numba.njit(cache=True)
+def _remove_predecessor(
+    predecessors: np.ndarray, num_preds: np.ndarray, state: int, pred: int,
+) -> None:
+    """Remove a predecessor from a state's predecessor list."""
+    k = num_preds[state]
+    for idx in range(k):
+        if predecessors[state, idx] == pred:
+            for j in range(idx, k - 1):
+                predecessors[state, j] = predecessors[state, j + 1]
+            num_preds[state] = k - 1
+            return
+
+
+# ---------------------------------------------------------------------------
+# State machine builder (flat or spaced)
+# ---------------------------------------------------------------------------
+
+
+@numba.njit(cache=True)
+def _make_fa(sim: np.ndarray, spaced: bool):
+    """Build FA state machine.
+
+    State space (S = 2N + 1):
+      G_i (0 <= i <= N):  indices 0 .. N       (gap states, emission 0)
+      P_i (0 <= i < N):   indices N+1 .. 2N    (token states, emission sim[:, i])
+
+    Transitions (all cost 0):
+      G_i -> G_i       for all i           (stay in gap)
+      G_i -> P_i       for i < N           (enter token i)
+      P_i -> P_i       for all i           (stay in token i)
+      P_i -> G_{i+1}   for i < N           (exit token i to next gap)
+      P_{i-1} -> P_i   for i > 0           (advance to next token, skip G_i)
+
+    When spaced=True, additionally for each even i (space token):
+      G_i -> G_{i+1}  (skip space token i)
+    """
+    T_, N = sim.shape
+    S = 2 * N + 1
+    NEG_INF = np.float32(-1e9)
+
+    emission = np.zeros((S, T_), dtype=np.float32)
+    for i in range(N):
+        emission[N + 1 + i, :] = sim[:, i]
+
+    predecessors = np.full((S, MAX_PREDS), -1, dtype=np.int32)
+    num_preds = np.zeros(S, dtype=np.int32)
+
+    # G_0: from G_0 only
+    _add_predecessor(predecessors, num_preds, 0, 0)
+
+    # G_i (1 <= i <= N): from G_i, P_{i-1}, and optionally G_{i-1} for skip
+    for i in range(1, N + 1):
+        _add_predecessor(predecessors, num_preds, i, i)
+        _add_predecessor(predecessors, num_preds, i, N + 1 + (i - 1))
+        if spaced and (i - 1) % 2 == 0:
+            _add_predecessor(predecessors, num_preds, i, i - 1)
+
+    # P_0: from P_0 and G_0
+    p0 = N + 1
+    _add_predecessor(predecessors, num_preds, p0, p0)
+    _add_predecessor(predecessors, num_preds, p0, 0)
+
+    # P_i (1 <= i < N): from P_i, G_i, P_{i-1}
+    for i in range(1, N):
+        p_idx = N + 1 + i
+        _add_predecessor(predecessors, num_preds, p_idx, p_idx)
+        _add_predecessor(predecessors, num_preds, p_idx, i)
+        _add_predecessor(predecessors, num_preds, p_idx, N + 1 + (i - 1))
+
+    p_init = np.full(S, NEG_INF, dtype=np.float32)
+    p_init[0] = np.float32(0.0)
+
+    return emission, predecessors, num_preds, p_init
+
+
+# ---------------------------------------------------------------------------
+# Grouped modifiers
+# ---------------------------------------------------------------------------
+
+
+@numba.njit(cache=True)
+def _apply_groups_flat(
+    predecessors: np.ndarray, num_preds: np.ndarray, groups: np.ndarray, N: int,
+) -> None:
+    """Modify flat state machine for grouped variant.
+
+    Deactivates G_i for 0 < i < N where groups[i-1] == groups[i].
+    G_0 and G_N always remain active.
+    """
+    for i in range(1, N):
+        if groups[i - 1] == groups[i]:
+            num_preds[i] = 0
+            _remove_predecessor(predecessors, num_preds, N + 1 + i, i)
+
+
+@numba.njit(cache=True)
+def _apply_groups_spaced(
+    predecessors: np.ndarray,
+    num_preds: np.ndarray,
+    groups: np.ndarray,
+    N: int,
+) -> None:
+    """Modify spaced state machine for grouped variant.
+
+    For consecutive real tokens in the same group:
+      - Deactivates the space token between them and its two gap states.
+      - Adds a direct jump P_{real_prev} -> P_{real_next}.
+      - Cleans up dead predecessor entries.
+    """
+    M = len(groups)
+    for k in range(M - 1):
+        if groups[k] == groups[k + 1]:
+            space_col = 2 * k + 2
+            g1 = space_col
+            g2 = space_col + 1
+            p_space = N + 1 + space_col
+            p_prev = N + 1 + (space_col - 1)
+            p_next = N + 1 + (space_col + 1)
+
+            num_preds[g1] = 0
+            num_preds[g2] = 0
+            num_preds[p_space] = 0
+            _add_predecessor(predecessors, num_preds, p_next, p_prev)
+            _remove_predecessor(predecessors, num_preds, p_next, g2)
+            _remove_predecessor(predecessors, num_preds, p_next, p_space)
+
+
+# ---------------------------------------------------------------------------
+# Batched decode
 # ---------------------------------------------------------------------------
 
 
 @numba.njit(parallel=True, cache=True)
-def _viterbi_decode_batch(
-    sim: np.ndarray,    # [B, max_T, max_N] float32
-    T_all: np.ndarray,  # [B] int64
-    N_all: np.ndarray,  # [B] int64
+def _decode_fa_batch(
+    sim: np.ndarray,
+    T_all: np.ndarray,
+    N_all: np.ndarray,
     max_N: int,
-) -> np.ndarray:        # [B, max_N, 2] int64
-    """Viterbi decode with monotonicity constraint, batched over samples.
-
-    States (per sample):
-      G_i (0 <= i <= N): index i       - gap, next phoneme is i
-      P_i (0 <= i < N):  index N+1+i   - inside phoneme i
-    """
+    groups: np.ndarray | None,
+    spaced: bool,
+) -> np.ndarray:
+    """Batched Viterbi decode, dispatching on spaced flag and groups presence."""
     B = sim.shape[0]
     spans_out = np.zeros((B, max_N, 2), dtype=np.int64)
-    NEG_INF = np.float32(-1e9)
 
     for b in numba.prange(B):
         Ti = int(T_all[b])
         Ni = int(N_all[b])
-        if Ni == 0:
+        if Ni == 0 or Ti == 0:
             continue
 
-        S = 2 * Ni + 1
-        dp_prev = np.full(S, NEG_INF, dtype=np.float32)
-        dp_cur = np.full(S, NEG_INF, dtype=np.float32)
-        back = np.full((Ti, S), -1, dtype=np.int32)
-
-        # t = 0
-        dp_prev[0] = np.float32(0.0)  # G_0
-        p0 = Ni + 1
-        dp_prev[p0] = np.float32(sim[b, 0, 0])  # P_0 from G_0
-        back[0, p0] = 0
-
-        for t in range(1, Ti):
-            dp_cur[:] = NEG_INF
-            # G_0: from G_0 only (gap emission is 0)
-            if dp_prev[0] > dp_cur[0]:
-                dp_cur[0] = dp_prev[0]
-                back[t, 0] = 0
-
-            for i in range(Ni):
-                p_idx = Ni + 1 + i  # P_i
-                g_next = i + 1      # G_{i+1}
-                emit = np.float32(sim[b, t, i])
-
-                # P_i: stay in P_i
-                if dp_prev[p_idx] > NEG_INF:
-                    s = dp_prev[p_idx] + emit
-                    if s > dp_cur[p_idx]:
-                        dp_cur[p_idx] = s
-                        back[t, p_idx] = p_idx
-                # P_i: start from G_i
-                if dp_prev[i] > NEG_INF:
-                    s = dp_prev[i] + emit
-                    if s > dp_cur[p_idx]:
-                        dp_cur[p_idx] = s
-                        back[t, p_idx] = i
-                # P_i: advance from P_{i-1}
-                if i > 0:
-                    prev_p = Ni + 1 + (i - 1)
-                    if dp_prev[prev_p] > NEG_INF:
-                        s = dp_prev[prev_p] + emit
-                        if s > dp_cur[p_idx]:
-                            dp_cur[p_idx] = s
-                            back[t, p_idx] = prev_p
-
-                # G_{i+1}: stay in G_{i+1}
-                if dp_prev[g_next] > NEG_INF:
-                    if dp_prev[g_next] > dp_cur[g_next]:
-                        dp_cur[g_next] = dp_prev[g_next]
-                        back[t, g_next] = g_next
-                # G_{i+1}: finish P_i
-                if dp_prev[p_idx] > NEG_INF:
-                    if dp_prev[p_idx] > dp_cur[g_next]:
-                        dp_cur[g_next] = dp_prev[p_idx]
-                        back[t, g_next] = p_idx
-
-            dp_prev, dp_cur = dp_cur, dp_prev
-
-        # Best end state at last frame
-        best_s = np.argmax(dp_prev)
-        # Backtrack
-        states = np.empty(Ti, dtype=np.int32)
-        s = best_s
-        for t in range(Ti - 1, -1, -1):
-            states[t] = s
-            s = back[t, s]
-
-        # Extract spans
-        for i in range(Ni):
-            p_idx = Ni + 1 + i
-            first = -1
-            last = -1
-            for t in range(Ti):
-                if states[t] == p_idx:
-                    if first < 0:
-                        first = t
-                    last = t
-            if first >= 0:
-                spans_out[b, i, 0] = first
-                spans_out[b, i, 1] = last + 1
+        sim_i = sim[b, :Ti, :Ni]
+        emission, preds, n_preds, p_init = _make_fa(sim_i, spaced)
+        if groups is not None:
+            if spaced:
+                _apply_groups_spaced(preds, n_preds, groups[b, :Ni // 2], Ni)
             else:
-                # Unreached token (T exhausted before N): place at last frame
-                spans_out[b, i, 0] = Ti - 1
-                spans_out[b, i, 1] = Ti - 1
+                _apply_groups_flat(preds, n_preds, groups[b, :Ni], Ni)
+        states = viterbi(emission, preds, n_preds, p_init)
+        spans_i = _extract_spans(states, Ti, Ni)
+        spans_out[b, :Ni] = spans_i
 
     return spans_out
 
 
-def decode_alignment(
-    x_frame: Tensor,        # [B, T, C]
-    x_token: Tensor,        # [B, N, C]
-    frame_lengths: Tensor,  # [B] int64, valid frames per sample (trailing padding)
-    token_lengths: Tensor,  # [B] int64, valid tokens per sample (trailing padding)
-    temperature: float = 0.1,
-) -> Tensor:               # [B, N, 2] int64, (onset, offset)
-    """Viterbi-decode frame/token features into per-token spans.
+# ---------------------------------------------------------------------------
+# Public PyTorch wrappers
+# ---------------------------------------------------------------------------
 
-    Uses a monotonicity-constrained state space (gap + phoneme states) to
-    produce spans that respect left-to-right token ordering.
+
+def decode_alignment_flat(
+    sim: Tensor,
+    frame_lengths: Tensor,
+    token_lengths: Tensor,
+    groups: Tensor | None = None,
+) -> Tensor:
+    """Viterbi-decode a frame/token similarity matrix into per-token spans.
+
+    Flat variant: gaps between all tokens, all optional.
+      G_i -> G_i       for all i           (stay in gap)
+      G_i -> P_i       for i < N           (enter token i)
+      P_i -> P_i       for all i           (stay in token i)
+      P_i -> G_{i+1}   for i < N           (exit token i to next gap)
+      P_{i-1} -> P_i   for i > 0           (advance to next token, skip G_i)
+
+    When groups is provided, G_i is active only at group boundaries
+    (i==0, i==N, or groups[i-1] != groups[i]).
 
     Args:
-        x_frame: [B, T, C] frame features from backbone (trailing-padded).
-        x_token: [B, N, C] token embeddings (trailing-padded).
+        sim: [B, T, N] similarity between frame and token features.
         frame_lengths: [B] int64, number of valid frames per sample.
         token_lengths: [B] int64, number of valid tokens per sample.
-        temperature: cosine similarity temperature (should match training).
+        groups: optional [B, N] int64, group label per token.
 
     Returns:
-        spans [B, N, 2] int64, (onset, offset) in frames.  Padded entries
-        are (0, 0).
+        spans [B, N, 2] int64, (onset, offset) in frames.
     """
-    sim = cross_cosine_similarity(x_frame, x_token, temperature)  # [B, T, N]
-
     T_all = frame_lengths.long().cpu().numpy()
     N_all = token_lengths.long().cpu().numpy()
     max_N = int(N_all.max())
     sim_np = sim.float().detach().cpu().numpy()
+    groups_np = groups.long().cpu().numpy() if groups is not None else None
 
-    spans_np = _viterbi_decode_batch(sim_np, T_all, N_all, max_N)
+    spans_np = _decode_fa_batch(sim_np, T_all, N_all, max_N, groups_np, False)
 
-    return torch.from_numpy(spans_np).to(x_frame.device)
+    return torch.from_numpy(spans_np).to(sim.device)
+
+
+def decode_alignment_spaced(
+    sim: Tensor,
+    frame_lengths: Tensor,
+    token_lengths: Tensor,
+    groups: Tensor | None = None,
+) -> Tensor:
+    """Viterbi-decode a frame/token similarity matrix into per-token spans.
+
+    Spaced variant: interleaved space (even indices) and real (odd) tokens.
+    Same base transitions as flat, plus for each even i (space token):
+      G_i -> G_{i+1}  (skip space token i)
+
+    Space tokens have emission from sim[:, i]; when visited their similarity
+    contributes, when skipped it does not.
+
+    When groups is provided (length N//2, mapping real tokens to groups):
+    within a group the space token is forced-skipped and a direct jump
+    P_{real_prev} -> P_{real_next} is added.
+
+    Args:
+        sim: [B, T, N] similarity between frame and token features
+             (N includes both space and real tokens).
+        frame_lengths: [B] int64, number of valid frames per sample.
+        token_lengths: [B] int64, number of valid tokens per sample.
+        groups: optional [B, N//2] int64, group label per real token.
+
+    Returns:
+        spans [B, N, 2] int64, (onset, offset) in frames.
+    """
+    T_all = frame_lengths.long().cpu().numpy()
+    N_all = token_lengths.long().cpu().numpy()
+    max_N = int(N_all.max())
+    sim_np = sim.float().detach().cpu().numpy()
+    groups_np = groups.long().cpu().numpy() if groups is not None else None
+
+    spans_np = _decode_fa_batch(sim_np, T_all, N_all, max_N, groups_np, True)
+
+    return torch.from_numpy(spans_np).to(sim.device)
