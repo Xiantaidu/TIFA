@@ -7,7 +7,7 @@ from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
 from lib.config.schema import RootConfig, LossConfig
-from lib.plot import cross_similarity_to_figure, topk_bar_figure
+from lib.plot import alignment_to_figure, cross_similarity_to_figure, topk_bar_figure
 from modules.decoding import decode_alignment_flat
 from modules.forced_alignment import ForcedAlignmentModel
 from modules.functional import cross_cosine_similarity
@@ -276,11 +276,9 @@ class ForcedAlignmentModule(BaseLightningModule):
         x_features, token_features, token_logits = self.model(spectrogram, tokens, t_mask, n_mask)
 
         if infer:
-            sim = cross_cosine_similarity(
-                x_features, token_features,
-                temperature=self.training_config.loss.frame_alignment.temperature,
-            )
-            pred_spans = decode_alignment_flat(sim, T, N)
+            temperature = self.training_config.loss.frame_alignment.temperature
+            sim = cross_cosine_similarity(x_features, token_features)  # [-1, 1]
+            pred_spans = decode_alignment_flat(sim / temperature, T, N)
             target_spans = main_sample["spans"]
             self._update_fa_metrics(pred_spans, target_spans, tokens)
 
@@ -288,11 +286,8 @@ class ForcedAlignmentModule(BaseLightningModule):
                 xf_d, tf_d, _ = self.model(
                     main_sample["spectrogram_dirty"], tokens, t_mask, n_mask,
                 )
-                sim_dirty = cross_cosine_similarity(
-                    xf_d, tf_d,
-                    temperature=self.training_config.loss.frame_alignment.temperature,
-                )
-                pred_spans_dirty = decode_alignment_flat(sim_dirty, T, N)
+                sim_dirty = cross_cosine_similarity(xf_d, tf_d)
+                pred_spans_dirty = decode_alignment_flat(sim_dirty / temperature, T, N)
                 self._update_fa_metrics(
                     pred_spans_dirty, target_spans, tokens, postfix="_dirty",
                 )
@@ -301,6 +296,8 @@ class ForcedAlignmentModule(BaseLightningModule):
                 "x_features": x_features,
                 "token_features": token_features,
                 "token_logits": token_logits,
+                "pred_spans": pred_spans,
+                "sim": sim,
             }
 
         batch_frames = T.sum().item()
@@ -337,8 +334,9 @@ class ForcedAlignmentModule(BaseLightningModule):
         max_plots = self.training_config.validation.max_plots
         stride = max(1, len(self.valid_dataset) // max_plots)
 
-        x_features = outputs["x_features"]
-        token_features = outputs["token_features"]
+        pred_spans = outputs["pred_spans"]
+        sim_all = outputs["sim"]
+        spectrograms = main["spectrogram"]
         regions = main["regions"]
         T_all = main["T"]
         N_all = main["N"]
@@ -353,28 +351,41 @@ class ForcedAlignmentModule(BaseLightningModule):
             if T_i == 0 or N_i == 0:
                 continue
 
-            xf = x_features[i, :T_i]
-            tf = token_features[i, :N_i]
-
             token_ids = main["tokens"][i, :N_i].tolist()
             token_labels = [
                 self.vocab.decode(int(tid), stringfy=True) or str(tid)
                 for tid in token_ids
             ]
 
-            sim = cross_cosine_similarity(xf, tf)  # [T_i, N_i]
+            item_path = self.valid_dataset.get_metadata("item_paths", data_idx)
+            logger: TensorBoardLogger = self.logger
 
-            fig = cross_similarity_to_figure(
+            sim = sim_all[i, :T_i, :N_i]  # [T_i, N_i]
+            fig_sim = cross_similarity_to_figure(
                 sim.float().detach().cpu().numpy().T,  # [N_i, T_i]
                 regions=regions[i, :T_i].detach().cpu().numpy(),
-                title=f"cross_cosine_similarity (idx={data_idx}, T={T_i}, N={N_i})",
+                title=item_path,
                 token_labels=token_labels,
             )
-            logger: TensorBoardLogger = self.logger
             logger.experiment.add_figure(
-                f"similarity/{data_idx}", fig, global_step=self.global_step,
+                f"similarity/{data_idx}", fig_sim, global_step=self.global_step,
             )
-            plt.close(fig)
+            plt.close(fig_sim)
+
+            spec = spectrograms[i, :T_i].detach().cpu().numpy()
+            ps = pred_spans[i, :N_i].detach().cpu().numpy()
+            gs = main["spans"][i, :N_i].detach().cpu().numpy()
+            fig_align = alignment_to_figure(
+                spec,
+                token_labels=token_labels,
+                pred_spans=ps,
+                gt_spans=gs,
+                title=item_path,
+            )
+            logger.experiment.add_figure(
+                f"alignment/{data_idx}", fig_align, global_step=self.global_step,
+            )
+            plt.close(fig_align)
 
     def plot_validation_metrics(self) -> None:
         K = self.training_config.validation.metrics_k_values
