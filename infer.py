@@ -113,16 +113,19 @@ def _run_inference(
         output_dir = path if path.is_dir() else path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    backend, vocabulary, g2p_pipeline = load_inference_model(
+    backend, vocabulary, g2p_config = load_inference_model(
         model,
         g2p_config_path=g2p,
         scope=scope,
         topk=topk,
     )
 
+    g2p_root = model.parent if g2p is None else ""
+
     dataset = AudioTextDataset(
         filemap=filemap,
-        g2p_pipeline=g2p_pipeline,
+        g2p_config=g2p_config,
+        g2p_root=g2p_root,
         vocabulary=vocabulary,
         audio_sample_rate=backend.sample_rate,
         language=g2p_languages if g2p_languages else None,

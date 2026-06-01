@@ -7,7 +7,9 @@ import numpy
 import torch
 import torch.utils.data
 
+from g2p.api import build_pipeline_from_config
 from lib.audio import load_audio
+from lib.config.schema import G2PPipelineConfig
 from lib.levenshtein import segment_groups
 from lib.vocabulary import Vocabulary
 from training.data import collate_nd
@@ -47,13 +49,16 @@ class AudioTextDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         filemap: dict[str, pathlib.Path],
-        g2p_pipeline,
+        g2p_config: G2PPipelineConfig,
+        g2p_root: str | pathlib.Path,
         vocabulary: Vocabulary,
         audio_sample_rate: int,
         language: str | set[str] | None = None,
         oov_handling: Literal["raise", "skip", "force"] = "skip",
     ):
-        self.g2p_pipeline = g2p_pipeline
+        self.g2p_config = g2p_config
+        self.g2p_root = g2p_root
+        self._g2p_pipeline = None
         self.vocabulary = vocabulary
         self.sample_rate = audio_sample_rate
         if isinstance(language, str):
@@ -70,10 +75,18 @@ class AudioTextDataset(torch.utils.data.Dataset):
         if not self.items:
             raise ValueError("Empty filemap")
 
+    def _get_g2p(self):
+        if self._g2p_pipeline is None:
+            self._g2p_pipeline = build_pipeline_from_config(
+                self.g2p_config, root_path=self.g2p_root,
+            )
+        return self._g2p_pipeline
+
     def __len__(self):
         return len(self.items)
 
     def __getitem__(self, idx):
+        g2p_pipeline = self._get_g2p()
         audio_path, identifier = self.items[idx]
 
         text_path = audio_path.with_suffix(".txt")
@@ -86,7 +99,7 @@ class AudioTextDataset(torch.utils.data.Dataset):
             return _skip(identifier, "Empty text")
 
         try:
-            g2p_texts = self.g2p_pipeline.convert(
+            g2p_texts = g2p_pipeline.convert(
                 text, languages=self.language,
             )
         except Exception as e:

@@ -7,7 +7,6 @@ import torch
 from lightning_utilities.core.rank_zero import rank_zero_only, rank_zero_info
 from torch import Tensor
 
-from g2p.api import build_pipeline_from_config
 from lib import logging
 from lib.config.core import ConfigBaseModel
 from lib.config.formatter import format_model
@@ -100,8 +99,8 @@ def load_inference_model(
     g2p_config_path: str | pathlib.Path | None = None,
     scope: int = 0,
     topk: int = 10,
-) -> tuple[InferenceBackend, Vocabulary, Any]:
-    """Load an InferenceBackend, vocabulary, and G2P pipeline from a checkpoint.
+) -> tuple[InferenceBackend, Vocabulary, G2PPipelineConfig]:
+    """Load an InferenceBackend, vocabulary, and G2P configuration.
 
     Args:
         checkpoint_path: Path to the .ckpt file.
@@ -111,7 +110,7 @@ def load_inference_model(
         topk: Number of top cosine-similarity frames per token for scoring.
 
     Returns:
-        (backend, vocabulary, g2p_pipeline)
+        (backend, vocabulary, g2p_config)
     """
     checkpoint_path = pathlib.Path(checkpoint_path)
     config_path = checkpoint_path.parent / "config.yaml"
@@ -125,10 +124,8 @@ def load_inference_model(
         g2p_config_path = pathlib.Path(g2p_config_path)
         g2p_raw = load_raw_config(g2p_config_path, inherit=False)
         g2p_config = G2PPipelineConfig.model_validate(g2p_raw, scope=scope)
-        g2p_root = g2p_config_path.parent
     else:
         g2p_config = inference_config.g2p
-        g2p_root = config_path.parent
 
     if g2p_config is None:
         raise ValueError(
@@ -160,16 +157,11 @@ def load_inference_model(
     backend.load_state_dict(state_dict, strict=True)
     backend.eval()
 
-    # Build G2P pipeline
-    g2p_pipeline = build_pipeline_from_config(
-        g2p_config, root_path=g2p_root,
-    )
-
     logging.info(
         f"Loaded model from '{checkpoint_path}'.", callback=rank_zero_info,
     )
 
-    return backend, vocabulary, g2p_pipeline
+    return backend, vocabulary, g2p_config
 
 
 def run_inference(
