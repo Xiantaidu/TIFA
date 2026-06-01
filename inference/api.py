@@ -1,5 +1,4 @@
 import pathlib
-from typing import Any
 
 import lightning.pytorch as pl
 import lightning.pytorch.callbacks
@@ -28,6 +27,7 @@ from .module import ForcedAlignmentInferenceModule
 __all__ = [
     "load_config_for_inference",
     "load_config_for_evaluation",
+    "load_g2p_config",
     "load_state_dict_for_inference",
     "load_inference_model",
     "run_inference",
@@ -37,6 +37,11 @@ __all__ = [
 @rank_zero_only
 def _log_config(cfg: ConfigBaseModel):
     print(format_model(cfg))
+
+
+def load_g2p_config(path: pathlib.Path, scope: int = 0) -> G2PPipelineConfig:
+    raw = load_raw_config(path, inherit=False)
+    return G2PPipelineConfig.model_validate(raw, scope=scope)
 
 
 def load_config_for_inference(
@@ -96,21 +101,18 @@ _ARCH_BACKEND_MAP: dict[str, type[InferenceBackend]] = {
 
 def load_inference_model(
     checkpoint_path: str | pathlib.Path,
-    g2p_config_path: str | pathlib.Path | None = None,
     scope: int = 0,
     topk: int = 10,
-) -> tuple[InferenceBackend, Vocabulary, G2PPipelineConfig]:
+) -> tuple[InferenceBackend, Vocabulary, G2PPipelineConfig | None]:
     """Load an InferenceBackend, vocabulary, and G2P configuration.
 
     Args:
         checkpoint_path: Path to the .ckpt file.
-        g2p_config_path: Optional custom G2P config YAML. Overrides
-            inference.g2p from the main config.
         scope: ConfigurationScope value.
         topk: Number of top cosine-similarity frames per token for scoring.
 
     Returns:
-        (backend, vocabulary, g2p_config)
+        (backend, vocabulary, g2p_config) — g2p_config may be None.
     """
     checkpoint_path = pathlib.Path(checkpoint_path)
     config_path = checkpoint_path.parent / "config.yaml"
@@ -119,19 +121,7 @@ def load_inference_model(
         config_path, scope=scope,
     )
 
-    # Resolve G2P config
-    if g2p_config_path is not None:
-        g2p_config_path = pathlib.Path(g2p_config_path)
-        g2p_raw = load_raw_config(g2p_config_path, inherit=False)
-        g2p_config = G2PPipelineConfig.model_validate(g2p_raw, scope=scope)
-    else:
-        g2p_config = inference_config.g2p
-
-    if g2p_config is None:
-        raise ValueError(
-            "No G2P configuration found. Provide --g2p or ensure "
-            "inference.g2p is present in the config."
-        )
+    g2p_config = inference_config.g2p
 
     # Build backend
     arch = model_config.arch

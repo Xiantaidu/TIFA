@@ -100,7 +100,7 @@ def _run_inference(
 ):
     from lightning_utilities.core.rank_zero import rank_zero_info
 
-    from inference.api import load_inference_model, run_inference
+    from inference.api import load_g2p_config, load_inference_model, run_inference
     from inference.data import AudioTextDataset
     from inference.callbacks import SaveTextGridCallback
 
@@ -115,12 +115,19 @@ def _run_inference(
 
     backend, vocabulary, g2p_config = load_inference_model(
         model,
-        g2p_config_path=g2p,
         scope=scope,
         topk=topk,
     )
 
-    g2p_root = model.parent if g2p is None else ""
+    if g2p is not None:
+        g2p_config = load_g2p_config(g2p, scope=scope)
+        g2p_root = g2p.parent if g2p.resolve().is_relative_to(model.parent.resolve()) else ""
+    elif g2p_config is not None:
+        g2p_root = model.parent
+    else:
+        raise click.UsageError(
+            "The model carries no g2p config. Provide one with --g2p."
+        )
 
     dataset = AudioTextDataset(
         filemap=filemap,
