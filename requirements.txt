@@ -23,5 +23,6 @@ scipy>=1.10.0
 sympy
 tensorboard
 tensorboardX
+textgrid
 torchmetrics
 tqdm
