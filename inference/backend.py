@@ -22,6 +22,11 @@ class InferenceContext(ABC):
     def __getitem__(self, idx) -> "InferenceContext":
         ...
 
+    @abstractmethod
+    def num_frames(self) -> Tensor:
+        """Number of valid spectrogram frames per item. ``[B]`` int64."""
+        ...
+
 
 class InferenceBackend(ABC):
     """Unified inference protocol for forced alignment models.
@@ -87,6 +92,9 @@ class ForcedAlignmentContext(InferenceContext):
             t_mask=self.t_mask[idx],
             n_mask=self.n_mask[idx],
         )
+
+    def num_frames(self) -> Tensor:
+        return self.t_mask.sum(dim=-1)
 
 
 class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):

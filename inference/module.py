@@ -16,25 +16,24 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         super().__init__()
         self.backend = backend
 
-    def predict_step(self, batch, batch_idx):
-        device = self.device
-        sr = self.backend.sample_rate
-        B = len(batch["name"])
+    def predict_step(self, batch: dict[str, ...], batch_idx):
+        device = batch["waveform"].device
+        timestep = self.backend.timestep
+        B = len(batch["identifier"])
 
-        waveform = batch["audio"].to(device)  # [B, L]
-        audio_lengths = batch["audio_lengths"].to(device)  # [B]
-        duration = audio_lengths.float() / sr  # [B]
+        waveform = batch["waveform"]  # [B, L]
+        duration = batch["duration"]  # [B] seconds
 
-        paths_batch = batch["paths"].to(device)  # [B, N_grid_max, W_max_max]
-        segments_batch = batch["segments"].to(device)  # [B, N_grid_max]
-        widths_batch = batch["widths"].to(device)  # [B, S_max]
-        words_batch = batch["words"].to(device)  # [B, N_grid_max]
-        g2p_data_list = batch["g2p_data"]
+        paths = batch["paths"]  # [B, N_grid_max, W_max_max]
+        words = batch["words"]  # [B, N_grid_max]
+        segments = batch["segments"]  # [B, N_grid_max]
+        widths = batch["widths"]  # [B, S_max]
+        lexicon = batch["lexicon"]
 
-        S_max = widths_batch.shape[1]
+        S_max = widths.shape[1]
 
         # ---- Step 1: sample paths ----
-        choices = sample_paths_perm(widths_batch, r=2)  # [B, K, S_max]
+        choices = sample_paths_perm(widths, r=2)  # [B, K, S_max]
         K = choices.shape[1]
 
         # ---- Step 2: deduplicate choices ----
@@ -53,9 +52,9 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
             return []
 
         # ---- Step 3: extract tokens for unique choices ----
-        paths_per_unique = paths_batch[sample_idx]  # [U, N_grid_max, W_max_max]
-        words_per_unique = words_batch[sample_idx]  # [U, N_grid_max, W_max_max]
-        segments_per_unique = segments_batch[sample_idx]  # [U, N_grid_max]
+        paths_per_unique = paths[sample_idx]  # [U, N_grid_max, W_max_max]
+        words_per_unique = words[sample_idx]  # [U, N_grid_max, W_max_max]
+        segments_per_unique = segments[sample_idx]  # [U, N_grid_max]
         tokens_raw = extract_tokens(
             paths_per_unique, segments_per_unique, unique_choices,
         )  # [U, N_grid_max]
@@ -68,10 +67,14 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         )  # [U, N_max']
 
         # ---- Step 4: infer + score ----
-        waveform_batch = waveform[sample_idx]  # [U, L]
-        duration_batch = duration[sample_idx]  # [U]
-        ctx = self.backend.infer(waveform_batch, duration_batch, compacted_tokens)
-        scores = self.backend.score(ctx, groups=compacted_words)  # [U, N_max']
+        ctx = self.backend.infer(
+            waveform[sample_idx], duration[sample_idx], compacted_tokens,
+        )
+        scores = self.backend.score(ctx)  # [U, N_max']
+
+        T = torch.zeros(B, dtype=torch.long, device=device)
+        T[sample_idx] = ctx.num_frames()  # [B]
+        Lq = T * timestep  # [B]
 
         # ---- Step 5: scatter-reduce per-segment mean scores ----
         # Two-level averaging (first within each unique choice, then across
@@ -93,7 +96,7 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         # Flatten (item, segment, alternative) to 1-d bins then scatter-add
         # votes from each unique choice.  We scatter both score and count to
         # compute the per-bin mean.
-        W_max_val = int(widths_batch.max().item())
+        W_max_val = int(widths.max().item())
         valid = seg_cnt > 0  # [U, S_max] -- segments that actually have tokens
 
         item_2d = sample_idx.unsqueeze(1).expand(-1, S_max)  # [U, S_max]
@@ -122,7 +125,7 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
 
         # ---- Step 7: classify items and decode ----
         # Real segments are those that received votes from at least one unique
-        # choice (acc_cnt > 0).  This replaces inferring S_i from widths_list.
+        # choice (acc_cnt > 0).
         seg_valid = acc_cnt.sum(dim=-1) > 0  # [B, S_max]
 
         # For each item i, which of the K sampled paths agree with best_alts
@@ -133,7 +136,7 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         ).all(dim=-1)  # [B, K]
         has_match = match.any(dim=1)  # [B]
 
-        single_path = widths_batch.max(dim=1).values == 1  # [B]
+        single_path = widths.max(dim=1).values == 1  # [B]
         pass1_mask = single_path | has_match  # [B]
 
         best_k = torch.where(
@@ -171,13 +174,13 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         words_p2: Tensor | None = None
         if pass2_idx.numel() > 0:
             tokens_raw_p2 = extract_tokens(
-                paths_batch[pass2_idx],
-                segments_batch[pass2_idx],
+                paths[pass2_idx],
+                segments[pass2_idx],
                 best_alts[pass2_idx],
             )  # [Q, N_grid_max]
             words_raw_p2 = extract_tokens(
-                words_batch[pass2_idx],
-                segments_batch[pass2_idx],
+                words[pass2_idx],
+                segments[pass2_idx],
                 best_alts[pass2_idx],
             )  # [Q, N_grid_max]
 
@@ -195,25 +198,27 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         for i in range(B):
             # Find the pass that contains i
             if pass1_mask[i]:
-                local_idx, spans_px, tokens_px, words_px = (
+                j, spans_px, tokens_px, words_px = (
                     pass1_local[i], spans_p1, tokens_p1, words_p1,
                 )
             else:
-                local_idx, spans_px, tokens_px, words_px = (
+                j, spans_px, tokens_px, words_px = (
                     pass2_local[i], spans_p2, tokens_p2, words_p2,
                 )
 
-            n = int((tokens_px[local_idx] != 0).sum().item())
-            spans_i = spans_px[local_idx, :n]
-            tokens_i = tokens_px[local_idx, :n]
-            words_i = words_px[local_idx, :n]
+            L_i = Lq[i].item()
+            N_i = int((tokens_px[j] != 0).sum().item())
+            spans_i = spans_px[j, :N_i]
+            tokens_i = tokens_px[j, :N_i]
+            words_i = words_px[j, :N_i]
 
             results.append({
-                "spans": spans_i,
-                "words": words_i,
+                "identifier": batch["identifier"][i],
+                "duration": L_i,
                 "tokens": tokens_i,
-                "g2p_data": g2p_data_list[i],
-                "name": batch["name"][i],
+                "words": words_i,
+                "spans": spans_i,
+                "lexicon": lexicon[i],
             })
 
         return results
