@@ -3,6 +3,7 @@ import torch
 from torch import Tensor
 
 from inference.backend import InferenceBackend
+from lib import logging
 from lib.path_sampling import compact_sequences, extract_tokens, sample_paths_perm
 
 
@@ -16,7 +17,14 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         super().__init__()
         self.backend = backend
 
-    def predict_step(self, batch: dict[str, ...], batch_idx):
+    def predict_step(self, batch, batch_idx):
+        # Emit warnings collected by the dataset workers
+        for msg in batch.get("warning", []):
+            logging.warning(msg, callback=self.trainer.progress_bar_callback.print)
+
+        if "waveform" not in batch:
+            return []
+
         device = batch["waveform"].device
         timestep = self.backend.timestep
         B = len(batch["identifier"])
@@ -29,6 +37,7 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         segments = batch["segments"]  # [B, N_grid_max]
         widths = batch["widths"]  # [B, S_max]
         lexicon = batch["lexicon"]
+        phoneme_map_list = batch["phonemes"]  # list[dict[(int,int), list[str]]]
 
         S_max = widths.shape[1]
 
@@ -212,12 +221,18 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
             tokens_i = tokens_px[j, :N_i]
             words_i = words_px[j, :N_i]
 
+            phs: list[str] = []
+            pm = phoneme_map_list[i]
+            for s, alt in enumerate(best_alts[i].tolist()):
+                phs.extend(pm.get((s, alt), []))
+
             results.append({
                 "identifier": batch["identifier"][i],
                 "duration": L_i,
                 "tokens": tokens_i,
                 "words": words_i,
                 "spans": spans_i,
+                "phonemes": phs,
                 "lexicon": lexicon[i],
             })
 

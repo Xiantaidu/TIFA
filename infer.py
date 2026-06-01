@@ -1,0 +1,178 @@
+import pathlib
+
+import click
+
+from lib import logging
+from lib.cli import DefaultGroup
+from lib.config.schema import ConfigurationScope
+
+
+def _parse_filemap(path: pathlib.Path) -> dict[str, pathlib.Path]:
+    """Convert a file or directory path into a ``{identifier: audio_path}`` dict.
+
+    For a single file the key is the stem.  For a directory the keys are
+    relative-to-root paths (without extension), preserving any subdirectory
+    structure.
+    """
+    if path.is_file():
+        return {path.stem: path}
+    if path.is_dir():
+        files = [f for f in sorted(path.rglob("*")) if f.is_file()]
+        filemap = {
+            f.relative_to(path).with_suffix("").as_posix(): f
+            for f in files
+        }
+        if not filemap:
+            raise FileNotFoundError(f"No audio files found in directory: {path}")
+        return filemap
+    raise ValueError(f"Invalid path: {path}")
+
+
+def shared_options(func):
+    options = [
+        click.option(
+            "--model", "-m", required=True,
+            type=click.Path(exists=True, dir_okay=False, path_type=pathlib.Path),
+            help="Path to model checkpoint.",
+        ),
+        click.option(
+            "--output-dir", "-o",
+            type=click.Path(file_okay=False, writable=True, path_type=pathlib.Path),
+            default=None,
+            help="Directory to save output files.  Defaults to the input directory.",
+        ),
+        click.option(
+            "--language", "-l", default=None,
+            help="Default language.  Its G2P converters activate; its prefix "
+                 "is omitted from output labels.",
+        ),
+        click.option(
+            "--extended-language", "-L",
+            type=str, default=None,
+            help="Comma-separated additional G2P language tags.",
+        ),
+        click.option(
+            "--g2p",
+            type=click.Path(exists=True, dir_okay=False, path_type=pathlib.Path),
+            default=None,
+            help="Custom G2P pipeline config YAML (overrides inference.g2p from config).",
+        ),
+        click.option(
+            "--batch-size", type=int, default=8, show_default=True,
+            help="Batch size for inference.",
+        ),
+        click.option(
+            "--num-workers", type=int, default=2, show_default=True,
+            help="Number of dataloader worker processes.",
+        ),
+        click.option(
+            "--precision", default="32-true", show_default=True,
+            help="Precision for inference.",
+        ),
+        click.option(
+            "--topk", default=10, type=int, show_default=True,
+            help="Number of top cosine-similarity frames per token for scoring.",
+        ),
+        click.option(
+            "--oov-handling", default="skip",
+            type=click.Choice(["raise", "skip", "force"]), show_default=True,
+            help="How to handle OOV phonemes: raise (error), skip (discard sample), force (drop OOV paths).",
+        ),
+    ]
+    for option in options[::-1]:
+        func = option(func)
+    return func
+
+
+def _run_inference(
+    scope: int,
+    path: pathlib.Path,
+    model: pathlib.Path,
+    output_dir: pathlib.Path | None,
+    language: str | None,
+    extended_language: str | None,
+    g2p: pathlib.Path | None,
+    batch_size: int,
+    num_workers: int,
+    precision: str,
+    topk: int,
+    oov_handling: str,
+):
+    from lightning_utilities.core.rank_zero import rank_zero_info
+
+    from inference.api import load_inference_model, run_inference
+    from inference.data import AudioTextDataset
+    from inference.callbacks import SaveTextGridCallback
+
+    g2p_languages = {language} if language else set()
+    if extended_language:
+        g2p_languages |= {tag.strip() for tag in extended_language.split(",")}
+
+    filemap = _parse_filemap(path)
+    if output_dir is None:
+        output_dir = path if path.is_dir() else path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    backend, vocabulary, g2p_pipeline = load_inference_model(
+        model,
+        g2p_config_path=g2p,
+        scope=scope,
+        topk=topk,
+    )
+
+    dataset = AudioTextDataset(
+        filemap=filemap,
+        g2p_pipeline=g2p_pipeline,
+        vocabulary=vocabulary,
+        audio_sample_rate=backend.sample_rate,
+        language=g2p_languages if g2p_languages else None,
+        oov_handling=oov_handling,
+    )
+
+    callbacks = [
+        SaveTextGridCallback(
+            output_dir=output_dir,
+            language=language,
+        ),
+    ]
+
+    run_inference(
+        backend=backend,
+        dataset=dataset,
+        callbacks=callbacks,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        precision=precision,
+    )
+    logging.success("Inference completed.", callback=rank_zero_info)
+
+
+@click.group(cls=DefaultGroup, help="Run forced alignment inference.")
+def main():
+    pass
+
+
+@main.default_command()
+@click.argument(
+    "path",
+    type=click.Path(exists=True, dir_okay=True, file_okay=True, path_type=pathlib.Path),
+)
+@shared_options
+def supervised(**kwargs):
+    """Supervised forced alignment inference."""
+    _run_inference(ConfigurationScope.FA, **kwargs)
+
+
+@main.command(name="ssl")
+@click.argument(
+    "path",
+    type=click.Path(exists=True, dir_okay=True, file_okay=True, path_type=pathlib.Path),
+)
+@shared_options
+def ssl(**kwargs):
+    """Self-supervised forced alignment inference."""
+    _run_inference(ConfigurationScope.FA_SSL, **kwargs)
+
+
+if __name__ == "__main__":
+    main()
