@@ -54,20 +54,24 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
 
         # ---- Step 3: extract tokens for unique choices ----
         paths_per_unique = paths_batch[sample_idx]  # [U, N_grid_max, W_max_max]
+        words_per_unique = words_batch[sample_idx]  # [U, N_grid_max, W_max_max]
         segments_per_unique = segments_batch[sample_idx]  # [U, N_grid_max]
         tokens_raw = extract_tokens(
             paths_per_unique, segments_per_unique, unique_choices,
         )  # [U, N_grid_max]
+        words_raw = extract_tokens(
+            words_per_unique, segments_per_unique, unique_choices,
+        )  # [U, N_grid_max]
 
-        compacted_tokens, compacted_segments, compacted_words = compact_sequences(
-            tokens_raw, segments_per_unique, words_batch[sample_idx],
+        compacted_tokens, compacted_words, compacted_segments = compact_sequences(
+            tokens_raw, words_raw, segments_per_unique,
         )  # [U, N_max']
 
         # ---- Step 4: infer + score ----
         waveform_batch = waveform[sample_idx]  # [U, L]
         duration_batch = duration[sample_idx]  # [U]
         ctx = self.backend.infer(waveform_batch, duration_batch, compacted_tokens)
-        scores = self.backend.score(ctx)  # [U, N_max']
+        scores = self.backend.score(ctx, groups=compacted_words)  # [U, N_max']
 
         # ---- Step 5: scatter-reduce per-segment mean scores ----
         # Two-level averaging (first within each unique choice, then across
@@ -171,11 +175,14 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
                 segments_batch[pass2_idx],
                 best_alts[pass2_idx],
             )  # [Q, N_grid_max]
-
-            tokens_p2, _, words_p2 = compact_sequences(
-                tokens_raw_p2,
-                segments_batch[pass2_idx],
+            words_raw_p2 = extract_tokens(
                 words_batch[pass2_idx],
+                segments_batch[pass2_idx],
+                best_alts[pass2_idx],
+            )  # [Q, N_grid_max]
+
+            tokens_p2, words_p2 = compact_sequences(
+                tokens_raw_p2, words_raw_p2,
             )  # [Q, N_max'']
 
             ctx2 = self.backend.infer(

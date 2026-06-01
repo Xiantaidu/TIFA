@@ -1,4 +1,12 @@
-"""Multi-string edit-path segmentation via Levenshtein alignment."""
+"""Multi-string edit-path segmentation via Levenshtein alignment.
+
+Element type T requirements:
+    - ``==`` and ``hash``: define identity for alignment purposes.
+    - Distinguishable from ``None`` (gap marker).
+
+Callers may wrap T in a richer type; only ``==``/``hash`` participate in
+alignment decisions -- extra fields piggyback through unchanged.
+"""
 
 
 def _levenshtein_align(a: list[str], b: list[str]) -> tuple[list, list]:
