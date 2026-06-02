@@ -73,18 +73,32 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
             lr = step * (eta_max / ws)
 
     2. Cosine annealing with periodic warm restarts (``step >= ws``):
-        Each cycle lasts ``T_0`` steps; within a cycle the learning rate
-        follows a cosine curve smoothly decreasing from the upper bound to the
-        lower bound, then warm-restarts back to the upper bound at the end of
-        the cycle. In addition, the bounds of the ``k``-th cycle are both
-        scaled by the decay factor ``tmctx ** k`` so that the peak of each
-        cycle decreases over time::
+        Within a cycle the learning rate follows a cosine curve smoothly
+        decreasing from the upper bound to the lower bound, then warm-restarts
+        back to the upper bound at the end of the cycle. The bounds of the
+        ``k``-th cycle are both scaled by the decay factor ``tmctx ** k`` so
+        that the peak of each cycle decreases over time. Two cycle-length
+        schemes are available, selected by ``T_mul``:
 
-            T_cur = (step + ws) % T_0      # relative step within the cycle
-            k     = (step + ws) // T_0     # index of the current cycle
-            lo    = eta_min * tmctx ** k   # lower bound for this cycle
-            hi    = eta_max * tmctx ** k   # upper bound for this cycle
-            lr    = lo + 0.5 * (hi - lo) * (1 + cos(pi * T_cur / T_0))
+        * ``T_mul == 1`` (default): fixed-length cycles, every cycle lasts
+          ``T_0`` steps::
+
+            T_cur = (step + ws) % T_0
+            k     = (step + ws) // T_0
+            T_i   = T_0
+
+        * ``T_mul == 2``: geometrically growing cycles, the ``k``-th cycle
+          lasts ``T_0 * T_mult ** k`` steps::
+
+            k     = floor(log(step * (T_mult - 1) / T_0 + 1) / log(T_mult))
+            T_cur = step - T_0 * (T_mult ** k - 1) / (T_mult - 1)
+            T_i   = T_0 * T_mult ** k
+
+        In both cases the learning rate is::
+
+            lo = eta_min * tmctx ** k
+            hi = eta_max * tmctx ** k
+            lr = lo + 0.5 * (hi - lo) * (1 + cos(pi * T_cur / T_i))
 
     Args:
         optimizer: The optimizer to schedule.
@@ -94,18 +108,22 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
         min_lr: Lower bound on the learning rate (kept for compatibility; not
             applied in the annealing formula).
         last_epoch: Index of the previous step; ``-1`` starts from scratch.
-        T_0: Number of steps in a single cosine annealing cycle (the interval
-            between two warm restarts).
+        T_0: Number of steps in the first cosine annealing cycle.
         eta_max: Initial upper bound of the cosine annealing (peak lr).
         eta_min: Initial lower bound of the cosine annealing (trough lr).
-        T_mul / T_mult: Reserved fields; currently unused.
+        T_mul: Cycle-length scheme forwarded to :meth:`ctxadjust_lr` by
+            :meth:`get_lr`: ``1`` for fixed-length cycles, ``2`` for
+            geometrically growing cycles.
+        T_mult: Cycle-length growth factor used when ``T_mul == 2`` (e.g.
+            ``2.0`` doubles the cycle length after each restart). Forwarded to
+            :meth:`ctxadjust_lr` by :meth:`get_lr`.
 
     Note:
-        :meth:`get_lr` calls :meth:`ctxadjust_lr` without arguments, so the
+        :meth:`get_lr` forwards only ``T_mul`` and ``T_mult`` from ``__init__``
+        to :meth:`ctxadjust_lr`; the remaining annealing parameters use the
         defaults of :meth:`ctxadjust_lr` (``T_0=15000, eta_min=6e-5,
-        eta_max=9e-5, tmctx=0.98, ws=5000``) are used instead of the values
-        passed to ``__init__``. To make the constructor arguments take effect,
-        pass them explicitly to :meth:`ctxadjust_lr`.
+        eta_max=9e-5, tmctx=0.98, ws=5000``) rather than the constructor
+        values. To override those too, call :meth:`ctxadjust_lr` explicitly.
     """
 
     def __init__(
@@ -117,8 +135,8 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
             T_0=1500,
             eta_max=0.1,
             eta_min=0.,
-            T_mul=2,
-            T_mult=0.9999,
+            T_mul=1,
+            T_mult=2.0,
     ):
         self.warmup_steps = warmup_steps
         self.min_lr = min_lr
@@ -129,13 +147,18 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
         self.T_mult = T_mult
         super().__init__(optimizer, last_epoch)
 
-    def ctxadjust_lr(self, T_0=15000, eta_min=0.00006, eta_max=0.00009, tmctx=0.98, ws=5000):
+    def ctxadjust_lr(self, T_0=15000, eta_min=0.00006, eta_max=0.00009, tmctx=0.98, ws=5000, T_mul=1, T_mult=2.0):
         step_num = self.last_epoch + 1
-        T_cur = (step_num + ws) % T_0
-        T_i = T_0
-        T_curX = (step_num + ws) // T_0
-        cur_lr = eta_min * (tmctx ** T_curX) + 0.5 * (
-                eta_max * (tmctx ** T_curX) - eta_min * (tmctx ** T_curX)
+        if T_mul == 2:
+            cycle = int(np.log(step_num * (T_mult - 1) / T_0 + 1) / np.log(T_mult))
+            T_cur = step_num - T_0 * (T_mult ** cycle - 1) / (T_mult - 1)
+            T_i = T_0 * T_mult ** cycle
+        else:
+            T_cur = (step_num + ws) % T_0
+            T_i = T_0
+            cycle = (step_num + ws) // T_0
+        cur_lr = eta_min * (tmctx ** cycle) + 0.5 * (
+                eta_max * (tmctx ** cycle) - eta_min * (tmctx ** cycle)
         ) * (1 + np.cos(np.pi * T_cur / T_i))
         if ws > step_num:
             cur_lr = step_num * (eta_max / ws)
@@ -144,7 +167,7 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
     def get_lr(self):
         lrs = []
         for _ in self.base_lrs:
-            lrs.append(self.ctxadjust_lr())
+            lrs.append(self.ctxadjust_lr(T_mul=self.T_mul, T_mult=self.T_mult))
         return lrs
 
     def set_step(self, step: int):
