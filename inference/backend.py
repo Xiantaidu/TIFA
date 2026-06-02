@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 
 from lib.config.schema import InferenceConfig, ModelConfig
@@ -76,9 +77,10 @@ class InferenceBackend(ABC):
 
 @dataclass
 class ForcedAlignmentContext(InferenceContext):
-    x_features: Tensor  # [B, T, C]
+    frame_features: Tensor  # [B, T, C]
     token_features: Tensor  # [B, N, C]
-    token_logits: Tensor  # [B, N]
+    frame_logits: Tensor  # [B, T, V]
+    tokens: Tensor  # [B, N] int64
     t_mask: Tensor  # [B, T] bool
     n_mask: Tensor  # [B, N] bool
 
@@ -86,9 +88,10 @@ class ForcedAlignmentContext(InferenceContext):
         if isinstance(idx, int):
             idx = slice(idx, idx + 1)
         return ForcedAlignmentContext(
-            x_features=self.x_features[idx],
+            frame_features=self.frame_features[idx],
             token_features=self.token_features[idx],
-            token_logits=self.token_logits[idx],
+            frame_logits=self.frame_logits[idx],
+            tokens=self.tokens[idx],
             t_mask=self.t_mask[idx],
             n_mask=self.n_mask[idx],
         )
@@ -98,13 +101,21 @@ class ForcedAlignmentContext(InferenceContext):
 
 
 class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
-    """Supervised FA inference: cosine similarity + Viterbi decode.
+    """Supervised FA inference.
 
-    Scoring uses the token authenticity head (token_logits).
+    Scoring: top-k cosine-similarity frames per token, summed frame-CE
+    softmax probability for the token's predicted phoneme class.
     """
 
-    def __init__(self, model_config: ModelConfig, inference_config: InferenceConfig):
+    def __init__(
+            self,
+            model_config: ModelConfig,
+            inference_config: InferenceConfig,
+            vocab_size: int,
+            topk: int = 10,
+    ):
         super().__init__()
+        self.topk = topk
         feat = inference_config.features
         self._timestep = feat.hop_size / feat.audio_sample_rate
         self.spec_fn = StretchableMelSpectrogram(
@@ -116,7 +127,7 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
             fmin=feat.spectrogram.fmin,
             fmax=feat.spectrogram.fmax,
         )
-        self.model = ForcedAlignmentModel(model_config)
+        self.model = ForcedAlignmentModel(model_config, vocab_size)
 
     @property
     def timestep(self) -> float:
@@ -139,22 +150,35 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
         t_mask = idx.unsqueeze(0) < L.unsqueeze(1)  # [B, T]
         n_mask = tokens != 0  # [B, N]
 
-        x_features, token_features, token_logits = self.model(
+        frame_features, frame_logits, token_features, _ = self.model(
             spectrogram, tokens, t_mask, n_mask,
         )
         return ForcedAlignmentContext(
-            x_features=x_features,
+            frame_features=frame_features,
             token_features=token_features,
-            token_logits=token_logits,
+            frame_logits=frame_logits,
+            tokens=tokens,
             t_mask=t_mask,
             n_mask=n_mask,
         )
 
     def score(self, ctx: ForcedAlignmentContext) -> Tensor:
-        return ctx.token_logits.sigmoid()
+        sim = cross_cosine_similarity(ctx.frame_features, ctx.token_features)
+        k = min(self.topk, sim.shape[1])
+        _, top_indices = sim.topk(k, dim=1)  # [B, K, N]
+        probs = F.softmax(ctx.frame_logits, dim=-1)  # [B, T, V]
+        # Gather prob for each token's ID at every frame: [B, T, N]
+        token_probs = probs.gather(
+            -1, ctx.tokens.unsqueeze(1).expand(-1, sim.shape[1], -1),
+        )
+        # Gather at top-k frames per token, sum over k
+        ce_topk = token_probs.gather(1, top_indices)  # [B, K, N]
+        scores = ce_topk.sum(dim=1)  # [B, N]
+        scores[~ctx.n_mask] = 0.0
+        return scores
 
     def decode(self, ctx: ForcedAlignmentContext, groups: Tensor | None = None) -> Tensor:
-        sim = cross_cosine_similarity(ctx.x_features, ctx.token_features)
+        sim = cross_cosine_similarity(ctx.frame_features, ctx.token_features)
         frame_lengths = ctx.t_mask.sum(dim=-1)
         token_lengths = ctx.n_mask.sum(dim=-1)
         spans = decode_alignment_flat(sim, frame_lengths, token_lengths, groups=groups)
@@ -164,7 +188,7 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
 class ForcedAlignmentSSLInferenceModel(nn.Module, InferenceBackend):
     """SSL FA inference: attention-based similarity + decode. STUB."""
 
-    def __init__(self, model_config: ModelConfig, inference_config: InferenceConfig):
+    def __init__(self, model_config: ModelConfig, inference_config: InferenceConfig, **kwargs):
         super().__init__()
         feat = inference_config.features
         self._timestep = feat.hop_size / feat.audio_sample_rate

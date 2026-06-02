@@ -47,9 +47,10 @@ training:
       weight: 1.0
       temperature: 0.1
       bidirectional: true
-    token_authenticity:
+    token_identity:
       weight: 1.0
-      pos_weight: 0.04
+    frame_identity:
+      weight: 1.0
   validation:
     metrics_ber_tolerance: 5
     metrics_k_values: [20]

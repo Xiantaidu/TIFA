@@ -376,9 +376,12 @@ class SpanContrastiveLossConfig(ConfigBaseModel):
     bidirectional: bool = True
 
 
-class TokenAuthenticityLossConfig(ConfigBaseModel):
-    weight: float = 0.1
-    pos_weight: float | None = None
+class TokenIdentityLossConfig(ConfigBaseModel):
+    weight: float = 1.0
+
+
+class FrameCrossEntropyLossConfig(ConfigBaseModel):
+    weight: float = 1.0
 
 
 class LossConfig(ConfigBaseModel):
@@ -390,9 +393,12 @@ class LossConfig(ConfigBaseModel):
         "scope": ConfigurationScope.FA,
         "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA),
     })
-    token_authenticity: TokenAuthenticityLossConfig = Field(None, json_schema_extra={
+    token_identity: TokenIdentityLossConfig = Field(None, json_schema_extra={
         "scope": ConfigurationScope.FA,
         "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA),
+    })
+    frame_identity: FrameCrossEntropyLossConfig = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.FA,
     })
 
 

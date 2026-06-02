@@ -36,10 +36,13 @@ def apply_sequence_edits(
         p_ins: per-gap insertion probability.
 
     Returns:
-        ``(new_tokens, new_spans, new_regions, authentic)`` where:
-        - new_tokens ``[N']``, new_spans ``[N', 2]``, new_regions ``[T]``,
-          authentic ``[N']`` bool (True for original-kept, False for
-          inserted or substituted).
+        ``(new_tokens, new_spans, new_regions, original_tokens)`` where:
+        - new_tokens ``[N']`` int64, edited token IDs.
+        - new_spans ``[N', 2]`` int64, (inclusive_start, exclusive_end) frames.
+        - new_regions ``[T]`` int64, per-frame 1-based token index, 0 for stop.
+        - original_tokens ``[N']`` int64, the phoneme ID that belongs at each
+          position: the original token ID for kept and substituted tokens, 0
+          for insertions.
     """
     N = tokens.shape[0]
     T = regions.shape[0]
@@ -68,26 +71,26 @@ def apply_sequence_edits(
 
     orig_tokens = tokens.tolist()
     tgt_tokens: list[int] = []
-    tgt_authentic: list[bool] = []
+    tgt_original_tokens: list[int] = []
 
     for i in range(N):
         if do_ins[i]:
             tgt_tokens.append(random.randint(1, vocab_size - 1))
-            tgt_authentic.append(False)
+            tgt_original_tokens.append(0)
 
         if do_del[i]:
             continue
 
         if do_sub[i]:
             tgt_tokens.append(random.randint(1, vocab_size - 1))
-            tgt_authentic.append(False)
+            tgt_original_tokens.append(orig_tokens[i])
         else:
             tgt_tokens.append(orig_tokens[i])
-            tgt_authentic.append(True)
+            tgt_original_tokens.append(orig_tokens[i])
 
     if do_ins[N]:
         tgt_tokens.append(random.randint(1, vocab_size - 1))
-        tgt_authentic.append(False)
+        tgt_original_tokens.append(0)
 
     M = len(tgt_tokens)
 
@@ -105,7 +108,8 @@ def apply_sequence_edits(
 
     for i in range(1, N + 1):
         for j in range(1, M + 1):
-            if orig_tokens[i - 1] == tgt_tokens[j - 1] and tgt_authentic[j - 1]:
+            is_kept = tgt_original_tokens[j - 1] == tgt_tokens[j - 1]
+            if orig_tokens[i - 1] == tgt_tokens[j - 1] and is_kept:
                 match = dp[i - 1][j - 1]
             else:
                 match = INF
@@ -143,7 +147,7 @@ def apply_sequence_edits(
 
     new_tokens = torch.tensor(tgt_tokens, dtype=torch.long, device=device)
     new_spans = torch.tensor(new_spans_list, dtype=torch.long, device=device)
-    authentic = torch.tensor(tgt_authentic, dtype=torch.bool, device=device)
+    original_tokens = torch.tensor(tgt_original_tokens, dtype=torch.long, device=device)
 
     delta = torch.zeros(T + 1, dtype=torch.long, device=device)
     ids = torch.arange(1, M + 1, dtype=torch.long, device=device)
@@ -151,4 +155,4 @@ def apply_sequence_edits(
     delta.scatter_add_(0, new_spans[:, 1], -ids)
     new_regions = delta.cumsum(0)[:T]
 
-    return new_tokens, new_spans, new_regions, authentic
+    return new_tokens, new_spans, new_regions, original_tokens

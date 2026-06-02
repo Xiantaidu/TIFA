@@ -19,34 +19,39 @@ class ForcedAlignmentModel(nn.Module):
 
     The backbone must follow the protocol:
         __init__(x_in_dim, token_in_dim, x_out_dim, token_out_dim, **kwargs)
-        forward(x, token, t_mask, n_mask) -> (x_features, token_features)
+        forward(x, token, t_mask, n_mask) -> (x_out, token_out)
 
     where
         x:             [B, T, x_in_dim]             raw spectrogram frames
         token:         [B, N, token_in_dim]         pre-embedded phoneme tokens
         t_mask:        [B, T] bool, True = valid frame
         n_mask:        [B, N] bool, True = valid token
-        x_features:    [B, T, embedding_dim]
-        token_features:[B, N, embedding_dim + 1]
+        x_out:         [B, T, x_out_dim]
+        token_out:     [B, N, token_out_dim]
 
-    token_out_dim is embedding_dim + 1: the last channel is the authenticity
-    logit, sliced off by the holder.
+    The holder forward returns (x_features, frame_logits, token_features, token_logits):
+
+        frame_features:  [B, T, out_dim]          backbone frame features
+        frame_logits:    [B, T, vocab_size]       per-frame phoneme logits
+        token_features:  [B, N, out_dim]          backbone token features
+        token_logits:    [B, N, vocab_size]       per-token logits
     """
 
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: ModelConfig, vocab_size: int):
         super().__init__()
         expected = type(self).__name__
         if config.arch != expected:
             raise ValueError(ARCHITECTURE_ERROR_MSG.format(expected=expected, actual=config.arch))
+        self.vocab_size = vocab_size
         self.token_embedding = nn.Embedding(
-            config.max_vocab_size, config.embedding_dim, padding_idx=0,
+            vocab_size, config.embedding_dim, padding_idx=0,
         )
         self.backbone = build_object_from_class_name(
             config.backbone.cls, nn.Module,
             config.in_dim,              # x_in_dim
             config.embedding_dim,       # token_in_dim
-            config.out_dim,             # x_out_dim
-            config.out_dim + 1,         # token_out_dim (features + logit)
+            config.out_dim + vocab_size,         # x_out_dim (features + logit)
+            config.out_dim + vocab_size,         # token_out_dim (features + logit)
             **config.backbone.kwargs,
         )
 
@@ -56,12 +61,14 @@ class ForcedAlignmentModel(nn.Module):
         tokens: Tensor,
         t_mask: Tensor,
         n_mask: Tensor,
-    ) -> tuple[Tensor, Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         token = self.token_embedding(tokens)
-        x_features, token_out = self.backbone(spectrogram, token, t_mask, n_mask)
-        token_features = token_out[..., :-1]               # [B, N, out_dim]
-        token_logits = token_out[..., -1]                  # [B, N]
-        return x_features, token_features, token_logits
+        x_out, token_out = self.backbone(spectrogram, token, t_mask, n_mask)
+        frame_features = x_out[..., :-self.vocab_size]          # [B, T, out_dim]
+        frame_logits = x_out[..., -self.vocab_size:]        # [B, T, vocab_size]
+        token_features = token_out[..., :-self.vocab_size]  # [B, N, out_dim]
+        token_logits = token_out[..., -self.vocab_size:]    # [B, N, vocab_size]
+        return frame_features, frame_logits, token_features, token_logits
 
 
 class ForcedAlignmentSSLModel(nn.Module):

@@ -11,8 +11,10 @@ from lib.plot import alignment_to_figure, cross_similarity_to_figure, topk_bar_f
 from modules.decoding import decode_alignment_flat
 from modules.forced_alignment import ForcedAlignmentModel
 from modules.functional import cross_cosine_similarity
-from modules.losses.region_loss import FrameAlignmentLoss, SpanContrastiveLoss
-from modules.losses.token_loss import TokenAuthenticityLoss
+from modules.losses import (
+    FrameAlignmentLoss, SpanContrastiveLoss,
+    TokenIdentityLoss, FrameIdentityLoss,
+)
 from modules.metrics import (
     BoundaryErrorRate,
     BoundaryMAE,
@@ -31,7 +33,8 @@ from training.pl_module_base import BaseLightningModule, LossValue
 # Loss names shared between register_losses_and_metrics and forward_model.
 _FRAME_ALIGNMENT = "frame_alignment_loss"
 _SPAN_CONTRASTIVE = "span_contrastive_loss"
-_TOKEN_AUTHENTICITY = "token_authenticity_loss"
+_TOKEN_IDENTITY = "token_identity_loss"
+_FRAME_IDENTITY = "frame_identity_loss"
 
 # Metric name bases shared between _register_fa_metrics and plot_validation_metrics.
 _BER_ONSET = "BER_onset"
@@ -52,7 +55,7 @@ class ForcedAlignmentModule(BaseLightningModule):
         )
 
     def build_model(self) -> nn.Module:
-        return ForcedAlignmentModel(self.model_config)
+        return ForcedAlignmentModel(self.model_config, self.vocab.vocab_size)
 
     def register_losses_and_metrics(self) -> None:
         loss_cfg: LossConfig = self.training_config.loss
@@ -65,12 +68,15 @@ class ForcedAlignmentModule(BaseLightningModule):
             bidirectional=loss_cfg.span_contrastive.bidirectional,
         ), weight=loss_cfg.span_contrastive.weight)
 
-        aug_cfg = self.training_config.augmentation
-        if aug_cfg.sequence_edit.enabled:
+        self.register_loss(
+            _TOKEN_IDENTITY, TokenIdentityLoss(),
+            weight=loss_cfg.token_identity.weight,
+        )
+
+        if loss_cfg.frame_identity is not None:
             self.register_loss(
-                _TOKEN_AUTHENTICITY, TokenAuthenticityLoss(
-                    pos_weight=loss_cfg.token_authenticity.pos_weight,
-                ), weight=loss_cfg.token_authenticity.weight
+                _FRAME_IDENTITY, FrameIdentityLoss(),
+                weight=loss_cfg.frame_identity.weight,
             )
 
         self._register_fa_metrics()
@@ -273,16 +279,16 @@ class ForcedAlignmentModule(BaseLightningModule):
         t_mask = torch.arange(max_T, device=device).unsqueeze(0) < T.unsqueeze(1)
         n_mask = torch.arange(max_N, device=device).unsqueeze(0) < N.unsqueeze(1)
 
-        x_features, token_features, token_logits = self.model(spectrogram, tokens, t_mask, n_mask)
+        frame_features, frame_logits, token_features, token_logits = self.model(spectrogram, tokens, t_mask, n_mask)
 
         if infer:
-            sim = cross_cosine_similarity(x_features, token_features)  # [-1, 1]
+            sim = cross_cosine_similarity(frame_features, token_features)  # [-1, 1]
             pred_spans = decode_alignment_flat(sim, T, N)
             target_spans = main_sample["spans"]
             self._update_fa_metrics(pred_spans, target_spans, tokens)
 
             if self.use_parallel_dirty_metrics and "spectrogram_dirty" in main_sample:
-                xf_d, tf_d, _ = self.model(
+                xf_d, _, tf_d, _ = self.model(
                     main_sample["spectrogram_dirty"], tokens, t_mask, n_mask,
                 )
                 sim_dirty = cross_cosine_similarity(xf_d, tf_d)
@@ -292,7 +298,7 @@ class ForcedAlignmentModule(BaseLightningModule):
                 )
 
             return {
-                "x_features": x_features,
+                "frame_features": frame_features,
                 "token_features": token_features,
                 "token_logits": token_logits,
                 "pred_spans": pred_spans,
@@ -305,25 +311,34 @@ class ForcedAlignmentModule(BaseLightningModule):
         group_tokens = self._group_count(batch_idx, "tokens")
 
         frame_alignment_loss = LossValue(
-            mean=self.losses[_FRAME_ALIGNMENT](x_features, token_features, regions, t_mask, n_mask),
+            mean=self.losses[_FRAME_ALIGNMENT](frame_features, token_features, regions, t_mask, n_mask),
             batch_count=batch_frames, group_count=group_frames,
         )
         span_contrastive_loss = LossValue(
-            mean=self.losses[_SPAN_CONTRASTIVE](x_features, token_features, main_sample["spans"], t_mask, n_mask),
+            mean=self.losses[_SPAN_CONTRASTIVE](frame_features, token_features, main_sample["spans"], t_mask, n_mask),
             batch_count=batch_tokens, group_count=group_tokens,
         )
         losses = {
             _FRAME_ALIGNMENT: frame_alignment_loss,
             _SPAN_CONTRASTIVE: span_contrastive_loss,
         }
-        if _TOKEN_AUTHENTICITY in self.losses:
-            token_authenticity_loss = LossValue(
-                mean=self.losses[_TOKEN_AUTHENTICITY](
-                    token_logits, main_sample["authentic"], n_mask,
+        if _TOKEN_IDENTITY in self.losses:
+            token_identity_loss = LossValue(
+                mean=self.losses[_TOKEN_IDENTITY](
+                    token_logits, main_sample["token_targets"], n_mask,
                 ),
                 batch_count=batch_tokens, group_count=group_tokens,
             )
-            losses[_TOKEN_AUTHENTICITY] = token_authenticity_loss
+            losses[_TOKEN_IDENTITY] = token_identity_loss
+
+        if _FRAME_IDENTITY in self.losses:
+            frame_identity_loss = LossValue(
+                mean=self.losses[_FRAME_IDENTITY](
+                    frame_logits, main_sample["frame_targets"], t_mask,
+                ),
+                batch_count=batch_frames, group_count=group_frames,
+            )
+            losses[_FRAME_IDENTITY] = frame_identity_loss
 
         return losses
 
