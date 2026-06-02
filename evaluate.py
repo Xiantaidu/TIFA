@@ -9,35 +9,7 @@ from lib.config.io import load_raw_config
 from lib.config.schema import ConfigurationScope
 
 
-def shared_options(func):
-    options = [
-        click.option(
-            "--output-dir", "-o", required=True,
-            type=click.Path(file_okay=False, writable=True, path_type=pathlib.Path),
-            help="Directory to save evaluation results.",
-        ),
-        click.option(
-            "--ber-tols-ms", default="50", show_default=True,
-            callback=csv_list(int),
-            help="Comma-separated BER tolerances in milliseconds.",
-        ),
-        click.option(
-            "--token-topk", default="5,20", show_default=True,
-            callback=csv_list(int),
-            help="Comma-separated worst-k values for per-token metrics.",
-        ),
-        click.option(
-            "--pair-topk", default="5,20", show_default=True,
-            callback=csv_list(int),
-            help="Comma-separated worst-k values for pair conjunction metrics.",
-        ),
-    ]
-    for option in options[::-1]:
-        func = option(func)
-    return func
-
-
-def shared_online_options(func):
+def shared_input_options(func):
     options = [
         click.option(
             "--dataset", "-d", required=True,
@@ -53,6 +25,31 @@ def shared_online_options(func):
             "--prefix", default="valid", show_default=True,
             help="Dataset prefix (e.g. valid, train).",
         ),
+    ]
+    for option in options[::-1]:
+        func = option(func)
+    return func
+
+
+def shared_output_options(func):
+    options = [
+        click.option(
+            "--output-dir", "-o", required=True,
+            type=click.Path(file_okay=False, writable=True, path_type=pathlib.Path),
+            help="Directory to save evaluation results.",
+        ),
+        click.option(
+            "--plot/--no-plot", default=False, show_default=True,
+            help="Save per-sample and statistic plots.",
+        ),
+    ]
+    for option in options[::-1]:
+        func = option(func)
+    return func
+
+
+def shared_trainer_options(func):
+    options = [
         click.option(
             "--batch-size", type=int, default=4, show_default=True,
             help="Batch size for evaluation.",
@@ -69,6 +66,46 @@ def shared_online_options(func):
     for option in options[::-1]:
         func = option(func)
     return func
+
+
+def shared_metric_options(func=None, *, unit="ms"):
+    if unit == "ms":
+        ber_opt = click.option(
+            "--ber-tols-ms", "ber_tols", default="50", show_default=True,
+            callback=csv_list(int),
+            help="Comma-separated BER tolerances in milliseconds.",
+        )
+    elif unit == "frame":
+        ber_opt = click.option(
+            "--ber-tols", "ber_tols", default="5", show_default=True,
+            callback=csv_list(int),
+            help="Comma-separated BER tolerances in frames.",
+        )
+    else:
+        raise ValueError(f"Unknown metric unit: {unit}")
+
+    options = [
+        ber_opt,
+        click.option(
+            "--token-topk", default="20", show_default=True,
+            callback=csv_list(int),
+            help="Comma-separated worst-k values for per-token metrics.",
+        ),
+        click.option(
+            "--pair-topk", default="20", show_default=True,
+            callback=csv_list(int),
+            help="Comma-separated worst-k values for pair conjunction metrics.",
+        ),
+    ]
+
+    def decorator(f):
+        for option in reversed(options):
+            f = option(f)
+        return f
+
+    if func is None:
+        return decorator
+    return decorator(func)
 
 
 def _check_file_and_config(file: pathlib.Path, expected):
@@ -109,9 +146,10 @@ def _run_online_evaluation(
     batch_size: int,
     num_workers: int,
     precision: str,
-    ber_tols_ms: list[int],
+    ber_tols: list[int],
     token_topk: list[int],
     pair_topk: list[int],
+    plot: bool,
 ):
     from lightning_utilities.core.rank_zero import rank_zero_info
 
@@ -120,7 +158,7 @@ def _run_online_evaluation(
         load_inference_model,
         run_inference,
     )
-    from inference.callbacks import EvaluationMetricsCallback
+    from inference.callbacks import EvaluationMetricsCallback, VisualizeAlignmentCallback
     from training.data import PhonemeTimingDataset
 
     backend, vocabulary, _ = load_inference_model(model, scope=scope)
@@ -132,8 +170,6 @@ def _run_online_evaluation(
         dataset / "feature.yaml", inference_config.features.model_dump()
     )
     _check_vocabulary(model.parent, dataset)
-
-    unit_size_ms = backend.timestep * 1000
 
     ds = PhonemeTimingDataset(
         data_dir=dataset,
@@ -147,18 +183,30 @@ def _run_online_evaluation(
     save_path = output_dir / "summary.json"
 
     metric_callback = EvaluationMetricsCallback(
-        unit_size_ms=unit_size_ms,
+        unit="frame",
         vocab=vocabulary,
-        ber_tols_ms=ber_tols_ms,
+        ber_tols=ber_tols,
         token_topk=token_topk,
         pair_topk=pair_topk,
         save_path=save_path,
+        plot=plot,
     )
+
+    callbacks = [metric_callback]
+    if plot:
+        callbacks.append(
+            VisualizeAlignmentCallback(
+                save_dir=output_dir / "plots",
+                vocab=vocabulary,
+                num_digits=len(str(len(ds))),
+                item_paths=[ds.get_metadata("item_paths", i) for i in range(len(ds))],
+            )
+        )
 
     run_inference(
         backend=backend,
         dataset=ds,
-        callbacks=[metric_callback],
+        callbacks=callbacks,
         batch_size=batch_size,
         num_workers=num_workers,
         precision=precision,
@@ -174,9 +222,10 @@ def _run_offline_evaluation(
     stop_symbols: set[str],
     mismatch_handling: str,
     output_dir: pathlib.Path,
-    ber_tols_ms: list[int],
+    ber_tols: list[int],
     token_topk: list[int],
     pair_topk: list[int],
+    plot: bool,
 ):
     from lightning_utilities.core.rank_zero import rank_zero_info
 
@@ -197,12 +246,13 @@ def _run_offline_evaluation(
     save_path = output_dir / "summary.json"
 
     metric_callback = EvaluationMetricsCallback(
-        unit_size_ms=1000,  # TextGrid times are in seconds -> ms
+        unit="ms",
         vocab=paired.vocab,
-        ber_tols_ms=ber_tols_ms,
+        ber_tols=ber_tols,
         token_topk=token_topk,
         pair_topk=pair_topk,
         save_path=save_path,
+        plot=plot,
     )
 
     evaluate_offline(dataset=paired, callbacks=[metric_callback])
@@ -215,23 +265,26 @@ def main():
 
 
 @main.default_command()
-@shared_online_options
-@shared_options
+@shared_input_options
+@shared_output_options
+@shared_trainer_options
+@shared_metric_options(unit="frame")
 def supervised(**kwargs):
     """Supervised online evaluation on a binarized dataset."""
     _run_online_evaluation(scope=ConfigurationScope.FA, **kwargs)
 
 
 @main.command(name="ssl")
-@shared_online_options
-@shared_options
+@shared_input_options
+@shared_output_options
+@shared_trainer_options
+@shared_metric_options(unit="frame")
 def ssl(**kwargs):
     """Self-supervised online evaluation."""
     _run_online_evaluation(scope=ConfigurationScope.FA_SSL, **kwargs)
 
 
 @main.command(name="offline")
-@shared_options
 @click.option(
     "--pred", "pred_dir", required=True,
     type=click.Path(exists=True, dir_okay=True, file_okay=False, path_type=pathlib.Path),
@@ -256,6 +309,8 @@ def ssl(**kwargs):
     type=click.Choice(["raise", "skip"]), show_default=True,
     help="How to handle label mismatches: raise or skip.",
 )
+@shared_output_options
+@shared_metric_options(unit="ms")
 def offline(**kwargs):
     """Offline evaluation comparing two sets of TextGrid files."""
     _run_offline_evaluation(**kwargs)

@@ -67,6 +67,13 @@ class InferenceBackend(ABC):
         """
 
     @abstractmethod
+    def similarity(self, ctx: InferenceContext) -> Tensor:
+        """Cross similarity matrix ``[B, T, N]`` between frame and token features.
+
+        Higher values indicate stronger alignment.
+        """
+
+    @abstractmethod
     def score(self, ctx: InferenceContext) -> Tensor:
         """Extract per-token quality scores [B, N] from context. Higher = better."""
 
@@ -83,6 +90,7 @@ class ForcedAlignmentContext(InferenceContext):
     tokens: Tensor  # [B, N] int64
     t_mask: Tensor  # [B, T] bool
     n_mask: Tensor  # [B, N] bool
+    similarity: Tensor | None = None  # [B, T, N] cached by backend.similarity()
 
     def __getitem__(self, idx):
         if isinstance(idx, int):
@@ -94,6 +102,7 @@ class ForcedAlignmentContext(InferenceContext):
             tokens=self.tokens[idx],
             t_mask=self.t_mask[idx],
             n_mask=self.n_mask[idx],
+            similarity=self.similarity[idx] if self.similarity is not None else None,
         )
 
     def num_frames(self) -> Tensor:
@@ -161,8 +170,15 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
             n_mask=n_mask,
         )
 
+    def similarity(self, ctx: ForcedAlignmentContext) -> Tensor:
+        if ctx.similarity is None:
+            ctx.similarity = cross_cosine_similarity(
+                ctx.frame_features, ctx.token_features,
+            )
+        return ctx.similarity
+
     def score(self, ctx: ForcedAlignmentContext) -> Tensor:
-        sim = cross_cosine_similarity(ctx.frame_features, ctx.token_features)
+        sim = self.similarity(ctx)
         k = min(self.topk, sim.shape[1])
         _, top_indices = sim.topk(k, dim=1)  # [B, K, N]
         probs = F.softmax(ctx.frame_logits, dim=-1)  # [B, T, V]
@@ -177,7 +193,7 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
         return scores
 
     def decode(self, ctx: ForcedAlignmentContext, groups: Tensor | None = None) -> Tensor:
-        sim = cross_cosine_similarity(ctx.frame_features, ctx.token_features)
+        sim = self.similarity(ctx)
         frame_lengths = ctx.t_mask.sum(dim=-1)
         token_lengths = ctx.n_mask.sum(dim=-1)
         spans = decode_alignment_flat(sim, frame_lengths, token_lengths, groups=groups)
@@ -214,6 +230,9 @@ class ForcedAlignmentSSLInferenceModel(nn.Module, InferenceBackend):
         raise NotImplementedError("SSL inference not yet implemented")
 
     def score(self, ctx):
+        raise NotImplementedError("SSL inference not yet implemented")
+
+    def similarity(self, ctx):
         raise NotImplementedError("SSL inference not yet implemented")
 
     def decode(self, ctx, groups=None):

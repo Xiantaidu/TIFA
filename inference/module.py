@@ -250,12 +250,17 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         tokens = batch["tokens"]      # [B, N]
 
         ctx = self.backend.infer(waveform, duration, tokens)
+        similarity = self.backend.similarity(ctx)  # [B, T, N]
         spans_pred = self.backend.decode(ctx)  # [B, N, 2] seconds
 
         # Convert to frames so unit matches batch["spans"]
         spans_pred = spans_pred / self.backend.timestep
 
-        return {"spans": spans_pred}
+        result = {
+            "spans": spans_pred,
+            "similarity": similarity
+        }
+        return result
 
 
 class OfflineEvaluationModule(pl.LightningModule):
