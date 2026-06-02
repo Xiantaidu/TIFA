@@ -3,7 +3,7 @@ import pathlib
 import click
 
 from lib import logging
-from lib.cli import DefaultGroup
+from lib.cli import DefaultGroup, csv_set
 from lib.config.schema import ConfigurationScope
 
 
@@ -48,7 +48,7 @@ def shared_options(func):
         ),
         click.option(
             "--extended-language", "-L",
-            type=str, default=None,
+            default=None, callback=csv_set(str),
             help="Comma-separated additional G2P language tags.",
         ),
         click.option(
@@ -90,7 +90,7 @@ def _run_inference(
     model: pathlib.Path,
     output_dir: pathlib.Path | None,
     language: str | None,
-    extended_language: str | None,
+    extended_language: set[str] | None,
     g2p: pathlib.Path | None,
     batch_size: int,
     num_workers: int,
@@ -106,7 +106,7 @@ def _run_inference(
 
     g2p_languages = {language} if language else set()
     if extended_language:
-        g2p_languages |= {tag.strip() for tag in extended_language.split(",")}
+        g2p_languages |= extended_language
 
     filemap = _parse_filemap(path)
     if output_dir is None:

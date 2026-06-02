@@ -4,15 +4,9 @@ import pathlib
 import click
 
 from lib import logging
-from lib.cli import DefaultGroup
+from lib.cli import DefaultGroup, csv_list, csv_set
 from lib.config.io import load_raw_config
 from lib.config.schema import ConfigurationScope
-
-
-def _parse_int_list(ctx, param, value):
-    if value is None:
-        return None
-    return [int(x.strip()) for x in value.split(",")]
 
 
 def shared_options(func):
@@ -28,12 +22,12 @@ def shared_options(func):
         ),
         click.option(
             "--k-values", default="5,20", show_default=True,
-            callback=_parse_int_list,
+            callback=csv_list(int),
             help="Comma-separated worst-k values for per-token metrics.",
         ),
         click.option(
             "--conjunction-k", default="5,20", show_default=True,
-            callback=_parse_int_list,
+            callback=csv_list(int),
             help="Comma-separated worst-k values for pair conjunction metrics.",
         ),
     ]
@@ -42,7 +36,7 @@ def shared_options(func):
     return func
 
 
-def online_options(func):
+def shared_online_options(func):
     options = [
         click.option(
             "--dataset", "-d", required=True,
@@ -69,37 +63,6 @@ def online_options(func):
         click.option(
             "--precision", default="32-true", show_default=True,
             help="Precision for evaluation.",
-        ),
-    ]
-    for option in options[::-1]:
-        func = option(func)
-    return func
-
-
-def offline_options(func):
-    options = [
-        click.option(
-            "--pred-dir", "-p", required=True,
-            type=click.Path(exists=True, dir_okay=True, file_okay=False, path_type=pathlib.Path),
-            help="Directory of predicted TextGrid files.",
-        ),
-        click.option(
-            "--gt-dir", "-g", required=True,
-            type=click.Path(exists=True, dir_okay=True, file_okay=False, path_type=pathlib.Path),
-            help="Directory of ground truth TextGrid files.",
-        ),
-        click.option(
-            "--tier-name", default="phones", show_default=True,
-            help="TextGrid tier name to extract.",
-        ),
-        click.option(
-            "--stop-symbols", multiple=True, default=None,
-            help="Stop symbols to filter from TextGrid intervals (repeatable).",
-        ),
-        click.option(
-            "--mismatch-handling", default="raise",
-            type=click.Choice(["raise", "skip"]), show_default=True,
-            help="How to handle label mismatches: raise or skip.",
         ),
     ]
     for option in options[::-1]:
@@ -208,7 +171,7 @@ def _run_offline_evaluation(
     pred_dir: pathlib.Path,
     gt_dir: pathlib.Path,
     tier_name: str,
-    stop_symbols: tuple[str, ...] | None,
+    stop_symbols: set[str] | None,
     mismatch_handling: str,
     output_dir: pathlib.Path,
     ber_tolerance: float,
@@ -221,10 +184,8 @@ def _run_offline_evaluation(
     from inference.callbacks import EvaluationMetricsCallback
     from inference.data import PairedDataset, TextGridDataset
 
-    stop_set = set(stop_symbols) if stop_symbols else None
-
-    pred_ds = TextGridDataset(pred_dir, tier_name=tier_name, stop_symbols=stop_set)
-    gt_ds = TextGridDataset(gt_dir, tier_name=tier_name, stop_symbols=stop_set)
+    pred_ds = TextGridDataset(pred_dir, tier_name=tier_name, stop_symbols=stop_symbols)
+    gt_ds = TextGridDataset(gt_dir, tier_name=tier_name, stop_symbols=stop_symbols)
 
     paired = PairedDataset(
         pred_dataset=pred_ds,
@@ -254,16 +215,16 @@ def main():
 
 
 @main.default_command()
+@shared_online_options
 @shared_options
-@online_options
 def supervised(**kwargs):
     """Supervised online evaluation on a binarized dataset."""
     _run_online_evaluation(scope=ConfigurationScope.FA, **kwargs)
 
 
 @main.command(name="ssl")
+@shared_online_options
 @shared_options
-@online_options
 def ssl(**kwargs):
     """Self-supervised online evaluation."""
     _run_online_evaluation(scope=ConfigurationScope.FA_SSL, **kwargs)
@@ -271,7 +232,30 @@ def ssl(**kwargs):
 
 @main.command(name="offline")
 @shared_options
-@offline_options
+@click.option(
+    "--pred-dir", "-p", required=True,
+    type=click.Path(exists=True, dir_okay=True, file_okay=False, path_type=pathlib.Path),
+    help="Directory of predicted TextGrid files.",
+)
+@click.option(
+    "--gt-dir", "-g", required=True,
+    type=click.Path(exists=True, dir_okay=True, file_okay=False, path_type=pathlib.Path),
+    help="Directory of ground truth TextGrid files.",
+)
+@click.option(
+    "--tier-name", default="phones", show_default=True,
+    help="TextGrid tier name to extract.",
+)
+@click.option(
+    "--stop-symbols", default=None,
+    callback=csv_set(str),
+    help="Comma-separated stop symbols to filter from TextGrid intervals.",
+)
+@click.option(
+    "--mismatch-handling", default="raise",
+    type=click.Choice(["raise", "skip"]), show_default=True,
+    help="How to handle label mismatches: raise or skip.",
+)
 def offline(**kwargs):
     """Offline evaluation comparing two sets of TextGrid files."""
     _run_offline_evaluation(**kwargs)

@@ -1,4 +1,37 @@
+from collections.abc import Callable
+from typing import TypeVar
+
 import click
+
+T = TypeVar("T")
+
+
+def csv_list(factory: Callable[[str], T] = str):
+    """Click callback that parses a comma-separated string into a list.
+
+    ``factory`` converts each element (default: ``str``).
+    Returns ``None`` when the value is ``None``, otherwise a ``list``.
+    """
+    # noinspection PyUnusedLocal
+    def _parse(ctx, param, value):
+        if value is None:
+            return None
+        return [factory(x.strip()) for x in value.split(",")]
+    return _parse
+
+
+def csv_set(factory: Callable[[str], T] = str):
+    """Click callback that parses a comma-separated string into a set.
+
+    ``factory`` converts each element (default: ``str``).
+    Returns ``None`` when the value is ``None``, otherwise a ``set``.
+    """
+    # noinspection PyUnusedLocal
+    def _parse(ctx, param, value):
+        if value is None:
+            return None
+        return {factory(x.strip()) for x in value.split(",")}
+    return _parse
 
 
 class DefaultGroup(click.Group):
