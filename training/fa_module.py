@@ -67,17 +67,14 @@ class ForcedAlignmentModule(BaseLightningModule):
             temperature=loss_cfg.span_contrastive.temperature,
             bidirectional=loss_cfg.span_contrastive.bidirectional,
         ), weight=loss_cfg.span_contrastive.weight)
-
         self.register_loss(
             _TOKEN_IDENTITY, TokenIdentityLoss(),
             weight=loss_cfg.token_identity.weight,
         )
-
-        if loss_cfg.frame_identity is not None:
-            self.register_loss(
-                _FRAME_IDENTITY, FrameIdentityLoss(),
-                weight=loss_cfg.frame_identity.weight,
-            )
+        self.register_loss(
+            _FRAME_IDENTITY, FrameIdentityLoss(),
+            weight=loss_cfg.frame_identity.weight,
+        )
 
         self._register_fa_metrics()
         if self.use_parallel_dirty_metrics:
@@ -279,6 +276,12 @@ class ForcedAlignmentModule(BaseLightningModule):
         t_mask = torch.arange(max_T, device=device).unsqueeze(0) < T.unsqueeze(1)
         n_mask = torch.arange(max_N, device=device).unsqueeze(0) < N.unsqueeze(1)
 
+        is_mlm = main_sample["is_mlm"]  # [B] bool -- MLM-masked samples excluded from FA/SC
+        n_mask_fa = n_mask.clone()
+        n_mask_fa[is_mlm] = False
+        t_mask_fa = t_mask.clone()
+        t_mask_fa[is_mlm] = False
+
         frame_features, frame_logits, token_features, token_logits = self.model(spectrogram, tokens, t_mask, n_mask)
 
         if infer:
@@ -311,34 +314,31 @@ class ForcedAlignmentModule(BaseLightningModule):
         group_tokens = self._group_count(batch_idx, "tokens")
 
         frame_alignment_loss = LossValue(
-            mean=self.losses[_FRAME_ALIGNMENT](frame_features, token_features, regions, t_mask, n_mask),
+            mean=self.losses[_FRAME_ALIGNMENT](frame_features, token_features, regions, t_mask_fa, n_mask_fa),
             batch_count=batch_frames, group_count=group_frames,
         )
         span_contrastive_loss = LossValue(
-            mean=self.losses[_SPAN_CONTRASTIVE](frame_features, token_features, main_sample["spans"], t_mask, n_mask),
+            mean=self.losses[_SPAN_CONTRASTIVE](frame_features, token_features, main_sample["spans"], t_mask_fa, n_mask_fa),
             batch_count=batch_tokens, group_count=group_tokens,
+        )
+        token_identity_loss = LossValue(
+            mean=self.losses[_TOKEN_IDENTITY](
+                token_logits, main_sample["token_targets"], n_mask,
+            ),
+            batch_count=batch_tokens, group_count=group_tokens,
+        )
+        frame_identity_loss = LossValue(
+            mean=self.losses[_FRAME_IDENTITY](
+                frame_logits, main_sample["frame_targets"], t_mask,
+            ),
+            batch_count=batch_frames, group_count=group_frames,
         )
         losses = {
             _FRAME_ALIGNMENT: frame_alignment_loss,
             _SPAN_CONTRASTIVE: span_contrastive_loss,
+            _TOKEN_IDENTITY: token_identity_loss,
+            _FRAME_IDENTITY: frame_identity_loss,
         }
-        if _TOKEN_IDENTITY in self.losses:
-            token_identity_loss = LossValue(
-                mean=self.losses[_TOKEN_IDENTITY](
-                    token_logits, main_sample["token_targets"], n_mask,
-                ),
-                batch_count=batch_tokens, group_count=group_tokens,
-            )
-            losses[_TOKEN_IDENTITY] = token_identity_loss
-
-        if _FRAME_IDENTITY in self.losses:
-            frame_identity_loss = LossValue(
-                mean=self.losses[_FRAME_IDENTITY](
-                    frame_logits, main_sample["frame_targets"], t_mask,
-                ),
-                batch_count=batch_frames, group_count=group_frames,
-            )
-            losses[_FRAME_IDENTITY] = frame_identity_loss
 
         return losses
 

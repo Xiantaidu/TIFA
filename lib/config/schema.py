@@ -277,6 +277,12 @@ class SequenceEditAugmentationConfig(ConfigBaseModel):
     p_ins: float = Field(0.05, gt=0.0, le=1.0)
 
 
+class TokenMaskingAugmentationConfig(ConfigBaseModel):
+    enabled: bool = False
+    prob: float = Field(0.2, gt=0.0, le=1.0)
+    p_mask: float = Field(0.5, gt=0.0, le=1.0)
+
+
 class TokenPerturbationConfig(ConfigBaseModel):
     enabled: bool = False
     prob: float = Field(0.3, gt=0.0, le=1.0)
@@ -293,6 +299,10 @@ class AugmentationConfig(ConfigBaseModel):
     rir_reverb: RIRReverbAugmentationConfig = Field(...)
     token_perturbation: TokenPerturbationConfig = Field(...)
     sequence_edit: SequenceEditAugmentationConfig = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.FA,
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA),
+    })
+    token_masking: TokenMaskingAugmentationConfig = Field(None, json_schema_extra={
         "scope": ConfigurationScope.FA,
         "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA),
     })
@@ -323,6 +333,8 @@ class AugmentationConfig(ConfigBaseModel):
         updates: dict[str, object] = {}
         for field_name in self.model_fields:
             sub = getattr(self, field_name)
+            if sub is None:
+                continue
             new_enabled = compute(field_name, sub.enabled)
             if new_enabled != sub.enabled:
                 updates[field_name] = sub.model_copy(

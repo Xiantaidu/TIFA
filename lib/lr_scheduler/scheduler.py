@@ -2,10 +2,7 @@ from typing import Union
 
 import numpy as np
 import torch
-# from torch.optim.lr_scheduler import _LRScheduler
 from torch.optim.lr_scheduler import LRScheduler
-# from torch.optim.lr_scheduler import StepLR
-# from typeguard import check_argument_types
 
 
 class WarmupLR(LRScheduler):
@@ -147,7 +144,7 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
         self.T_mult = T_mult
         super().__init__(optimizer, last_epoch)
 
-    def ctxadjust_lr(self, T_0=15000, eta_min=0.00006, eta_max=0.00009, tmctx=0.98, ws=5000, T_mul=1, T_mult=2.0):
+    def ctx_adjust_lr(self, T_0=15000, eta_min=0.00006, eta_max=0.00009, tmctx=0.98, ws=5000, T_mul=1, T_mult=2.0):
         step_num = self.last_epoch + 1
         if T_mul == 2:
             cycle = int(np.log(step_num * (T_mult - 1) / T_0 + 1) / np.log(T_mult))
@@ -167,7 +164,7 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
     def get_lr(self):
         lrs = []
         for _ in self.base_lrs:
-            lrs.append(self.ctxadjust_lr(T_mul=self.T_mul, T_mult=self.T_mult))
+            lrs.append(self.ctx_adjust_lr(T_mul=self.T_mul, T_mult=self.T_mult))
         return lrs
 
     def set_step(self, step: int):

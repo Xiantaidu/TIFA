@@ -5,10 +5,16 @@ from typing import Iterable, Mapping, Sequence, TypeVar
 
 from lib.config.schema import MergedSymbolGroupConfig
 
-SPACE = 1
+# PAD = 0 (implicitly defined)
+MASK_TOKEN = 1
+SPACE_TOKEN = 2
+
+NUM_RESERVED_TOKENS = max(MASK_TOKEN, SPACE_TOKEN) + 1
 
 __all__ = [
-    "SPACE",
+    "MASK_TOKEN",
+    "SPACE_TOKEN",
+    "NUM_RESERVED_TOKENS",
     "VocabularyBuilder",
     "Vocabulary",
 ]
@@ -86,7 +92,7 @@ class VocabularyBuilder:
                 group_map[s] = (s,)
 
         ordered_names = sorted(group_map)
-        name_to_id = {name: idx for idx, name in enumerate(ordered_names, start=SPACE + 1)}
+        name_to_id = {name: idx for idx, name in enumerate(ordered_names, start=NUM_RESERVED_TOKENS)}
 
         # Build symbol -> ID mapping
         symbol_to_id: dict[str, int] = {}
@@ -154,7 +160,7 @@ class Vocabulary:
     @property
     def vocab_size(self) -> int:
         ids = self._symbol_to_id.values()
-        return max(SPACE, *ids) + 1 if ids else SPACE + 1
+        return max(NUM_RESERVED_TOKENS, *ids) + 1 if ids else NUM_RESERVED_TOKENS + 1
 
     def __len__(self) -> int:
         return self.vocab_size

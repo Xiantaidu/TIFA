@@ -14,7 +14,7 @@ from lib.config.schema import AugmentationConfig, BinarizerFeaturesConfig
 from lib.feature.mel import StretchableMelSpectrogram
 from lib.indexed_dataset import IndexedDataset
 from lib.sequence_edit import apply_sequence_edits
-from lib.vocabulary import Vocabulary
+from lib.vocabulary import MASK_TOKEN, NUM_RESERVED_TOKENS, Vocabulary
 from .augmentation import (
     AugmentationContext,
     ComposedAugmentation,
@@ -373,7 +373,8 @@ class PhonemeTimingDataset(BaseDataset):
                 tokens=sample["tokens"],
                 spans=sample["spans"],
                 regions=sample["regions"],
-                vocab_size=self._vocab_size,
+                min_token=NUM_RESERVED_TOKENS,
+                max_token=self._vocab_size - 1,
                 p_sub=edit_cfg.p_sub,
                 p_del=edit_cfg.p_del,
                 p_ins=edit_cfg.p_ins,
@@ -382,8 +383,24 @@ class PhonemeTimingDataset(BaseDataset):
             sample["spans"] = new_spans
             sample["regions"] = new_regions
             sample["token_targets"] = token_targets
+            sample["is_mlm"] = torch.tensor(False, dtype=torch.bool)
         else:
             sample["token_targets"] = sample["tokens"].clone()
+            mask_cfg = self.augmentation_config and self.augmentation_config.token_masking
+            if (
+                mask_cfg is not None and mask_cfg.enabled
+                and not self._ensure_original_tokens
+                and random.random() < mask_cfg.prob
+            ):
+                orig_tokens = sample["tokens"].clone()
+                new_tokens = orig_tokens.clone()
+                mlm = torch.rand(new_tokens.shape[0]) < mask_cfg.p_mask
+                new_tokens[mlm] = MASK_TOKEN
+                sample["tokens"] = new_tokens
+                sample["token_targets"] = orig_tokens
+                sample["is_mlm"] = torch.tensor(True, dtype=torch.bool)
+            else:
+                sample["is_mlm"] = torch.tensor(False, dtype=torch.bool)
 
         sample["T"] = torch.tensor(sample["spectrogram"].shape[0], dtype=torch.long)
         sample["N"] = torch.tensor(sample["tokens"].shape[0], dtype=torch.long)
@@ -424,6 +441,7 @@ class PhonemeTimingDataset(BaseDataset):
             "regions": torch.cat(shifted_regions),
             "token_targets": torch.cat([s["token_targets"] for s in processed]),
             "frame_targets": torch.cat([s["frame_targets"] for s in processed]),
+            "is_mlm": torch.any(torch.stack([s["is_mlm"] for s in processed])),
             "T": torch.tensor(sum(s["T"].item() for s in processed)),
             "N": torch.tensor(sum(N_vals)),
         }

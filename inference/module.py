@@ -36,8 +36,8 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         words = batch["words"]  # [B, N_grid_max]
         segments = batch["segments"]  # [B, N_grid_max]
         widths = batch["widths"]  # [B, S_max]
-        lexicon = batch["lexicon"]
-        phoneme_map_list = batch["phonemes"]  # list[dict[(int,int), list[str]]]
+        phonemes = batch["phonemes"]  # list[dict[(int,int), list[str]]]
+        lexicon = batch["lexicon"]  # pass-through to callbacks
 
         S_max = widths.shape[1]
 
@@ -222,7 +222,7 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
             words_i = words_px[j, :N_i]
 
             phs: list[str] = []
-            pm = phoneme_map_list[i]
+            pm = phonemes[i]
             for s, alt in enumerate(best_alts[i].tolist()):
                 phs.extend(pm.get((s, alt), []))
 

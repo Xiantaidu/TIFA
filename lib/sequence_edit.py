@@ -19,7 +19,8 @@ def apply_sequence_edits(
     tokens: Tensor,
     spans: Tensor,
     regions: Tensor,
-    vocab_size: int,
+    min_token: int,
+    max_token: int,
     p_sub: float,
     p_del: float,
     p_ins: float,
@@ -30,7 +31,8 @@ def apply_sequence_edits(
         tokens: ``[N]`` int64, 1-based vocabulary group IDs.
         spans: ``[N, 2]`` int64, (inclusive_start, exclusive_end) frames.
         regions: ``[T]`` int64, per-frame 1-based token index, 0 for stop.
-        vocab_size: number of token IDs (including padding 0).
+        min_token: smallest valid token ID for insertions/substitutions (inclusive).
+        max_token: largest valid token ID for insertions/substitutions (inclusive).
         p_sub: per-token substitution probability.
         p_del: per-token deletion probability.
         p_ins: per-gap insertion probability.
@@ -75,21 +77,21 @@ def apply_sequence_edits(
 
     for i in range(N):
         if do_ins[i]:
-            tgt_tokens.append(random.randint(1, vocab_size - 1))
+            tgt_tokens.append(random.randint(min_token, max_token))
             tgt_original_tokens.append(0)
 
         if do_del[i]:
             continue
 
         if do_sub[i]:
-            tgt_tokens.append(random.randint(1, vocab_size - 1))
+            tgt_tokens.append(random.randint(min_token, max_token))
             tgt_original_tokens.append(orig_tokens[i])
         else:
             tgt_tokens.append(orig_tokens[i])
             tgt_original_tokens.append(orig_tokens[i])
 
     if do_ins[N]:
-        tgt_tokens.append(random.randint(1, vocab_size - 1))
+        tgt_tokens.append(random.randint(min_token, max_token))
         tgt_original_tokens.append(0)
 
     M = len(tgt_tokens)
