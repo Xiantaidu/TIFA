@@ -36,9 +36,6 @@ class WarmupLR(_LRScheduler):
         self.min_lr = min_lr
         super().__init__(optimizer, last_epoch)
 
-    def __repr__(self):
-        return f"{self.__class__.__name__}(warmup_steps={self.warmup_steps}, lr={self.base_lrs}, min_lr={self.min_lr}, last_epoch={self.last_epoch})"
-
     def get_lr(self):
         step_num = self.last_epoch + 1
         lrs = []
@@ -131,9 +128,6 @@ class V3LSGDRLR(_LRScheduler):
         self.T_mul = T_mul
         self.T_mult = T_mult
         super().__init__(optimizer, last_epoch)
-
-    def __repr__(self):
-        return f"{self.__class__.__name__}(warmup_steps={self.warmup_steps}, lr={self.base_lrs}, min_lr={self.min_lr}, last_epoch={self.last_epoch})"
 
     def ctxadjust_lr(self, T_0=15000, eta_min=0.00006, eta_max=0.00009, tmctx=0.98, ws=5000):
         step_num = self.last_epoch + 1
