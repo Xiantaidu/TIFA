@@ -2,7 +2,8 @@ from typing import Union
 
 import numpy as np
 import torch
-from torch.optim.lr_scheduler import _LRScheduler
+# from torch.optim.lr_scheduler import _LRScheduler
+from torch.optim.lr_scheduler import LRScheduler as _LRScheduler
 # from torch.optim.lr_scheduler import StepLR
 # from typeguard import check_argument_types
 
@@ -36,7 +37,7 @@ class WarmupLR(_LRScheduler):
         super().__init__(optimizer, last_epoch)
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(warmup_steps={self.warmup_steps}, lr={self.base_lr}, min_lr={self.min_lr}, last_epoch={self.last_epoch})"
+        return f"{self.__class__.__name__}(warmup_steps={self.warmup_steps}, lr={self.base_lrs}, min_lr={self.min_lr}, last_epoch={self.last_epoch})"
 
     def get_lr(self):
         step_num = self.last_epoch + 1
@@ -84,7 +85,7 @@ class V3LSGDRLR(_LRScheduler):
         self.T_mult = T_mult
         super().__init__(optimizer, last_epoch)
     def __repr__(self):
-        return f"{self.__class__.__name__}(warmup_steps={self.warmup_steps}, lr={self.base_lr}, min_lr={self.min_lr}, last_epoch={self.last_epoch})"
+        return f"{self.__class__.__name__}(warmup_steps={self.warmup_steps}, lr={self.base_lrs}, min_lr={self.min_lr}, last_epoch={self.last_epoch})"
     def ctxadjust_lr(self, T_0=15000, eta_min=0.00006, eta_max=0.00009, tmctx=0.98, ws=5000):
         step_num = self.last_epoch + 1 #+360000
         T_cur = (step_num + ws) % T_0
