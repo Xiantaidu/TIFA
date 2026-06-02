@@ -56,10 +56,12 @@ class OverlapRatioCollection(torchmetrics.Metric):
 
     def update(self, pred_spans: Tensor, target_spans: Tensor, tokens: Tensor) -> None:
         mask = tokens != 0
-        pred_len = (pred_spans[..., 1] - pred_spans[..., 0]).clamp(min=0)
-        gt_len = (target_spans[..., 1] - target_spans[..., 0]).clamp(min=0)
-        overlap_start = torch.maximum(pred_spans[..., 0], target_spans[..., 0])
-        overlap_end = torch.minimum(pred_spans[..., 1], target_spans[..., 1])
+        pred_spans_f = pred_spans.float()
+        target_spans_f = target_spans.float()
+        pred_len = (pred_spans_f[..., 1] - pred_spans_f[..., 0]).clamp(min=0)
+        gt_len = (target_spans_f[..., 1] - target_spans_f[..., 0]).clamp(min=0)
+        overlap_start = torch.maximum(pred_spans_f[..., 0], target_spans_f[..., 0])
+        overlap_end = torch.minimum(pred_spans_f[..., 1], target_spans_f[..., 1])
         overlap_len = (overlap_end - overlap_start).clamp(min=0)
 
         if self.k is None:

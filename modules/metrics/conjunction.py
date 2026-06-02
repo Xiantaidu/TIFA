@@ -40,8 +40,8 @@ class PairConjunctionMAE(torchmetrics.Metric):
 
     def update(self, pred_spans: Tensor, target_spans: Tensor, tokens: Tensor) -> None:
         B, N = tokens.shape
-        onset_err = (pred_spans[..., 0] - target_spans[..., 0]).abs()  # [B, N]
-        offset_err = (pred_spans[..., 1] - target_spans[..., 1]).abs()  # [B, N]
+        onset_err = (pred_spans[..., 0] - target_spans[..., 0]).abs().float()  # [B, N]
+        offset_err = (pred_spans[..., 1] - target_spans[..., 1]).abs().float()  # [B, N]
 
         for b in range(B):
             valid = tokens[b] != 0

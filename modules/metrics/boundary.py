@@ -44,8 +44,8 @@ class BoundaryErrorRate(torchmetrics.Metric):
 
     def update(self, pred_spans: Tensor, target_spans: Tensor, tokens: Tensor) -> None:
         mask = tokens != 0
-        onset_err = (pred_spans[..., 0] - target_spans[..., 0]).abs()
-        offset_err = (pred_spans[..., 1] - target_spans[..., 1]).abs()
+        onset_err = (pred_spans[..., 0] - target_spans[..., 0]).abs().float()
+        offset_err = (pred_spans[..., 1] - target_spans[..., 1]).abs().float()
 
         if self.mode == "onset":
             incorrect = (onset_err > self.tolerance) & mask
@@ -141,7 +141,7 @@ class BoundaryMAE(torchmetrics.Metric):
 
     def update(self, pred_spans: Tensor, target_spans: Tensor, tokens: Tensor) -> None:
         mask = tokens != 0
-        errors = (pred_spans[..., self._dim] - target_spans[..., self._dim]).abs()
+        errors = (pred_spans[..., self._dim] - target_spans[..., self._dim]).abs().float()
 
         if self.k is None:
             self.error_sum += errors[mask].sum()
