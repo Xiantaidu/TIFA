@@ -174,7 +174,9 @@ class BoundaryMAE(torchmetrics.Metric):
         Only available when *k* is set.  Returns a mapping from token ID
         to MAE in frames for the k worst IDs.
         """
-        assert self.k is not None, "compute_top_k() requires k to be set"
+        if self.k is None:
+            return {}
+
         result = self._worst_ids()
         if result is None:
             return {}
