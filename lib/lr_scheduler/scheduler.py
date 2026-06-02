@@ -3,12 +3,12 @@ from typing import Union
 import numpy as np
 import torch
 # from torch.optim.lr_scheduler import _LRScheduler
-from torch.optim.lr_scheduler import LRScheduler as _LRScheduler
+from torch.optim.lr_scheduler import LRScheduler
 # from torch.optim.lr_scheduler import StepLR
 # from typeguard import check_argument_types
 
 
-class WarmupLR(_LRScheduler):
+class WarmupLR(LRScheduler):
     """The WarmupLR scheduler
 
     This scheduler is almost same as NoamLR Scheduler except for following
@@ -55,7 +55,7 @@ class WarmupLR(_LRScheduler):
         self.last_epoch = step
 
 
-class V3LSGDRLR(_LRScheduler):
+class V3LSGDRLR(LRScheduler):
     """Warmup + decaying-peak SGDR learning-rate scheduler.
 
     This is cosine annealing with warm restarts (SGDR, Stochastic Gradient
