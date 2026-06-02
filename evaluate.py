@@ -17,16 +17,17 @@ def shared_options(func):
             help="Directory to save evaluation results.",
         ),
         click.option(
-            "--ber-tolerance", type=float, default=50.0, show_default=True,
-            help="Boundary error rate tolerance in milliseconds.",
+            "--ber-tols-ms", default="50", show_default=True,
+            callback=csv_list(int),
+            help="Comma-separated BER tolerances in milliseconds.",
         ),
         click.option(
-            "--k-values", default="5,20", show_default=True,
+            "--token-topk", default="5,20", show_default=True,
             callback=csv_list(int),
             help="Comma-separated worst-k values for per-token metrics.",
         ),
         click.option(
-            "--conjunction-k", default="5,20", show_default=True,
+            "--pair-topk", default="5,20", show_default=True,
             callback=csv_list(int),
             help="Comma-separated worst-k values for pair conjunction metrics.",
         ),
@@ -108,9 +109,9 @@ def _run_online_evaluation(
     batch_size: int,
     num_workers: int,
     precision: str,
-    ber_tolerance: float,
-    k_values: list[int],
-    conjunction_k: list[int],
+    ber_tols_ms: list[int],
+    token_topk: list[int],
+    pair_topk: list[int],
 ):
     from lightning_utilities.core.rank_zero import rank_zero_info
 
@@ -132,8 +133,7 @@ def _run_online_evaluation(
     )
     _check_vocabulary(model.parent, dataset)
 
-    feat = load_raw_config(dataset / "feature.yaml", inherit=False)
-    unit_size_ms = feat["hop_size"] / feat["audio_sample_rate"] * 1000
+    unit_size_ms = backend.timestep * 1000
 
     ds = PhonemeTimingDataset(
         data_dir=dataset,
@@ -148,10 +148,10 @@ def _run_online_evaluation(
 
     metric_callback = EvaluationMetricsCallback(
         unit_size_ms=unit_size_ms,
-        vocab_size=vocabulary.vocab_size,
-        ber_tolerance_ms=ber_tolerance,
-        k_values=k_values,
-        conjunction_k_values=conjunction_k,
+        vocab=vocabulary,
+        ber_tols_ms=ber_tols_ms,
+        token_topk=token_topk,
+        pair_topk=pair_topk,
         save_path=save_path,
     )
 
@@ -171,12 +171,12 @@ def _run_offline_evaluation(
     pred_dir: pathlib.Path,
     gt_dir: pathlib.Path,
     tier_name: str,
-    stop_symbols: set[str] | None,
+    stop_symbols: set[str],
     mismatch_handling: str,
     output_dir: pathlib.Path,
-    ber_tolerance: float,
-    k_values: list[int],
-    conjunction_k: list[int],
+    ber_tols_ms: list[int],
+    token_topk: list[int],
+    pair_topk: list[int],
 ):
     from lightning_utilities.core.rank_zero import rank_zero_info
 
@@ -198,10 +198,10 @@ def _run_offline_evaluation(
 
     metric_callback = EvaluationMetricsCallback(
         unit_size_ms=1000,  # TextGrid times are in seconds -> ms
-        vocab_size=paired.vocab_size,
-        ber_tolerance_ms=ber_tolerance,
-        k_values=k_values,
-        conjunction_k_values=conjunction_k,
+        vocab=paired.vocab,
+        ber_tols_ms=ber_tols_ms,
+        token_topk=token_topk,
+        pair_topk=pair_topk,
         save_path=save_path,
     )
 
@@ -233,12 +233,12 @@ def ssl(**kwargs):
 @main.command(name="offline")
 @shared_options
 @click.option(
-    "--pred-dir", "-p", required=True,
+    "--pred", "pred_dir", required=True,
     type=click.Path(exists=True, dir_okay=True, file_okay=False, path_type=pathlib.Path),
     help="Directory of predicted TextGrid files.",
 )
 @click.option(
-    "--gt-dir", "-g", required=True,
+    "--gt", "gt_dir", required=True,
     type=click.Path(exists=True, dir_okay=True, file_okay=False, path_type=pathlib.Path),
     help="Directory of ground truth TextGrid files.",
 )
@@ -247,7 +247,7 @@ def ssl(**kwargs):
     help="TextGrid tier name to extract.",
 )
 @click.option(
-    "--stop-symbols", default=None,
+    "--stop-symbols", default="AP,SP,EP,GS,sil,br,pau", show_default=True,
     callback=csv_set(str),
     help="Comma-separated stop symbols to filter from TextGrid intervals.",
 )

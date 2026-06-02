@@ -382,7 +382,7 @@ class PairedDataset(torch.utils.data.Dataset):
             label: i + 3  # NUM_RESERVED_TOKENS
             for i, label in enumerate(sorted(all_marks))
         }
-        self.vocab_size = max(self._mark_to_id.values()) + 1 if self._mark_to_id else 3
+        self.vocab = Vocabulary(symbol_to_id=self._mark_to_id)
 
     def __len__(self):
         return len(self._items)
