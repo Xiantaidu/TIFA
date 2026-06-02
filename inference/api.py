@@ -22,7 +22,8 @@ from .backend import (
     ForcedAlignmentSSLInferenceModel,
     InferenceBackend,
 )
-from .module import ForcedAlignmentInferenceModule
+from .data import PairedDataset
+from .module import ForcedAlignmentInferenceModule, OfflineEvaluationModule
 
 __all__ = [
     "load_config_for_inference",
@@ -31,6 +32,7 @@ __all__ = [
     "load_state_dict_for_inference",
     "load_inference_model",
     "run_inference",
+    "evaluate_offline",
 ]
 
 
@@ -161,8 +163,9 @@ def run_inference(
     batch_size: int = 1,
     num_workers: int = 0,
     precision: str = "32-true",
+    mode: str = "predict",
 ) -> None:
-    """Run inference with Lightning Trainer.predict()."""
+    """Run inference (predict) or online evaluation (evaluate)."""
     module = ForcedAlignmentInferenceModule(backend)
     trainer = pl.Trainer(
         precision=precision,
@@ -179,4 +182,35 @@ def run_inference(
         persistent_workers=num_workers > 0,
         collate_fn=dataset.collate if hasattr(dataset, "collate") else None,
     )
-    trainer.predict(module, dataloader)
+    if mode == "predict":
+        trainer.predict(module, dataloader)
+    elif mode == "evaluate":
+        trainer.test(module, dataloader)
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
+
+def evaluate_offline(
+    dataset: PairedDataset,
+    callbacks: list[lightning.pytorch.callbacks.Callback],
+) -> None:
+    """Offline evaluation via trainer.test() with OfflineEvaluationModule.
+
+    Batch size and num_workers are hard-coded to 1/0 — no benefit
+    from batching pre-computed text data.
+    """
+    module = OfflineEvaluationModule()
+    trainer = pl.Trainer(
+        precision="32-true",
+        logger=False,
+        enable_checkpointing=False,
+        callbacks=callbacks,
+    )
+    dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=1,
+        num_workers=0,
+        shuffle=False,
+        collate_fn=dataset.collate if hasattr(dataset, "collate") else None,
+    )
+    trainer.test(module, dataloader)

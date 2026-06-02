@@ -153,6 +153,7 @@ def _run_inference(
         batch_size=batch_size,
         num_workers=num_workers,
         precision=precision,
+        mode="predict",
     )
     logging.success("Inference completed.", callback=rank_zero_info)
 

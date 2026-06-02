@@ -237,3 +237,33 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
             })
 
         return results
+
+    def test_step(self, batch, batch_idx) -> dict:
+        """Online evaluation on PhonemeTimingDataset batches.
+
+        Returns predicted spans in frames so they share the same unit
+        as ground truth (batch["spans"]).  The callback then applies a
+        single unit_size_ms to convert both to ms.
+        """
+        waveform = batch["waveform"]  # [B, L]
+        duration = batch["duration"]  # [B]
+        tokens = batch["tokens"]      # [B, N]
+
+        ctx = self.backend.infer(waveform, duration, tokens)
+        spans_pred = self.backend.decode(ctx)  # [B, N, 2] seconds
+
+        # Convert to frames so unit matches batch["spans"]
+        spans_pred = spans_pred / self.backend.timestep
+
+        return {"spans": spans_pred}
+
+
+class OfflineEvaluationModule(pl.LightningModule):
+    """Passes paired TextGrid spans to callbacks.
+
+    Batch (from PairedDataset) contains both spans_pred and spans_gt.
+    Returns batch["spans_pred"] so the callback sees outputs["spans"].
+    """
+
+    def test_step(self, batch, batch_idx) -> dict:
+        return {"spans": batch["spans_pred"]}
