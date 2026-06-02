@@ -4,15 +4,21 @@ from typing import Any, Literal
 
 import librosa
 import numpy
+import textgrid
 import torch
 import torch.utils.data
 
 from g2p.api import build_pipeline_from_config
+from lib import logging
 from lib.audio import load_audio
 from lib.config.schema import G2PPipelineConfig
 from lib.levenshtein import segment_groups
 from lib.vocabulary import Vocabulary
 from training.data import collate_nd
+
+
+def _skip(identifier: str, reason: str) -> dict[str, Any]:
+    return {"skip": True, "identifier": identifier, "warning": f"Skipping '{identifier}': {reason}"}
 
 
 @dataclass(eq=False)
@@ -235,5 +241,179 @@ class AudioTextDataset(torch.utils.data.Dataset):
         }
 
 
-def _skip(identifier: str, reason: str) -> dict[str, Any]:
-    return {"skip": True, "identifier": identifier, "warning": f"Skipping '{identifier}': {reason}"}
+class TextGridDataset(torch.utils.data.Dataset):
+    """Parses TextGrid files from a directory recursively.
+
+    Each item returns intervals from a named tier with empty marks filtered.
+    """
+
+    def __init__(
+        self,
+        directory: pathlib.Path,
+        tier_name: str = "phones",
+        stop_symbols: set[str] | None = None,
+    ):
+        self.directory = pathlib.Path(directory)
+        if not self.directory.is_dir():
+            raise FileNotFoundError(f"Directory not found: {directory}")
+        self.tier_name = tier_name
+        self.stop_symbols = stop_symbols or set()
+        self._files = sorted(
+            p for p in self.directory.glob("**/*.TextGrid")
+            if p.is_file()
+        )
+        if not self._files:
+            raise FileNotFoundError(
+                f"No .TextGrid files found in {directory}"
+            )
+
+    def __len__(self):
+        return len(self._files)
+
+    def __getitem__(self, index):
+        filepath = self._files[index]
+        identifier = str(
+            filepath.relative_to(self.directory).with_suffix("")
+        )
+        tg = textgrid.TextGrid.fromFile(str(filepath))
+
+        onsets: list[float] = []
+        offsets: list[float] = []
+        marks: list[str] = []
+
+        for tier in tg:
+            if tier.name == self.tier_name and isinstance(
+                tier, textgrid.IntervalTier
+            ):
+                for interval in tier:
+                    mark = interval.mark.strip()
+                    if not mark or mark in self.stop_symbols:
+                        continue
+                    onsets.append(float(interval.minTime))
+                    offsets.append(float(interval.maxTime))
+                    marks.append(mark)
+                break
+
+        return {
+            "identifier": identifier,
+            "onsets": onsets,
+            "offsets": offsets,
+            "marks": marks,
+        }
+
+
+class PairedDataset(torch.utils.data.Dataset):
+    """Pairs two datasets by identifier for offline evaluation.
+
+    Accepts any two Datasets whose items contain ``"identifier"``,
+    ``"onsets"``, ``"offsets"``, ``"marks"``.  Verifies label equality,
+    builds an internal vocabulary, and encodes spans + tokens.
+    """
+
+    def __init__(
+        self,
+        pred_dataset: torch.utils.data.Dataset,
+        gt_dataset: torch.utils.data.Dataset,
+        mismatch_handling: Literal["raise", "skip"] = "raise",
+    ):
+        self.mismatch_handling = mismatch_handling
+        self.vocab_size: int = 0
+
+        pred_by_id = {item["identifier"]: item for item in pred_dataset}
+        gt_by_id = {item["identifier"]: item for item in gt_dataset}
+
+        pred_only = set(pred_by_id) - set(gt_by_id)
+        gt_only = set(gt_by_id) - set(pred_by_id)
+        for oid in sorted(pred_only):
+            logging.warning(f"Prediction '{oid}' has no ground-truth counterpart, skipped")
+        for oid in sorted(gt_only):
+            logging.warning(f"Ground-truth '{oid}' has no prediction counterpart, skipped")
+
+        common = sorted(set(pred_by_id) & set(gt_by_id))
+        if not common:
+            raise ValueError(
+                "No matching identifiers found between pred and gt datasets"
+            )
+
+        self._items: list[dict] = []
+        all_marks: set[str] = set()
+
+        for identifier in common:
+            P = pred_by_id[identifier]
+            G = gt_by_id[identifier]
+
+            p_marks = P["marks"]
+            g_marks = G["marks"]
+
+            if len(p_marks) != len(g_marks):
+                msg = (
+                    f"'{identifier}': pred has {len(p_marks)} intervals, "
+                    f"gt has {len(g_marks)}"
+                )
+                if self.mismatch_handling == "raise":
+                    raise ValueError(msg)
+                logging.warning(f"Skipping {msg}")
+                continue
+
+            for i, (mp, mg) in enumerate(zip(p_marks, g_marks)):
+                if mp != mg:
+                    msg = (
+                        f"'{identifier}'[{i}]: pred='{mp}' vs gt='{mg}'"
+                    )
+                    if self.mismatch_handling == "raise":
+                        raise ValueError(msg)
+                    logging.warning(f"Skipping {msg}")
+                    break
+            else:
+                all_marks.update(p_marks)
+                self._items.append({
+                    "identifier": identifier,
+                    "pred_onsets": P["onsets"],
+                    "pred_offsets": P["offsets"],
+                    "gt_onsets": G["onsets"],
+                    "gt_offsets": G["offsets"],
+                    "marks": p_marks,
+                })
+
+        if not self._items:
+            raise ValueError("No valid pairs after verification")
+
+        self._mark_to_id = {
+            label: i + 3  # NUM_RESERVED_TOKENS
+            for i, label in enumerate(sorted(all_marks))
+        }
+        self.vocab_size = max(self._mark_to_id.values()) + 1 if self._mark_to_id else 3
+
+    def __len__(self):
+        return len(self._items)
+
+    def __getitem__(self, index):
+        item = self._items[index]
+        tokens = torch.tensor(
+            [self._mark_to_id[m] for m in item["marks"]], dtype=torch.int64
+        )
+        spans_pred = torch.stack([
+            torch.tensor(item["pred_onsets"], dtype=torch.float32),
+            torch.tensor(item["pred_offsets"], dtype=torch.float32),
+        ], dim=-1)
+        spans_gt = torch.stack([
+            torch.tensor(item["gt_onsets"], dtype=torch.float32),
+            torch.tensor(item["gt_offsets"], dtype=torch.float32),
+        ], dim=-1)
+        return {
+            "identifier": item["identifier"],
+            "tokens": tokens,
+            "spans": spans_gt,
+            "spans_pred": spans_pred,
+        }
+
+    @staticmethod
+    def collate(samples: list[dict]) -> dict:
+        return {
+            "identifier": [s["identifier"] for s in samples],
+            "tokens": collate_nd([s["tokens"] for s in samples], pad_value=0, ndim=1),
+            "spans": collate_nd([s["spans"] for s in samples], pad_value=0.0, ndim=2),
+            "spans_pred": collate_nd(
+                [s["spans_pred"] for s in samples], pad_value=0.0, ndim=2
+            ),
+        }
