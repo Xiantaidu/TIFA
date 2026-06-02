@@ -132,7 +132,7 @@ def load_inference_model(
             f"Expected one of: {list(_ARCH_BACKEND_MAP)}."
         )
 
-    # Load vocabulary before backend (backend needs vocab_size)
+    # Load vocabulary
     vocab_path = checkpoint_path.parent / "vocabulary.json"
     if not vocab_path.is_file():
         raise FileNotFoundError(
@@ -140,7 +140,7 @@ def load_inference_model(
         )
     vocabulary = Vocabulary.from_file(vocab_path)
 
-    backend = backend_cls(model_config, inference_config, vocab_size=vocabulary.vocab_size, topk=topk)
+    backend = backend_cls(model_config, inference_config, topk=topk)
 
     # Load state dict
     state_dict = load_state_dict_for_inference(checkpoint_path, ema=True)

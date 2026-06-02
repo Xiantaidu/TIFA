@@ -111,7 +111,6 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
             self,
             model_config: ModelConfig,
             inference_config: InferenceConfig,
-            vocab_size: int,
             topk: int = 10,
     ):
         super().__init__()
@@ -127,7 +126,7 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
             fmin=feat.spectrogram.fmin,
             fmax=feat.spectrogram.fmax,
         )
-        self.model = ForcedAlignmentModel(model_config, vocab_size)
+        self.model = ForcedAlignmentModel(model_config)
 
     @property
     def timestep(self) -> float:

@@ -37,21 +37,22 @@ class ForcedAlignmentModel(nn.Module):
         token_logits:    [B, N, vocab_size]       per-token logits
     """
 
-    def __init__(self, config: ModelConfig, vocab_size: int):
+    def __init__(self, config: ModelConfig):
         super().__init__()
         expected = type(self).__name__
         if config.arch != expected:
             raise ValueError(ARCHITECTURE_ERROR_MSG.format(expected=expected, actual=config.arch))
-        self.vocab_size = vocab_size
+        V = config.max_vocab_size
+        self.max_vocab_size = V
         self.token_embedding = nn.Embedding(
-            vocab_size, config.embedding_dim, padding_idx=0,
+            V, config.embedding_dim, padding_idx=0,
         )
         self.backbone = build_object_from_class_name(
             config.backbone.cls, nn.Module,
             config.in_dim,              # x_in_dim
             config.embedding_dim,       # token_in_dim
-            config.out_dim + vocab_size,         # x_out_dim (features + logit)
-            config.out_dim + vocab_size,         # token_out_dim (features + logit)
+            config.out_dim + V,         # x_out_dim (features + logit)
+            config.out_dim + V,         # token_out_dim (features + logit)
             **config.backbone.kwargs,
         )
 
@@ -64,10 +65,10 @@ class ForcedAlignmentModel(nn.Module):
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         token = self.token_embedding(tokens)
         x_out, token_out = self.backbone(spectrogram, token, t_mask, n_mask)
-        frame_features = x_out[..., :-self.vocab_size]          # [B, T, out_dim]
-        frame_logits = x_out[..., -self.vocab_size:]        # [B, T, vocab_size]
-        token_features = token_out[..., :-self.vocab_size]  # [B, N, out_dim]
-        token_logits = token_out[..., -self.vocab_size:]    # [B, N, vocab_size]
+        frame_features = x_out[..., :-self.max_vocab_size]      # [B, T, out_dim]
+        frame_logits = x_out[..., -self.max_vocab_size:]        # [B, T, max_vocab_size]
+        token_features = token_out[..., :-self.max_vocab_size]  # [B, N, out_dim]
+        token_logits = token_out[..., -self.max_vocab_size:]    # [B, N, max_vocab_size]
         return frame_features, frame_logits, token_features, token_logits
 
 

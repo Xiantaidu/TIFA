@@ -55,7 +55,7 @@ class ForcedAlignmentModule(BaseLightningModule):
         )
 
     def build_model(self) -> nn.Module:
-        return ForcedAlignmentModel(self.model_config, self.vocab.vocab_size)
+        return ForcedAlignmentModel(self.model_config)
 
     def register_losses_and_metrics(self) -> None:
         loss_cfg: LossConfig = self.training_config.loss

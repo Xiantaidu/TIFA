@@ -164,6 +164,7 @@ class BackboneConfig(ConfigBaseModel):
 
 class ModelConfig(ConfigBaseModel):
     arch: str = Field(...)
+    max_vocab_size: int = Field(256)
     in_dim: int = Field(None, json_schema_extra={
         "dynamic_expr": ref("binarizer.features.spectrogram.num_bins")
     })
@@ -171,7 +172,6 @@ class ModelConfig(ConfigBaseModel):
     out_dim: int = Field(256, gt=0, json_schema_extra={
         "scope": ConfigurationScope.FA,
     })
-    max_vocab_size: int = Field(4096, gt=2)
     backbone: BackboneConfig = Field(...)
     reconstructor: BackboneConfig | None = Field(None, json_schema_extra={
         "scope": ConfigurationScope.FA_SSL,
