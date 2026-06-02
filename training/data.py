@@ -271,8 +271,10 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
             sample["f0"] = f0_val
 
         if self.return_waveform:
-            sample["waveform"] = waveform
-            sample["duration"] = len(waveform) / self.sample_rate
+            sample["waveform"] = torch.from_numpy(waveform).float()
+            sample["duration"] = torch.tensor(
+                waveform.shape[0] / self.sample_rate, dtype=torch.float32,
+            )
         return {
             "_idx": torch.tensor(index, dtype=torch.long),
             "_augmentation": augmentation,
@@ -459,7 +461,7 @@ class PhonemeTimingDataset(BaseDataset):
             result["f0"] = torch.cat([s["f0"] for s in processed], dim=0)
         if "waveform" in processed[0]:
             result["waveform"] = torch.cat([s["waveform"] for s in processed], dim=0)
-            result["duration"] = torch.tensor(sum(s["duration"].item() for s in processed))
+            result["duration"] = torch.stack([s["duration"] for s in processed]).sum()
         return result
 
 
@@ -537,7 +539,7 @@ class TextOnlyDataset(BaseDataset):
             result["f0"] = torch.cat([s["f0"] for s in processed], dim=0)
         if "waveform" in processed[0]:
             result["waveform"] = torch.cat([s["waveform"] for s in processed], dim=0)
-            result["duration"] = torch.tensor(sum(s["duration"].item() for s in processed))
+            result["duration"] = torch.stack([s["duration"] for s in processed]).sum()
         return result
 
 
