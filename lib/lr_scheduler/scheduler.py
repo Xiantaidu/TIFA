@@ -55,7 +55,7 @@ class WarmupLR(LRScheduler):
         self.last_epoch = step
 
 
-class V3LSGDRLR(LRScheduler):
+class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
     """Warmup + decaying-peak SGDR learning-rate scheduler.
 
     This is cosine annealing with warm restarts (SGDR, Stochastic Gradient
