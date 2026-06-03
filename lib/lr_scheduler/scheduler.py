@@ -133,6 +133,14 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
             decay_floor: bool = True,
             last_epoch: int = -1,
     ):
+        if warmup_steps < 0:
+            raise ValueError(f"warmup_steps must be >= 0, got {warmup_steps}.")
+        if cycle_steps <= 0:
+            raise ValueError(f"cycle_steps must be > 0, got {cycle_steps}.")
+        if max_lr < min_lr:
+            raise ValueError(f"max_lr ({max_lr}) must be >= min_lr ({min_lr}).")
+        if cycle_mult < 1.0:
+            raise ValueError(f"cycle_mult must be >= 1.0, got {cycle_mult}.")
         self.warmup_steps = warmup_steps
         self.max_lr = max_lr
         self.min_lr = min_lr
@@ -160,8 +168,10 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
             T_i = self.cycle_steps * self.cycle_mult ** cycle
 
         decay = self.peak_decay ** cycle
-        hi = self.max_lr * decay
         lo = self.min_lr * decay if self.decay_floor else self.min_lr
+        # Guard against the upper bound decaying below the (fixed) floor, which
+        # would otherwise invert the cosine curve when decay_floor is False.
+        hi = max(self.max_lr * decay, lo)
         return lo + 0.5 * (hi - lo) * (1 + np.cos(np.pi * T_cur / T_i))
 
     def get_lr(self):
