@@ -161,6 +161,8 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
         super().__init__(optimizer, last_epoch)
 
     def _compute_lr(self, step_num: int) -> float:
+        # last_epoch can briefly be -1 before the initial step; clamp it.
+        step_num = max(step_num, 0)
         # Phase 1: linear warmup.
         if step_num < self.warmup_steps:
             return step_num * (self.max_lr / self.warmup_steps)
@@ -208,8 +210,11 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
         return cycle, t - cycle_start, T_i
 
     def get_lr(self):
-        step_num = self.last_epoch + 1
-        lr = self._compute_lr(step_num)
+        # Index the schedule directly by last_epoch (the scheduler step count),
+        # so the lr applied at step ``s`` is exactly ``_compute_lr(s)``. This is
+        # what makes cycle_boundary="trough" actually land min_lr on the
+        # boundary step (a previous ``last_epoch + 1`` shifted it onto the peak).
+        lr = self._compute_lr(self.last_epoch)
         return [lr for _ in self.base_lrs]
 
     def set_step(self, step: int):
