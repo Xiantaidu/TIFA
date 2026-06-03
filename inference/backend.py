@@ -1,3 +1,4 @@
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -74,8 +75,20 @@ class InferenceBackend(ABC):
         """
 
     @abstractmethod
-    def score(self, ctx: InferenceContext) -> Tensor:
-        """Extract per-token quality scores [B, N] from context. Higher = better."""
+    def score(self, ctx: InferenceContext, queries: Tensor) -> Tensor:
+        """Log-likelihood-ratio of each query token at each position.
+
+        Computes ``log(p(token) * V)`` so that the uniform distribution
+        gives a zero baseline.  An empty query row (all zeros) scores 0.
+        Higher = better.
+
+        Args:
+            ctx: Inference context.
+            queries: ``[B, Q, N]`` int64, candidate token IDs (0 = ignore).
+
+        Returns:
+            ``[B, Q, N]`` float.
+        """
 
     @abstractmethod
     def decode(self, ctx: InferenceContext, groups: Tensor | None = None) -> Tensor:
@@ -87,6 +100,7 @@ class ForcedAlignmentContext(InferenceContext):
     frame_features: Tensor  # [B, T, C]
     token_features: Tensor  # [B, N, C]
     frame_logits: Tensor  # [B, T, V]
+    token_logits: Tensor  # [B, N, V]
     tokens: Tensor  # [B, N] int64
     t_mask: Tensor  # [B, T] bool
     n_mask: Tensor  # [B, N] bool
@@ -99,6 +113,7 @@ class ForcedAlignmentContext(InferenceContext):
             frame_features=self.frame_features[idx],
             token_features=self.token_features[idx],
             frame_logits=self.frame_logits[idx],
+            token_logits=self.token_logits[idx],
             tokens=self.tokens[idx],
             t_mask=self.t_mask[idx],
             n_mask=self.n_mask[idx],
@@ -158,13 +173,14 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
         t_mask = idx.unsqueeze(0) < L.unsqueeze(1)  # [B, T]
         n_mask = tokens != 0  # [B, N]
 
-        frame_features, frame_logits, token_features, _ = self.model(
+        frame_features, frame_logits, token_features, token_logits = self.model(
             spectrogram, tokens, t_mask, n_mask,
         )
         return ForcedAlignmentContext(
             frame_features=frame_features,
             token_features=token_features,
             frame_logits=frame_logits,
+            token_logits=token_logits,
             tokens=tokens,
             t_mask=t_mask,
             n_mask=n_mask,
@@ -177,20 +193,26 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
             )
         return ctx.similarity
 
-    def score(self, ctx: ForcedAlignmentContext) -> Tensor:
-        sim = self.similarity(ctx)
-        k = min(self.topk, sim.shape[1])
-        _, top_indices = sim.topk(k, dim=1)  # [B, K, N]
-        probs = F.softmax(ctx.frame_logits, dim=-1)  # [B, T, V]
-        # Gather prob for each token's ID at every frame: [B, T, N]
-        token_probs = probs.gather(
-            -1, ctx.tokens.unsqueeze(1).expand(-1, sim.shape[1], -1),
-        )
-        # Gather at top-k frames per token, sum over k
-        ce_topk = token_probs.gather(1, top_indices)  # [B, K, N]
-        scores = ce_topk.sum(dim=1)  # [B, N]
-        scores[~ctx.n_mask] = 0.0
-        return scores
+    def score(self, ctx: ForcedAlignmentContext, queries: Tensor) -> Tensor:
+        """Log-likelihood-ratio of each query token at each position.
+
+        Computes ``log(p(token) * V)`` where *V* is the vocabulary size,
+        so that comparing to the uniform distribution gives a zero baseline:
+        an empty query row scores 0 (neutral), a token scores >0 if the
+        model predicts it better than random.
+
+        Args:
+            ctx: Inference context.
+            queries: ``[B, Q, N]`` int64, candidate token IDs (0 = ignore).
+
+        Returns:
+            ``[B, Q, N]`` float, log-likelihood-ratio per position.
+        """
+        V = ctx.token_logits.shape[-1]
+        log_probs = F.log_softmax(ctx.token_logits.float(), dim=-1)  # [B, N, V]
+        Q = queries.shape[1]
+        expanded = log_probs.unsqueeze(1).expand(-1, Q, -1, -1)  # [B, Q, N, V]
+        return expanded.gather(-1, queries.unsqueeze(-1)).squeeze(-1) + math.log(V)
 
     def decode(self, ctx: ForcedAlignmentContext, groups: Tensor | None = None) -> Tensor:
         sim = self.similarity(ctx)
@@ -229,7 +251,7 @@ class ForcedAlignmentSSLInferenceModel(nn.Module, InferenceBackend):
     def infer(self, waveform, duration, tokens):
         raise NotImplementedError("SSL inference not yet implemented")
 
-    def score(self, ctx):
+    def score(self, ctx, queries):
         raise NotImplementedError("SSL inference not yet implemented")
 
     def similarity(self, ctx):

@@ -4,7 +4,7 @@ import torch
 from torch import nn, Tensor
 
 from lib.config.schema import RootConfig
-from lib.path_sampling import sample_paths_uniform
+from lib.path_traversal import sample_paths_uniform
 from training.data import (
     BaseDataset,
     TextOnlyDataset,
