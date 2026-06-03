@@ -530,6 +530,8 @@ class ValidationConfig(ConfigBaseModel):
     metrics_ber_tolerance: int = Field(5, ge=0)
     metrics_k_values: list[int] = Field([5, 20])
     metrics_conjunction_k_values: list[int] = Field([5, 20])
+    metrics_determinacy_power: float = Field(2.0, ge=0)
+    metrics_determinacy_width: int | None = Field(5, ge=0)
 
 
 class FinetuningConfig(ConfigBaseModel):
