@@ -58,6 +58,19 @@ def shared_options(func):
             help="Custom G2P pipeline config YAML (overrides inference.g2p from config).",
         ),
         click.option(
+            "--oov-handling", default="skip",
+            type=click.Choice(["raise", "skip", "force"]), show_default=True,
+            help="How to handle OOV phonemes: raise (error), skip (discard sample), force (drop OOV paths).",
+        ),
+        click.option(
+            "--diagnosis", is_flag=True,
+            help="Save per-sample diagnosis JSON to <output-dir>/diagnosis.json.",
+        ),
+        click.option(
+            "--plot", is_flag=True,
+            help="Save per-sample similarity plots next to TextGrid output.",
+        ),
+        click.option(
             "--batch-size", type=int, default=8, show_default=True,
             help="Batch size for inference.",
         ),
@@ -68,22 +81,6 @@ def shared_options(func):
         click.option(
             "--precision", default="32-true", show_default=True,
             help="Precision for inference.",
-        ),
-        click.option(
-            "--topk", default=10, type=int, show_default=True,
-            help="Number of top cosine-similarity frames per token for scoring.",
-        ),
-        click.option(
-            "--oov-handling", default="skip",
-            type=click.Choice(["raise", "skip", "force"]), show_default=True,
-            help="How to handle OOV phonemes: raise (error), skip (discard sample), force (drop OOV paths).",
-        ),
-        click.option(
-            "--diagnosis", "diagnosis_path",
-            is_flag=False, flag_value="", default=None,
-            help="Save per-sample diagnosis JSON. When used without a value, "
-                 "saves to <output-dir>/diagnosis.json. When given a path, "
-                 "saves there instead.",
         ),
     ]
     for option in options[::-1]:
@@ -104,13 +101,14 @@ def _run_inference(
     precision: str,
     topk: int,
     oov_handling: str,
-    diagnosis_path: str | None = None,
+    diagnosis: bool = False,
+    plot: bool = False,
 ):
     from lightning_utilities.core.rank_zero import rank_zero_info
 
     from inference.api import load_g2p_config, load_inference_model, run_inference
     from inference.data import AudioTextDataset
-    from inference.callbacks import DiagnosisCallback, SaveTextGridCallback
+    from inference.callbacks import DiagnosisCallback, SavePlotCallback, SaveTextGridCallback
 
     g2p_languages = {language} if language else set()
     if extended_language:
@@ -154,12 +152,11 @@ def _run_inference(
         ),
     ]
 
-    if diagnosis_path is not None:
-        if diagnosis_path == "":
-            diagnosis_save_path = output_dir / "diagnosis.json"
-        else:
-            diagnosis_save_path = pathlib.Path(diagnosis_path)
-        callbacks.append(DiagnosisCallback(save_path=diagnosis_save_path))
+    if plot:
+        callbacks.append(SavePlotCallback(output_dir=output_dir))
+
+    if diagnosis:
+        callbacks.append(DiagnosisCallback(save_path=output_dir / "diagnosis.json"))
 
     run_inference(
         backend=backend,
@@ -184,6 +181,10 @@ def main():
     type=click.Path(exists=True, dir_okay=True, file_okay=True, path_type=pathlib.Path),
 )
 @shared_options
+@click.option(
+    "--topk", default=10, type=int, show_default=True,
+    help="Number of top cosine-similarity frames per token for scoring.",
+)
 def supervised(**kwargs):
     """Supervised forced alignment inference."""
     _run_inference(ConfigurationScope.FA, **kwargs)

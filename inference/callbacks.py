@@ -88,6 +88,37 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
             tg.write(str(output_path))
 
 
+class SavePlotCallback(lightning.pytorch.callbacks.Callback):
+    """Saves per-sample cross-similarity plots during inference."""
+
+    def __init__(self, output_dir: pathlib.Path):
+        super().__init__()
+        self.output_dir = pathlib.Path(output_dir)
+
+    def on_predict_batch_end(
+            self,
+            trainer: lightning.pytorch.Trainer,
+            pl_module: lightning.pytorch.LightningModule,
+            outputs: list[dict[str, Any]],
+            batch: dict[str, Any],
+            *args, **kwargs,
+    ) -> None:
+        for result in outputs:
+            sim = result["similarity"]  # [T_i, N_i]
+            identifier = result["identifier"]
+            phonemes = result.get("phonemes")
+            fig = cross_similarity_to_figure(
+                sim.T.float().detach().cpu().numpy(),
+                regions=None,
+                title=identifier,
+                token_labels=phonemes,
+            )
+            output_path = self.output_dir / f"{identifier}_sim.jpg"
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(output_path)
+            plt.close(fig)
+
+
 class DiagnosisCallback(lightning.pytorch.callbacks.Callback):
     """Accumulates per-sample PathDeterminacy scores and saves them as JSON.
 
