@@ -61,111 +61,113 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
     is lower than the previous one, so the schedule keeps oscillating while its
     overall envelope decreases toward convergence.
 
-    The learning rate has two phases (see :meth:`ctxadjust_lr` for the actual
+    The learning rate has two phases (see :meth:`_compute_lr` for the actual
     computation):
 
-    1. Warmup phase (``step < ws``):
-        Linear ramp from 0 up to ``eta_max``::
+    1. Warmup phase (``step < warmup_steps``):
+        Linear ramp from 0 up to ``max_lr``::
 
-            lr = step * (eta_max / ws)
+            lr = step * (max_lr / warmup_steps)
 
-    2. Cosine annealing with periodic warm restarts (``step >= ws``):
-        Within a cycle the learning rate follows a cosine curve smoothly
-        decreasing from the upper bound to the lower bound, then warm-restarts
-        back to the upper bound at the end of the cycle. The bounds of the
-        ``k``-th cycle are both scaled by the decay factor ``tmctx ** k`` so
+    2. Cosine annealing with periodic warm restarts (``step >= warmup_steps``):
+        Let ``t = step - warmup_steps`` be the number of steps elapsed since
+        warmup finished. Within a cycle the learning rate follows a cosine
+        curve smoothly decreasing from the upper bound to the lower bound, then
+        warm-restarts back to the upper bound at the end of the cycle. The
+        bounds of the ``k``-th cycle are both scaled by ``peak_decay ** k`` so
         that the peak of each cycle decreases over time. Two cycle-length
-        schemes are available, selected by ``T_mul``:
+        schemes are available, selected by ``cycle_mult``:
 
-        * ``T_mul == 1`` (default): fixed-length cycles, every cycle lasts
-          ``T_0`` steps::
+        * ``cycle_mult == 1`` (default): fixed-length cycles, every cycle lasts
+          ``cycle_steps`` steps::
 
-            T_cur = (step + ws) % T_0
-            k     = (step + ws) // T_0
-            T_i   = T_0
+            k     = t // cycle_steps
+            T_cur = t %  cycle_steps
+            T_i   = cycle_steps
 
-        * ``T_mul == 2``: geometrically growing cycles, the ``k``-th cycle
-          lasts ``T_0 * T_mult ** k`` steps::
+        * ``cycle_mult > 1``: geometrically growing cycles, the ``k``-th cycle
+          lasts ``cycle_steps * cycle_mult ** k`` steps::
 
-            k     = floor(log(step * (T_mult - 1) / T_0 + 1) / log(T_mult))
-            T_cur = step - T_0 * (T_mult ** k - 1) / (T_mult - 1)
-            T_i   = T_0 * T_mult ** k
+            k     = floor(log(t * (cycle_mult - 1) / cycle_steps + 1) / log(cycle_mult))
+            T_cur = t - cycle_steps * (cycle_mult ** k - 1) / (cycle_mult - 1)
+            T_i   = cycle_steps * cycle_mult ** k
 
         In both cases the learning rate is::
 
-            lo = eta_min * tmctx ** k
-            hi = eta_max * tmctx ** k
+            lo = (min_lr * peak_decay ** k) if decay_floor else min_lr
+            hi = max_lr * peak_decay ** k
             lr = lo + 0.5 * (hi - lo) * (1 + cos(pi * T_cur / T_i))
+
+        Because ``t`` is measured from the end of warmup, the first cosine cycle
+        starts at ``T_cur == 0`` exactly when warmup finishes, so the schedule
+        is continuous (warmup ends at ``max_lr`` and the cosine starts there
+        too -- no gap/jump).
 
     Args:
         optimizer: The optimizer to schedule.
-        warmup_steps: Only used in :meth:`get_lr` to choose a branch; both
-            branches currently call :meth:`ctxadjust_lr`, so behavior is the
-            same either way.
-        min_lr: Lower bound on the learning rate (kept for compatibility; not
-            applied in the annealing formula).
+        warmup_steps: Number of linear-warmup steps before cosine annealing.
+        max_lr: Peak learning rate (top of the first cosine cycle).
+        min_lr: Trough learning rate (bottom of the first cosine cycle).
+        cycle_steps: Number of steps in the first cosine annealing cycle.
+        peak_decay: Multiplier applied to the bounds at every restart, e.g.
+            ``0.98`` lowers them by 2% per cycle. Use ``1.0`` to disable decay
+            (classic SGDR).
+        decay_floor: If ``True`` (default) both the peak and the trough decay
+            by ``peak_decay`` each restart. If ``False`` only the peak decays
+            and the trough stays fixed at ``min_lr``.
+        cycle_mult: Cycle-length scheme. ``1.0`` for fixed-length cycles;
+            ``> 1.0`` for geometrically growing cycles (e.g. ``2.0`` doubles the
+            cycle length after each restart).
         last_epoch: Index of the previous step; ``-1`` starts from scratch.
-        T_0: Number of steps in the first cosine annealing cycle.
-        eta_max: Initial upper bound of the cosine annealing (peak lr).
-        eta_min: Initial lower bound of the cosine annealing (trough lr).
-        T_mul: Cycle-length scheme forwarded to :meth:`ctxadjust_lr` by
-            :meth:`get_lr`: ``1`` for fixed-length cycles, ``2`` for
-            geometrically growing cycles.
-        T_mult: Cycle-length growth factor used when ``T_mul == 2`` (e.g.
-            ``2.0`` doubles the cycle length after each restart). Forwarded to
-            :meth:`ctxadjust_lr` by :meth:`get_lr`.
-
-    Note:
-        :meth:`get_lr` forwards only ``T_mul`` and ``T_mult`` from ``__init__``
-        to :meth:`ctxadjust_lr`; the remaining annealing parameters use the
-        defaults of :meth:`ctxadjust_lr` (``T_0=15000, eta_min=6e-5,
-        eta_max=9e-5, tmctx=0.98, ws=5000``) rather than the constructor
-        values. To override those too, call :meth:`ctxadjust_lr` explicitly.
     """
 
     def __init__(
             self,
             optimizer: torch.optim.Optimizer,
-            warmup_steps: Union[int, float] = 25000,
-            min_lr=1e-5,
+            warmup_steps: Union[int, float] = 2500,
+            max_lr: float = 4e-4,
+            min_lr: float = 5e-5,
+            cycle_steps: Union[int, float] = 15000,
+            peak_decay: float = 0.98,
+            cycle_mult: float = 1.0,
+            decay_floor: bool = True,
             last_epoch: int = -1,
-            T_0=1500,
-            eta_max=0.1,
-            eta_min=0.,
-            T_mul=1,
-            T_mult=2.0,
     ):
         self.warmup_steps = warmup_steps
+        self.max_lr = max_lr
         self.min_lr = min_lr
-        self.eta_min = eta_min
-        self.T_0 = T_0
-        self.eta_max = eta_max
-        self.T_mul = T_mul
-        self.T_mult = T_mult
+        self.cycle_steps = cycle_steps
+        self.peak_decay = peak_decay
+        self.cycle_mult = cycle_mult
+        self.decay_floor = decay_floor
         super().__init__(optimizer, last_epoch)
 
-    def ctx_adjust_lr(self, T_0=15000, eta_min=0.00006, eta_max=0.00009, tmctx=0.98, ws=5000, T_mul=1, T_mult=2.0):
-        step_num = self.last_epoch + 1
-        if T_mul == 2:
-            cycle = int(np.log(step_num * (T_mult - 1) / T_0 + 1) / np.log(T_mult))
-            T_cur = step_num - T_0 * (T_mult ** cycle - 1) / (T_mult - 1)
-            T_i = T_0 * T_mult ** cycle
+    def _compute_lr(self, step_num: int) -> float:
+        # Phase 1: linear warmup.
+        if step_num < self.warmup_steps:
+            return step_num * (self.max_lr / self.warmup_steps)
+
+        # Phase 2: cosine annealing with warm restarts, counted from the end
+        # of warmup so that the first cycle starts at its peak (no gap).
+        t = step_num - self.warmup_steps
+        if self.cycle_mult == 1.0:
+            cycle = t // self.cycle_steps
+            T_cur = t % self.cycle_steps
+            T_i = self.cycle_steps
         else:
-            T_cur = (step_num + ws) % T_0
-            T_i = T_0
-            cycle = (step_num + ws) // T_0
-        cur_lr = eta_min * (tmctx ** cycle) + 0.5 * (
-                eta_max * (tmctx ** cycle) - eta_min * (tmctx ** cycle)
-        ) * (1 + np.cos(np.pi * T_cur / T_i))
-        if ws > step_num:
-            cur_lr = step_num * (eta_max / ws)
-        return cur_lr
+            cycle = int(np.log(t * (self.cycle_mult - 1) / self.cycle_steps + 1) / np.log(self.cycle_mult))
+            T_cur = t - self.cycle_steps * (self.cycle_mult ** cycle - 1) / (self.cycle_mult - 1)
+            T_i = self.cycle_steps * self.cycle_mult ** cycle
+
+        decay = self.peak_decay ** cycle
+        hi = self.max_lr * decay
+        lo = self.min_lr * decay if self.decay_floor else self.min_lr
+        return lo + 0.5 * (hi - lo) * (1 + np.cos(np.pi * T_cur / T_i))
 
     def get_lr(self):
-        lrs = []
-        for _ in self.base_lrs:
-            lrs.append(self.ctx_adjust_lr(T_mul=self.T_mul, T_mult=self.T_mult))
-        return lrs
+        step_num = self.last_epoch + 1
+        lr = self._compute_lr(step_num)
+        return [lr for _ in self.base_lrs]
 
     def set_step(self, step: int):
         self.last_epoch = step
