@@ -118,6 +118,12 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
         cycle_mult: Cycle-length scheme. ``1.0`` for fixed-length cycles;
             ``> 1.0`` for geometrically growing cycles (e.g. ``2.0`` doubles the
             cycle length after each restart).
+        cycle_boundary: Where a cosine cycle boundary falls. ``"peak"`` (default)
+            puts the peak (``max_lr``) on the boundary -- the classic SGDR phase
+            where the trough is reached one step before the restart. ``"trough"``
+            shifts the phase so the trough (``min_lr``) lands exactly on the
+            boundary, so checkpoints saved on cycle boundaries capture the
+            lowest lr instead of the post-restart peak.
         last_epoch: Index of the previous step; ``-1`` starts from scratch.
     """
 
@@ -131,6 +137,7 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
             peak_decay: float = 0.98,
             cycle_mult: float = 1.0,
             decay_floor: bool = True,
+            cycle_boundary: str = "peak",
             last_epoch: int = -1,
     ):
         if warmup_steps < 0:
@@ -141,6 +148,8 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
             raise ValueError(f"max_lr ({max_lr}) must be >= min_lr ({min_lr}).")
         if cycle_mult < 1.0:
             raise ValueError(f"cycle_mult must be >= 1.0, got {cycle_mult}.")
+        if cycle_boundary not in ("peak", "trough"):
+            raise ValueError(f"cycle_boundary must be 'peak' or 'trough', got {cycle_boundary!r}.")
         self.warmup_steps = warmup_steps
         self.max_lr = max_lr
         self.min_lr = min_lr
@@ -148,6 +157,7 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
         self.peak_decay = peak_decay
         self.cycle_mult = cycle_mult
         self.decay_floor = decay_floor
+        self.cycle_boundary = cycle_boundary
         super().__init__(optimizer, last_epoch)
 
     def _compute_lr(self, step_num: int) -> float:
@@ -155,17 +165,10 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
         if step_num < self.warmup_steps:
             return step_num * (self.max_lr / self.warmup_steps)
 
-        # Phase 2: cosine annealing with warm restarts, counted from the end
-        # of warmup so that the first cycle starts at its peak (no gap).
+        # Phase 2: cosine annealing with warm restarts. The cycle phase is
+        # measured from the end of warmup so the schedule connects to it.
         t = step_num - self.warmup_steps
-        if self.cycle_mult == 1.0:
-            cycle = t // self.cycle_steps
-            T_cur = t % self.cycle_steps
-            T_i = self.cycle_steps
-        else:
-            cycle = int(np.log(t * (self.cycle_mult - 1) / self.cycle_steps + 1) / np.log(self.cycle_mult))
-            T_cur = t - self.cycle_steps * (self.cycle_mult ** cycle - 1) / (self.cycle_mult - 1)
-            T_i = self.cycle_steps * self.cycle_mult ** cycle
+        cycle, T_cur, T_i = self._cycle_position(t)
 
         decay = self.peak_decay ** cycle
         lo = self.min_lr * decay if self.decay_floor else self.min_lr
@@ -173,6 +176,36 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
         # would otherwise invert the cosine curve when decay_floor is False.
         hi = max(self.max_lr * decay, lo)
         return lo + 0.5 * (hi - lo) * (1 + np.cos(np.pi * T_cur / T_i))
+
+    def _cycle_position(self, t):
+        """Return ``(cycle_index, T_cur, T_i)`` for post-warmup step ``t``.
+
+        With ``cycle_boundary == "peak"`` (default) each cycle starts at its peak
+        on the boundary, so ``T_cur`` runs over ``[0, T_i)`` and the trough is
+        reached one step before the next boundary -- the boundary step sits at
+        ``max_lr``.
+
+        With ``cycle_boundary == "trough"`` the phase is shifted so each cycle
+        ends at its trough exactly on the boundary (``T_cur`` over ``(0, T_i]``)
+        while ``t == 0`` still starts at the peak to connect with warmup. This
+        way checkpoints saved on cycle boundaries land on ``min_lr`` instead of
+        the post-restart ``max_lr``.
+        """
+        trough = self.cycle_boundary == "trough" and t > 0
+        if self.cycle_mult == 1.0:
+            if trough:
+                cycle = (t - 1) // self.cycle_steps
+                T_cur = t - cycle * self.cycle_steps
+            else:
+                cycle = t // self.cycle_steps
+                T_cur = t % self.cycle_steps
+            return cycle, T_cur, self.cycle_steps
+
+        log_pos = np.log(t * (self.cycle_mult - 1) / self.cycle_steps + 1) / np.log(self.cycle_mult)
+        cycle = int(np.ceil(log_pos)) - 1 if trough else int(log_pos)
+        cycle_start = self.cycle_steps * (self.cycle_mult ** cycle - 1) / (self.cycle_mult - 1)
+        T_i = self.cycle_steps * self.cycle_mult ** cycle
+        return cycle, t - cycle_start, T_i
 
     def get_lr(self):
         step_num = self.last_epoch + 1
