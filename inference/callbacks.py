@@ -18,6 +18,7 @@ from modules.metrics import (
     PairConjunctionMAE,
     PathDeterminacy,
 )
+from modules.metrics.determinacy import compute_determinacy
 
 
 class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
@@ -87,6 +88,166 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
             tg.write(str(output_path))
 
 
+class DiagnosisCallback(lightning.pytorch.callbacks.Callback):
+    """Accumulates per-sample PathDeterminacy scores and saves them as JSON.
+
+    Sorted by determinacy ascending (least decisive first) so problematic
+    samples appear at the top.
+    """
+
+    def __init__(
+            self,
+            save_path: pathlib.Path,
+            determinacy_power: float = 2.0,
+            determinacy_width: int | None = 5,
+            identifiers: list[str] | None = None,
+    ):
+        super().__init__()
+        self.save_path = pathlib.Path(save_path)
+        self.power = determinacy_power
+        self.width = determinacy_width
+        self._identifiers = identifiers
+        self._records: list[dict] = []
+        self._saved = False
+
+    def on_test_batch_end(
+            self,
+            trainer: lightning.pytorch.Trainer,
+            pl_module: lightning.pytorch.LightningModule,
+            outputs: dict,
+            batch: dict,
+            *args, **kwargs,
+    ) -> None:
+        if "similarity" not in outputs:
+            return
+
+        spans = outputs["spans"].float()  # [B, N_max, 2] frames
+        similarity = outputs["similarity"].float()  # [B, T_max, N_max]
+        tokens = batch["tokens"]  # [B, N_max]
+        T_all = batch["T"]  # [B]
+        indices = batch["indices"]  # [B]
+
+        B = indices.shape[0]
+        T_max = similarity.shape[1]
+        device = similarity.device
+
+        for i in range(B):
+            T_i = int(T_all[i].item())
+            N_i = int((tokens[i] != 0).sum().item())
+            if T_i == 0 or N_i == 0:
+                continue
+
+            t_mask = torch.arange(T_max, device=device).unsqueeze(0) < T_i
+            n_mask = tokens[i:i + 1] != 0
+
+            num, denom = compute_determinacy(
+                spans[i:i + 1, :N_i],
+                similarity[i:i + 1, :T_i, :N_i],
+                t_mask[:, :T_i],
+                n_mask[:, :N_i],
+                power=self.power,
+                width=self.width,
+            )
+            value = (num / (denom + 1e-8)).item()
+
+            data_idx = int(indices[i].item())
+            record = {
+                "index": data_idx,
+                "identifier": self._identifiers[data_idx] if self._identifiers else str(data_idx),
+                "determinacy": value,
+                "num_tokens": N_i,
+                "num_frames": T_i,
+            }
+            self._records.append(record)
+
+    def on_predict_batch_end(
+            self,
+            trainer: lightning.pytorch.Trainer,
+            pl_module: lightning.pytorch.LightningModule,
+            outputs: list[dict],
+            batch: dict,
+            *args, **kwargs,
+    ) -> None:
+        timestep = pl_module.backend.timestep
+
+        for result in outputs:
+            if "similarity" not in result:
+                continue
+
+            spans_sec = result["spans"].float()  # [N_i, 2] seconds
+            similarity = result["similarity"].float()  # [T_i, N_i]
+            tokens = result["tokens"]  # [N_i]
+            N_i = tokens.shape[0]
+            T_i = similarity.shape[0]
+
+            if T_i == 0 or N_i == 0:
+                continue
+
+            spans_frames = spans_sec[:N_i] / timestep
+            device = similarity.device
+
+            t_mask = torch.ones(1, T_i, dtype=torch.bool, device=device)
+            n_mask = (tokens[:N_i] != 0).unsqueeze(0).to(device)
+
+            num, denom = compute_determinacy(
+                spans_frames.unsqueeze(0),
+                similarity[:T_i, :N_i].unsqueeze(0),
+                t_mask,
+                n_mask,
+                power=self.power,
+                width=self.width,
+            )
+            value = (num / (denom + 1e-8)).item()
+
+            self._records.append({
+                "identifier": result["identifier"],
+                "determinacy": value,
+                "num_frames": T_i,
+                "num_tokens": N_i,
+            })
+
+    def on_test_end(
+            self,
+            trainer: lightning.pytorch.Trainer,
+            pl_module: lightning.pytorch.LightningModule,
+            *args, **kwargs,
+    ) -> None:
+        self._save()
+
+    def on_predict_end(
+            self,
+            trainer: lightning.pytorch.Trainer,
+            pl_module: lightning.pytorch.LightningModule,
+            *args, **kwargs,
+    ) -> None:
+        self._save()
+
+    def _save(self) -> None:
+        if self._saved:
+            return
+        self._saved = True
+
+        records = self._records
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            world_size = torch.distributed.get_world_size()
+            if world_size > 1:
+                gathered = [None] * world_size
+                torch.distributed.all_gather_object(gathered, records)
+                records = []
+                for r in gathered:
+                    records.extend(r)
+
+        if (
+                not torch.distributed.is_available()
+                or not torch.distributed.is_initialized()
+                or torch.distributed.get_rank() == 0
+        ):
+            records.sort(key=lambda rc: rc["determinacy"])
+            self.save_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.save_path, "w", encoding="utf8") as f:
+                json.dump(records, f, indent=2, ensure_ascii=False)
+
+
 class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
     """Owns metric instances, converts spans, computes + exports JSON.
 
@@ -101,11 +262,11 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
             self,
             unit: str,
             vocab: "Vocabulary",
-            ber_tols: list[int],
-            token_topk: list[int],
-            pair_topk: list[int],
             save_path: pathlib.Path,
             plot: bool = False,
+            ber_tols: list[int] | None = None,
+            token_topk: list[int] | None = None,
+            pair_topk: list[int] | None = None,
             determinacy_power: float = 2.0,
             determinacy_width: int | None = 5,
     ):
@@ -119,9 +280,9 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
         self.unit = unit
         self.save_path = pathlib.Path(save_path)
         self.plot = plot
-        self.ber_tols = ber_tols
-        self.token_topk = token_topk
-        self.pair_topk = pair_topk
+        self.ber_tols = ber_tols or []
+        self.token_topk = token_topk or []
+        self.pair_topk = pair_topk or []
         self._vocab = vocab
         self.determinacy_power = determinacy_power
         self.determinacy_width = determinacy_width
@@ -441,12 +602,12 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
 class VisualizeAlignmentCallback(lightning.pytorch.callbacks.Callback):
     """Saves per-sample similarity and alignment plots during evaluation."""
 
-    def __init__(self, save_dir: pathlib.Path, vocab: Vocabulary, num_digits: int, item_paths: list):
+    def __init__(self, vocab: Vocabulary, save_dir: pathlib.Path, identifiers: list):
         super().__init__()
-        self.save_dir = pathlib.Path(save_dir)
         self.vocab = vocab
-        self._num_digits = num_digits
-        self._item_paths = item_paths
+        self.save_dir = pathlib.Path(save_dir)
+        self._num_digits = len(str(len(identifiers)))
+        self._identifiers = identifiers
 
     def on_test_batch_end(
             self,
@@ -480,7 +641,7 @@ class VisualizeAlignmentCallback(lightning.pytorch.callbacks.Callback):
                 for tid in token_ids
             ]
 
-            item_path = self._item_paths[data_idx]
+            item_path = self._identifiers[data_idx]
             name = str(data_idx).zfill(self._num_digits)
 
             # Similarity plot

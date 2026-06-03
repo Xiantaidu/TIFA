@@ -78,6 +78,13 @@ def shared_options(func):
             type=click.Choice(["raise", "skip", "force"]), show_default=True,
             help="How to handle OOV phonemes: raise (error), skip (discard sample), force (drop OOV paths).",
         ),
+        click.option(
+            "--diagnosis", "diagnosis_path",
+            is_flag=False, flag_value="", default=None,
+            help="Save per-sample diagnosis JSON. When used without a value, "
+                 "saves to <output-dir>/diagnosis.json. When given a path, "
+                 "saves there instead.",
+        ),
     ]
     for option in options[::-1]:
         func = option(func)
@@ -97,12 +104,13 @@ def _run_inference(
     precision: str,
     topk: int,
     oov_handling: str,
+    diagnosis_path: str | None = None,
 ):
     from lightning_utilities.core.rank_zero import rank_zero_info
 
     from inference.api import load_g2p_config, load_inference_model, run_inference
     from inference.data import AudioTextDataset
-    from inference.callbacks import SaveTextGridCallback
+    from inference.callbacks import DiagnosisCallback, SaveTextGridCallback
 
     g2p_languages = {language} if language else set()
     if extended_language:
@@ -145,6 +153,13 @@ def _run_inference(
             language=language,
         ),
     ]
+
+    if diagnosis_path is not None:
+        if diagnosis_path == "":
+            diagnosis_save_path = output_dir / "diagnosis.json"
+        else:
+            diagnosis_save_path = pathlib.Path(diagnosis_path)
+        callbacks.append(DiagnosisCallback(save_path=diagnosis_save_path))
 
     run_inference(
         backend=backend,

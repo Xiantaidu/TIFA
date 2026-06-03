@@ -79,6 +79,7 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         ctx = self.backend.infer(
             waveform[sample_idx], duration[sample_idx], compacted_tokens,
         )
+        sim_unique = self.backend.similarity(ctx)  # [U, T_max, N_max']
         scores = self.backend.score(ctx)  # [U, N_max']
 
         T = torch.zeros(B, dtype=torch.long, device=device)
@@ -165,6 +166,8 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         spans_p1: Tensor | None = None
         tokens_p1: Tensor | None = None
         words_p1: Tensor | None = None
+        sim_p1: Tensor | None = None
+        nf_p1: Tensor | None = None
         if pass1_idx.numel() > 0:
             u_pass1 = u_best_all[pass1_idx]  # [P]
             spans_p1 = self.backend.decode(
@@ -172,6 +175,8 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
             )  # [P, N_max_batch, 2]
             tokens_p1 = compacted_tokens[u_pass1]  # [P, N_max']
             words_p1 = compacted_words[u_pass1]  # [P, N_max']
+            sim_p1 = sim_unique[u_pass1]  # [P, T_max, N_max']
+            nf_p1 = ctx.num_frames()[u_pass1]  # [P]
 
         # --- Pass 2: re-infer for items whose best path was not sampled ---
         pass2_idx = (~pass1_mask).nonzero(as_tuple=True)[0]  # [Q]
@@ -181,6 +186,8 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         spans_p2: Tensor | None = None
         tokens_p2: Tensor | None = None
         words_p2: Tensor | None = None
+        sim_p2: Tensor | None = None
+        nf_p2: Tensor | None = None
         if pass2_idx.numel() > 0:
             tokens_raw_p2 = extract_tokens(
                 paths[pass2_idx],
@@ -201,25 +208,29 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
                 waveform[pass2_idx], duration[pass2_idx], tokens_p2,
             )
             spans_p2 = self.backend.decode(ctx2, groups=words_p2)
+            sim_p2 = self.backend.similarity(ctx2)  # [Q, T_max_2, N_max'']
+            nf_p2 = ctx2.num_frames()  # [Q]
 
         # ---- Results ----
         results = []
         for i in range(B):
             # Find the pass that contains i
             if pass1_mask[i]:
-                j, spans_px, tokens_px, words_px = (
-                    pass1_local[i], spans_p1, tokens_p1, words_p1,
+                j, spans_px, tokens_px, words_px, sim_px, nf_px = (
+                    pass1_local[i], spans_p1, tokens_p1, words_p1, sim_p1, nf_p1,
                 )
             else:
-                j, spans_px, tokens_px, words_px = (
-                    pass2_local[i], spans_p2, tokens_p2, words_p2,
+                j, spans_px, tokens_px, words_px, sim_px, nf_px = (
+                    pass2_local[i], spans_p2, tokens_p2, words_p2, sim_p2, nf_p2,
                 )
 
             L_i = Lq[i].item()
             N_i = int((tokens_px[j] != 0).sum().item())
+            T_i = int(nf_px[j].item())
             spans_i = spans_px[j, :N_i]
             tokens_i = tokens_px[j, :N_i]
             words_i = words_px[j, :N_i]
+            sim_i = sim_px[j, :T_i, :N_i]
 
             phs: list[str] = []
             pm = phonemes[i]
@@ -234,6 +245,7 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
                 "spans": spans_i,
                 "phonemes": phs,
                 "lexicon": lexicon[i],
+                "similarity": sim_i,
             })
 
         return results

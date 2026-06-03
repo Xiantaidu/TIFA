@@ -174,7 +174,7 @@ def _run_online_evaluation(
         load_inference_model,
         run_inference,
     )
-    from inference.callbacks import EvaluationMetricsCallback, VisualizeAlignmentCallback
+    from inference.callbacks import DiagnosisCallback, EvaluationMetricsCallback, VisualizeAlignmentCallback
     from training.data import PhonemeTimingDataset
 
     backend, vocabulary, _ = load_inference_model(model, scope=scope)
@@ -198,26 +198,32 @@ def _run_online_evaluation(
     output_dir.mkdir(parents=True, exist_ok=True)
     save_path = output_dir / "summary.json"
 
-    metric_callback = EvaluationMetricsCallback(
-        unit="frame",
-        vocab=vocabulary,
-        ber_tols=ber_tols,
-        token_topk=token_topk,
-        pair_topk=pair_topk,
-        save_path=save_path,
-        plot=plot,
-        determinacy_power=determinacy_power,
-        determinacy_width=determinacy_width,
-    )
-
-    callbacks = [metric_callback]
+    item_paths = [ds.get_metadata("item_paths", i) for i in range(len(ds))]
+    callbacks = [
+        EvaluationMetricsCallback(
+            unit="frame",
+            vocab=vocabulary,
+            save_path=save_path,
+            plot=plot,
+            ber_tols=ber_tols,
+            token_topk=token_topk,
+            pair_topk=pair_topk,
+            determinacy_power=determinacy_power,
+            determinacy_width=determinacy_width,
+        ),
+        DiagnosisCallback(
+            save_path=output_dir / "diagnosis.json",
+            determinacy_power=determinacy_power,
+            determinacy_width=determinacy_width,
+            identifiers=item_paths,
+        ),
+    ]
     if plot:
         callbacks.append(
             VisualizeAlignmentCallback(
-                save_dir=output_dir / "plots",
                 vocab=vocabulary,
-                num_digits=len(str(len(ds))),
-                item_paths=[ds.get_metadata("item_paths", i) for i in range(len(ds))],
+                save_dir=output_dir / "plots",
+                identifiers=item_paths,
             )
         )
 
@@ -267,11 +273,11 @@ def _run_offline_evaluation(
     metric_callback = EvaluationMetricsCallback(
         unit="ms",
         vocab=paired.vocab,
+        save_path=save_path,
+        plot=plot,
         ber_tols=ber_tols,
         token_topk=token_topk,
         pair_topk=pair_topk,
-        save_path=save_path,
-        plot=plot,
     )
 
     evaluate_offline(dataset=paired, callbacks=[metric_callback])

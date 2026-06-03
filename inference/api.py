@@ -14,7 +14,6 @@ from lib.config.schema import (
     G2PPipelineConfig,
     InferenceConfig,
     ModelConfig,
-    ValidationConfig,
 )
 from lib.vocabulary import Vocabulary
 from .backend import (
@@ -27,7 +26,6 @@ from .module import ForcedAlignmentInferenceModule, OfflineEvaluationModule
 
 __all__ = [
     "load_config_for_inference",
-    "load_config_for_evaluation",
     "load_g2p_config",
     "load_state_dict_for_inference",
     "load_inference_model",
@@ -62,27 +60,6 @@ def load_config_for_inference(
     _log_config(inference_config)
 
     return model_config, inference_config
-
-
-def load_config_for_evaluation(
-        path: pathlib.Path,
-        scope: int = 0,
-        overrides: list[str] | None = None,
-) -> ValidationConfig:
-    if not path.is_file():
-        raise FileNotFoundError(f"Config file not found: {path}")
-    if overrides:
-        overrides = [
-            f"training.validation.{override}"
-            for override in overrides
-        ]
-    config = load_raw_config(path, inherit=True, overrides=overrides, subkey="training.validation")
-    validation_config = ValidationConfig.model_validate(config, scope=scope)
-    validation_config.check(scope_mask=scope)
-
-    _log_config(validation_config)
-
-    return validation_config
 
 
 def load_state_dict_for_inference(path: pathlib.Path, ema=True) -> dict[str, Tensor]:
