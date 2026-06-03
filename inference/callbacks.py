@@ -9,6 +9,7 @@ import torch
 from lightning_utilities.core.rank_zero import rank_zero_only
 from torch import nn
 
+from lib import logging
 from lib.plot import alignment_to_figure, cross_similarity_to_figure, topk_bar_figure
 from lib.vocabulary import Vocabulary
 from modules.metrics import (
@@ -71,8 +72,15 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
                     j += 1
                 onset = spans[i][0]
                 offset = spans[j - 1][1]
-                word_text = lexicon[w].get(tuple(phonemes[i:j]), "") if w < len(lexicon) else ""
-                words_tier.add(onset, offset, word_text)
+                if offset > onset:
+                    word_text = lexicon[w].get(tuple(phonemes[i:j]), "") if w < len(lexicon) else ""
+                    words_tier.add(onset, offset, word_text)
+                else:
+                    logging.warning(
+                        f"Skipping word interval [{onset}, {offset}] for "
+                        f"'{identifier}': maxTime <= minTime.",
+                        callback=trainer.progress_bar_callback.print,
+                    )
                 i = j
             tg.append(words_tier)
 
@@ -80,7 +88,14 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
             phones_tier = textgrid.IntervalTier("phones", 0, total_duration)
             for n in range(N):
                 onset, offset = spans[n]
-                phones_tier.add(onset, offset, phonemes[n])
+                if offset > onset:
+                    phones_tier.add(onset, offset, phonemes[n])
+                else:
+                    logging.warning(
+                        f"Skipping phone interval [{onset}, {offset}] for "
+                        f"'{identifier}': maxTime <= minTime.",
+                        callback=trainer.progress_bar_callback.print,
+                    )
             tg.append(phones_tier)
 
             output_path = self.output_dir / f"{identifier}.TextGrid"

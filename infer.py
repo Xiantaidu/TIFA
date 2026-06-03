@@ -7,7 +7,17 @@ from lib.cli import DefaultGroup, csv_set
 from lib.config.schema import ConfigurationScope
 
 
-def _parse_filemap(path: pathlib.Path) -> dict[str, pathlib.Path]:
+def _validate_exts(ctx, param, value) -> set[str]:
+    try:
+        exts = {"." + ext.strip().lower() for ext in value.split(",")}
+        if not exts:
+            raise ValueError("At least one extension must be provided.")
+        return exts
+    except Exception as e:
+        raise click.BadParameter(f"Invalid extensions: {e}")
+
+
+def _parse_filemap(path: pathlib.Path, exts: set[str]) -> dict[str, pathlib.Path]:
     """Convert a file or directory path into a ``{identifier: audio_path}`` dict.
 
     For a single file the key is the stem.  For a directory the keys are
@@ -17,7 +27,10 @@ def _parse_filemap(path: pathlib.Path) -> dict[str, pathlib.Path]:
     if path.is_file():
         return {path.stem: path}
     if path.is_dir():
-        files = [f for f in sorted(path.rglob("*")) if f.is_file()]
+        files = [
+            f for f in sorted(path.rglob("*"))
+            if f.is_file() and f.suffix.lower() in exts
+        ]
         filemap = {
             f.relative_to(path).with_suffix("").as_posix(): f
             for f in files
@@ -34,6 +47,11 @@ def shared_options(func):
             "--model", "-m", required=True,
             type=click.Path(exists=True, dir_okay=False, path_type=pathlib.Path),
             help="Path to model checkpoint.",
+        ),
+        click.option(
+            "--input-formats", default="wav,flac,opus,mp3,aac,ogg",
+            show_default=True, callback=_validate_exts,
+            help="Comma-separated audio file extensions to scan for (directory mode).",
         ),
         click.option(
             "--output-dir", "-o",
@@ -92,6 +110,7 @@ def _run_inference(
     scope: int,
     path: pathlib.Path,
     model: pathlib.Path,
+    input_formats: set[str],
     output_dir: pathlib.Path | None,
     language: str | None,
     extended_language: set[str] | None,
@@ -114,7 +133,7 @@ def _run_inference(
     if extended_language:
         g2p_languages |= extended_language
 
-    filemap = _parse_filemap(path)
+    filemap = _parse_filemap(path, input_formats)
     if output_dir is None:
         output_dir = path if path.is_dir() else path.parent
     output_dir.mkdir(parents=True, exist_ok=True)

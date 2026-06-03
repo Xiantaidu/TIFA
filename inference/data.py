@@ -97,6 +97,8 @@ class AudioTextDataset(torch.utils.data.Dataset):
 
         text_path = audio_path.with_suffix(".txt")
         if not text_path.is_file():
+            text_path = audio_path.with_suffix(".lab")
+        if not text_path.is_file():
             return _skip(identifier, "No paired text file")
 
         with open(text_path, "r", encoding="utf8") as f:
