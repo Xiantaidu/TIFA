@@ -579,7 +579,7 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
             ]
             values = [v.item() for v in sub_data.values()]
             safe_sub = f"{safe_key}_{sub_name.replace('/', '_')}"
-            fig = topk_bar_figure(labels, values, f"{key} {sub_name}", reverse=False)
+            fig = topk_bar_figure(labels, values, sub_name, reverse=False)
             fig.savefig(save_dir / f"{safe_sub}.jpg")
             plt.close(fig)
 

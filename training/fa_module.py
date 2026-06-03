@@ -472,7 +472,7 @@ class ForcedAlignmentModule(BaseLightningModule):
         for sub_name, sub_data in data.items():
             labels = [self.vocab.decode(tid, stringfy=True) or str(tid) for tid in sub_data]
             values = [v.item() for v in sub_data.values()]
-            fig = topk_bar_figure(labels, values, f"{name} {sub_name}", reverse=False)
+            fig = topk_bar_figure(labels, values, sub_name, reverse=False)
             logger.experiment.add_figure(
                 f"topk/{sub_name}", fig, global_step=self.global_step,
             )

@@ -97,7 +97,7 @@ class OverlapRatioCollection(torchmetrics.Metric):
         Only available when *k* is set.  Returns a mapping from each formatted
         metric name to ``{token_id: value}`` for its own worst-k IDs.
         """
-        if self.k is not None:
+        if self.k is None:
             return {}
 
         precision_dict: dict[int, Tensor] = {}
