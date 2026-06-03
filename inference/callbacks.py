@@ -5,6 +5,7 @@ from typing import Any
 import lightning.pytorch.callbacks
 import matplotlib.pyplot as plt
 import textgrid
+import torch
 from lightning_utilities.core.rank_zero import rank_zero_only
 from torch import nn
 
@@ -15,6 +16,7 @@ from modules.metrics import (
     BoundaryMAE,
     OverlapRatioCollection,
     PairConjunctionMAE,
+    PathDeterminacy,
 )
 
 
@@ -104,6 +106,8 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
             pair_topk: list[int],
             save_path: pathlib.Path,
             plot: bool = False,
+            determinacy_power: float = 2.0,
+            determinacy_width: int | None = 5,
     ):
         super().__init__()
         if unit == "frame":
@@ -119,6 +123,9 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
         self.token_topk = token_topk
         self.pair_topk = pair_topk
         self._vocab = vocab
+        self.determinacy_power = determinacy_power
+        self.determinacy_width = determinacy_width
+        self._determinacy_seen = False
         self._results: dict | None = None
 
         metrics: dict[str, nn.Module] = {}
@@ -146,6 +153,9 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
             metrics[f"conj_mae/{k}"] = PairConjunctionMAE(
                 vocab_size=self._vocab.vocab_size, k=k,
             )
+        self.determinacy = PathDeterminacy(
+            power=determinacy_power, width=determinacy_width,
+        )
         self.metrics = nn.ModuleDict(metrics)
 
     def on_test_start(
@@ -155,6 +165,7 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
             *args, **kwargs,
     ) -> None:
         self.metrics.to(trainer.strategy.root_device)
+        self.determinacy.to(trainer.strategy.root_device)
 
     def on_test_batch_end(
             self,
@@ -169,6 +180,19 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
         tokens = batch["tokens"]
         for metric in self.metrics.values():
             metric.update(spans_pred_ms, spans_gt_ms, tokens)
+
+        if "similarity" in outputs:
+            T_max = outputs["similarity"].shape[1]
+            device = batch["T"].device
+            t_mask = torch.arange(T_max, device=device).unsqueeze(0) < batch["T"].unsqueeze(1)
+            n_mask = tokens != 0
+            self.determinacy.update(
+                outputs["spans"],
+                outputs["similarity"],
+                t_mask,
+                n_mask,
+            )
+            self._determinacy_seen = True
 
     def on_test_end(
             self,
@@ -324,6 +348,17 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
             "name": "Conj-MAE", "unit": self.unit,
             "variants": cm_variants, "statistics": cm_statistics,
         })
+
+        # Determinacy
+        if self._determinacy_seen:
+            det_variants = [{
+                "arguments": {"power": self.determinacy_power, "width": self.determinacy_width},
+                "value": float(self.determinacy.compute().item()),
+            }]
+            metrics_list.append({
+                "name": "Determinacy",
+                "variants": det_variants,
+            })
 
         return {"metrics": metrics_list}
 

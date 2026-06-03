@@ -96,6 +96,17 @@ def shared_metric_options(func=None, *, unit="ms"):
             callback=csv_list(int),
             help="Comma-separated worst-k values for pair conjunction metrics.",
         ),
+        click.option(
+            "--determinacy-power", default=2.0, show_default=True,
+            type=float,
+            help="Activation power for Determinacy metric.",
+        ),
+        click.option(
+            "--determinacy-width", default=5, show_default=True,
+            type=int,
+            help="Neighborhood half-width in tokens for Determinacy metric."
+                 "  set to negative for unlimited (all tokens).",
+        ),
     ]
 
     def decorator(f):
@@ -150,7 +161,12 @@ def _run_online_evaluation(
     token_topk: list[int],
     pair_topk: list[int],
     plot: bool,
+    determinacy_power: float = 2.0,
+    determinacy_width: int = 5,
 ):
+    if determinacy_width < 0:
+        determinacy_width = None
+
     from lightning_utilities.core.rank_zero import rank_zero_info
 
     from inference.api import (
@@ -190,6 +206,8 @@ def _run_online_evaluation(
         pair_topk=pair_topk,
         save_path=save_path,
         plot=plot,
+        determinacy_power=determinacy_power,
+        determinacy_width=determinacy_width,
     )
 
     callbacks = [metric_callback]
@@ -226,6 +244,7 @@ def _run_offline_evaluation(
     token_topk: list[int],
     pair_topk: list[int],
     plot: bool,
+    **kwargs,
 ):
     from lightning_utilities.core.rank_zero import rank_zero_info
 

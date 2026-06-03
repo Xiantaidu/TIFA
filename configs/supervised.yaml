@@ -59,3 +59,5 @@ training:
     metrics_ber_tolerance: 5
     metrics_k_values: [20]
     metrics_conjunction_k_values: [20]
+    metrics_determinacy_power: 2.0
+    metrics_determinacy_width: 5

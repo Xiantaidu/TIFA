@@ -20,6 +20,7 @@ from modules.metrics import (
     BoundaryMAE,
     PairConjunctionMAE,
     OverlapRatioCollection,
+    PathDeterminacy,
 )
 from training.data import (
     BaseDataset,
@@ -43,6 +44,7 @@ _B_MAE_ONSET = "B-MAE_onset"
 _B_MAE_OFFSET = "B-MAE_offset"
 _OVERLAP = "Overlap"
 _CONJ_MAE = "Conj-MAE"
+_DETERMINACY = "Determinacy"
 
 
 class ForcedAlignmentModule(BaseLightningModule):
@@ -149,6 +151,14 @@ class ForcedAlignmentModule(BaseLightningModule):
                     template=f"{_OVERLAP}_{{}}@{k}{postfix}", vocab_size=V, k=k,
                 ),
             )
+
+        # Path Determinacy
+        det_power = self.training_config.validation.metrics_determinacy_power
+        det_width = self.training_config.validation.metrics_determinacy_width
+        self.register_metric(
+            f"{_DETERMINACY}{postfix}",
+            PathDeterminacy(power=det_power, width=det_width),
+        )
 
     def _update_fa_metrics(
         self, pred_spans: Tensor, target_spans: Tensor, tokens: Tensor, postfix: str = ""
@@ -285,10 +295,13 @@ class ForcedAlignmentModule(BaseLightningModule):
         frame_features, frame_logits, token_features, token_logits = self.model(spectrogram, tokens, t_mask, n_mask)
 
         if infer:
-            sim = cross_cosine_similarity(frame_features, token_features)  # [-1, 1]
-            pred_spans = decode_alignment_flat(sim, T, N)
+            similarity = cross_cosine_similarity(frame_features, token_features)  # [-1, 1]
+            pred_spans = decode_alignment_flat(similarity, T, N)
             target_spans = main_sample["spans"]
             self._update_fa_metrics(pred_spans, target_spans, tokens)
+            self.metrics[_DETERMINACY].update(
+                pred_spans, similarity, t_mask_fa, n_mask_fa,
+            )
 
             if self.use_parallel_dirty_metrics and "spectrogram_dirty" in main_sample:
                 xf_d, _, tf_d, _ = self.model(
@@ -299,13 +312,13 @@ class ForcedAlignmentModule(BaseLightningModule):
                 self._update_fa_metrics(
                     pred_spans_dirty, target_spans, tokens, postfix="_dirty",
                 )
+                self.metrics[f"{_DETERMINACY}_dirty"].update(
+                    pred_spans_dirty, sim_dirty, t_mask_fa, n_mask_fa,
+                )
 
             return {
-                "frame_features": frame_features,
-                "token_features": token_features,
-                "token_logits": token_logits,
-                "pred_spans": pred_spans,
-                "sim": sim,
+                "spans": pred_spans,
+                "similarity": similarity,
             }
 
         batch_frames = T.sum().item()
@@ -348,8 +361,10 @@ class ForcedAlignmentModule(BaseLightningModule):
         max_plots = self.training_config.validation.max_plots
         stride = max(1, len(self.valid_dataset) // max_plots)
 
-        pred_spans = outputs["pred_spans"]
-        sim_all = outputs["sim"]
+        tokens = main["tokens"]
+        gt_spans = main["spans"]
+        pred_spans = outputs["spans"]
+        sim_all = outputs["similarity"]
         spectrograms = main["spectrogram"]
         regions = main["regions"]
         T_all = main["T"]
@@ -365,7 +380,7 @@ class ForcedAlignmentModule(BaseLightningModule):
             if T_i == 0 or N_i == 0:
                 continue
 
-            token_ids = main["tokens"][i, :N_i].tolist()
+            token_ids = tokens[i, :N_i].tolist()
             token_labels = [
                 self.vocab.decode(int(tid), stringfy=True) or str(tid)
                 for tid in token_ids
@@ -388,7 +403,7 @@ class ForcedAlignmentModule(BaseLightningModule):
 
             spec = spectrograms[i, :T_i].detach().cpu().numpy()
             ps = pred_spans[i, :N_i].detach().cpu().numpy()
-            gs = main["spans"][i, :N_i].detach().cpu().numpy()
+            gs = gt_spans[i, :N_i].detach().cpu().numpy()
             fig_align = alignment_to_figure(
                 spec,
                 token_labels=token_labels,
