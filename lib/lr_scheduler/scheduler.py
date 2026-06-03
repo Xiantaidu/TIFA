@@ -177,7 +177,7 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
         # Guard against the upper bound decaying below the (fixed) floor, which
         # would otherwise invert the cosine curve when decay_floor is False.
         hi = max(self.max_lr * decay, lo)
-        return lo + 0.5 * (hi - lo) * (1 + np.cos(np.pi * T_cur / T_i))
+        return float(lo + 0.5 * (hi - lo) * (1 + np.cos(np.pi * T_cur / T_i)))
 
     def _cycle_position(self, t):
         """Return ``(cycle_index, T_cur, T_i)`` for post-warmup step ``t``.
@@ -219,4 +219,3 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
 
     def set_step(self, step: int):
         self.last_epoch = step
-
