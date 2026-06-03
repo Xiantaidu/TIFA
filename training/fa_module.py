@@ -164,8 +164,11 @@ class ForcedAlignmentModule(BaseLightningModule):
         self, pred_spans: Tensor, target_spans: Tensor, tokens: Tensor, postfix: str = ""
     ) -> None:
         for name, metric in self.metrics.items():
-            if name.endswith(postfix):
-                metric.update(pred_spans, target_spans, tokens)
+            if not name.endswith(postfix):
+                continue
+            if not isinstance(metric, (BoundaryErrorRate, BoundaryMAE, PairConjunctionMAE, OverlapRatioCollection)):
+                continue
+            metric.update(pred_spans, target_spans, tokens)
 
     def build_train_dataset(self) -> BaseDataset:
         dl_cfg = self.training_config.dataloader
