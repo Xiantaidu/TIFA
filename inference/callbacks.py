@@ -49,10 +49,10 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
     ) -> None:
         for result in outputs:
             identifier = result["identifier"]
+            word_idx = result["word_idx"].tolist()  # [int, ...] 1-based
             spans = result["spans"].tolist()  # [[onset, offset], ...]
-            words = result["words"].tolist()  # [group_id, ...]
             phonemes = result["phonemes"]  # [str, ...]
-            lexicon = result["lexicon"]
+            words = result["words"]  # list[str]
 
             N = len(spans)
             if N == 0:
@@ -61,19 +61,25 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
             total_duration = result["duration"]
             tg = textgrid.TextGrid()
 
-            # Words tier: group phoneme spans by consecutive G2PText index and
-            # reverse-lookup the phoneme subsequence in the lexicon.
+            # Words tier: group phoneme spans by consecutive word index.
             words_tier = textgrid.IntervalTier("words", 0, total_duration)
             i = 0
             while i < N:
-                w = words[i] - 1  # 0-based G2PText index
+                widx = word_idx[i] - 1  # 0-based index into words
                 j = i + 1
-                while j < N and words[j] - 1 == w:
+                while j < N and word_idx[j] - 1 == widx:
                     j += 1
                 onset = spans[i][0]
                 offset = spans[j - 1][1]
                 if offset > onset:
-                    word_text = lexicon[w].get(tuple(phonemes[i:j]), "") if w < len(lexicon) else ""
+                    if widx >= len(words):  # defensive, shouldn't happen
+                        logging.error(
+                            f"Word index {widx} out of bounds for '{identifier}' with {len(words)} words, "
+                            f"thus writing empty mark to TextGrid. Please report this issue."
+                        )
+                        word_text = ""
+                    else:
+                        word_text = words[widx]
                     words_tier.add(onset, offset, word_text)
                 else:
                     logging.warning(

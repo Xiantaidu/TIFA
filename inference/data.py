@@ -23,17 +23,18 @@ def _skip(identifier: str, reason: str) -> dict[str, Any]:
 
 @dataclass(eq=False)
 class _TokenWithWord:
-    """Token with piggybacked word index and phoneme string for
-    Levenshtein alignment.
+    """Token with piggybacked group index, phoneme string, and word
+    index for Levenshtein alignment.
 
     ``__eq__`` and ``__hash__`` use only *token*, so the alignment sees
-    phoneme identity.  *word* and *phoneme* survive all Levenshtein
-    operations unchanged.
+    phoneme identity.  *group*, *phoneme*, and *word_idx* survive all
+    Levenshtein operations unchanged.
     """
 
     token: int
-    word: int
+    group: int
     phoneme: str
+    word_idx: int
 
     def __eq__(self, other):
         if not isinstance(other, _TokenWithWord):
@@ -113,19 +114,20 @@ class AudioTextDataset(torch.utils.data.Dataset):
         except Exception as e:
             return _skip(identifier, f"G2P failed: {e}")
 
-        # Build encoded_groups (one per G2PText) and inverted index
-        # from phonemes to words. Phoneme tokens are wrapped in
-        # _TokenWithWord so the G2PText index and original phoneme
-        # string piggyback through segment_groups unchanged.
+        # Build encoded_groups (one per G2PText). Phoneme tokens are
+        # wrapped in _TokenWithWord so the G2PText index, original
+        # phoneme string, and G2PWord index piggyback through
+        # segment_groups unchanged.
         encoded_groups: list[list[list[_TokenWithWord]]] = []
-        phonemes_to_words: list[dict[tuple[str, ...], str]] = []
+        words: list[str] = []
         warning = ""
 
         for gt_idx, gt in enumerate(g2p_texts):
             group_paths: list[list[_TokenWithWord]] = []
-            word_map: dict[tuple[str, ...], str] = {}
             oov_count = 0
             for gw in gt.words:
+                word_idx = len(words) + 1
+                words.append(gw.word)
                 for path in gw.phones:
                     tok_ids = [
                         self.vocabulary.encode(ph, gt.language) for ph in path
@@ -139,10 +141,9 @@ class AudioTextDataset(torch.utils.data.Dataset):
                         oov_count += 1
                         continue
                     group_paths.append([
-                        _TokenWithWord(tid, gt_idx + 1, ph)
+                        _TokenWithWord(tid, gt_idx + 1, ph, word_idx)
                         for tid, ph in zip(tok_ids, path)
                     ])
-                    word_map[tuple(path)] = gw.word
 
             if oov_count > 0:
                 warning = f"Dropped {oov_count} OOV pronunciation(s)"
@@ -150,7 +151,6 @@ class AudioTextDataset(torch.utils.data.Dataset):
             if not group_paths:
                 continue
             encoded_groups.append(group_paths)
-            phonemes_to_words.append(word_map)
 
         if not encoded_groups:
             return _skip(identifier, "No valid token sequence")
@@ -168,7 +168,8 @@ class AudioTextDataset(torch.utils.data.Dataset):
         S = len(all_segments)
 
         paths = numpy.zeros((N, max_width), dtype=numpy.int64)
-        words_arr = numpy.zeros((N, max_width), dtype=numpy.int64)
+        groups_arr = numpy.zeros((N, max_width), dtype=numpy.int64)
+        word_idx_arr = numpy.zeros((N, max_width), dtype=numpy.int64)
         segments_arr = numpy.zeros(N, dtype=numpy.int64)
         widths = numpy.zeros(S, dtype=numpy.int64)
 
@@ -182,7 +183,8 @@ class AudioTextDataset(torch.utils.data.Dataset):
                 alts_to_phonemes[(s_idx, alt_idx)] = [tw.phoneme for tw in path]
                 for pos, tw in enumerate(path):
                     paths[col + pos, alt_idx] = tw.token
-                    words_arr[col + pos, alt_idx] = tw.word
+                    groups_arr[col + pos, alt_idx] = tw.group
+                    word_idx_arr[col + pos, alt_idx] = tw.word_idx
             col += L
 
         audio, sr = load_audio(audio_path)
@@ -198,11 +200,12 @@ class AudioTextDataset(torch.utils.data.Dataset):
             "waveform": torch.from_numpy(audio).float(),
             "duration": len(audio) / self.sample_rate,
             "paths": torch.from_numpy(paths).long(),
-            "words": torch.from_numpy(words_arr).long(),
+            "groups": torch.from_numpy(groups_arr).long(),
+            "word_idx": torch.from_numpy(word_idx_arr).long(),
             "segments": torch.from_numpy(segments_arr).long(),
             "widths": torch.from_numpy(widths).long(),
             "phonemes": alts_to_phonemes,
-            "lexicon": phonemes_to_words,
+            "words": words,
         }
 
     @staticmethod
@@ -229,8 +232,11 @@ class AudioTextDataset(torch.utils.data.Dataset):
             "paths": collate_nd(
                 [b["paths"] for b in valid], pad_value=0, ndim=2,
             ),
-            "words": collate_nd(
-                [b["words"] for b in valid], pad_value=0, ndim=2,
+            "groups": collate_nd(
+                [b["groups"] for b in valid], pad_value=0, ndim=2,
+            ),
+            "word_idx": collate_nd(
+                [b["word_idx"] for b in valid], pad_value=0, ndim=2,
             ),
             "segments": collate_nd(
                 [b["segments"] for b in valid], pad_value=0,
@@ -238,8 +244,8 @@ class AudioTextDataset(torch.utils.data.Dataset):
             "widths": collate_nd(
                 [b["widths"] for b in valid], pad_value=1,
             ),
-            "lexicon": [b["lexicon"] for b in valid],
             "phonemes": [b["phonemes"] for b in valid],
+            "words": [b["words"] for b in valid],
         }
 
 

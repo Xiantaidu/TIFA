@@ -29,15 +29,18 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         timestep = self.backend.timestep
         B = len(batch["identifier"])
 
+        # Tensors
         waveform = batch["waveform"]  # [B, L]
         duration = batch["duration"]  # [B] seconds
-
         paths = batch["paths"]  # [B, N_grid, W_max]
-        words = batch["words"]  # [B, N_grid, W_max]
+        groups = batch["groups"]  # [B, N_grid, W_max]
+        word_idx = batch["word_idx"]  # [B, N_grid, W_max]
         segments = batch["segments"]  # [B, N_grid]
         widths = batch["widths"]  # [B, S_max]
+
+        # Non-tensor items
         phonemes = batch["phonemes"]  # list[dict[(int,int), list[str]]]
-        lexicon = batch["lexicon"]  # pass-through to callbacks
+        words = batch["words"]  # list[list[str]]
 
         S_max = widths.shape[1]
 
@@ -125,16 +128,16 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
             best_alts[multi_idx] = mean_scores.argmax(dim=-1)  # [B_m, S_max]
 
         # ---- Phase D: Decode with best tokens ----
-        tokens_raw, words_raw = extract_tokens(
-            paths, words, segments=segments, choices=best_alts,
+        tokens_raw, groups_raw, word_idx_raw = extract_tokens(
+            paths, groups, word_idx, segments=segments, choices=best_alts,
         )  # [B, N_grid] each
-        tokens_best, words_best = compact_sequences(
-            tokens_raw, words_raw,
+        tokens_best, groups_best, word_idx_best = compact_sequences(
+            tokens_raw, groups_raw, word_idx_raw,
         )  # [B, N_max']
 
         ctx_dec = self.backend.infer(waveform, duration, tokens_best)
         sim = self.backend.similarity(ctx_dec)  # [B, T_max, N_max']
-        spans = self.backend.decode(ctx_dec, groups=words_best)  # [B, N_max', 2]
+        spans = self.backend.decode(ctx_dec, groups=groups_best)  # [B, N_max', 2]
         nf = ctx_dec.num_frames()  # [B]
         Lq = nf * timestep  # [B]
 
@@ -145,7 +148,7 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
             T_i = int(nf[i].item())
             spans_i = spans[i, :N_i]
             tokens_i = tokens_best[i, :N_i]
-            words_i = words_best[i, :N_i]
+            groups_i = groups_best[i, :N_i]
             sim_i = sim[i, :T_i, :N_i]
 
             phs: list[str] = []
@@ -157,10 +160,11 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
                 "identifier": batch["identifier"][i],
                 "duration": Lq[i].item(),
                 "tokens": tokens_i,
-                "words": words_i,
+                "groups": groups_i,
+                "word_idx": word_idx_best[i, :N_i],
                 "spans": spans_i,
                 "phonemes": phs,
-                "lexicon": lexicon[i],
+                "words": words[i],
                 "similarity": sim_i,
             })
 
