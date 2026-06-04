@@ -13,7 +13,7 @@ class FilterPunctuation(Preprocessor):
         string.punctuation
         + "，。；：“”‘’（）【】《》…—～、·"
         + "！？"
-    )
+    ) - {"'", "-"}  # Keep apostrophes and hyphens, which are common in phonetic transcriptions.
 
     def process(self, tokens: list[str]) -> list[str]:
         result: list[str] = []
