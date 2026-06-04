@@ -281,6 +281,9 @@ class TokenMaskingAugmentationConfig(ConfigBaseModel):
     enabled: bool = False
     prob: float = Field(0.2, gt=0.0, le=1.0)
     p_mask: float = Field(0.5, gt=0.0, le=1.0)
+    p_insert: float = Field(0.1, ge=0.0, le=1.0)
+    p_chain: float = Field(0.3, ge=0.0, lt=1.0)
+    max_chain: int = Field(3, ge=1)
 
 
 class TokenPerturbationConfig(ConfigBaseModel):

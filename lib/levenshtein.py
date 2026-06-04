@@ -1,4 +1,4 @@
-"""Multi-string edit-path segmentation via Levenshtein alignment.
+"""Sequence alignment via configurable Levenshtein DP.
 
 Element type T requirements:
     - ``==`` and ``hash``: define identity for alignment purposes.
@@ -8,14 +8,45 @@ Callers may wrap T in a richer type; only ``==``/``hash`` participate in
 alignment decisions -- extra fields piggyback through unchanged.
 """
 
+from typing import Callable, TypeVar
 
-def _levenshtein_align(a: list[str], b: list[str]) -> tuple[list, list]:
-    """Pairwise Levenshtein alignment with backtracking.
+T = TypeVar("T")
 
-    Returns ``(aligned_a, aligned_b)`` where each is a list of ``str | None``,
-    with ``None`` marking positions where a gap was inserted into that sequence.
+
+def align_sequences(
+        orig: list[T],
+        mut: list[T],
+        *,
+        match_cost: Callable[[T, T], int | None] | None = None,
+        prefer_indel: bool = False,
+        prefer_insert: bool = False,
+) -> tuple[list[T | None], list[T | None]]:
+    """Align *orig* to *mut* via configurable-cost Levenshtein DP.
+
+    Args:
+        orig: original sequence.
+        mut: mutated sequence to align against.
+        match_cost: ``(a, b) -> cost``, where *a* is from *orig* and *b*
+            from *mut*.  Return an integer cost to allow matching, or
+            ``None`` to forbid it (forcing indels instead).  Defaults to
+            cost 0 for equality and cost 1 otherwise.
+        prefer_indel: at ties, prefer delete/insert over a non-zero-cost
+            match.  Used for edit DP (leftmost-match) and MASK wildcard
+            (insert over wildcard).
+        prefer_insert: at ties, prefer insert over delete.  Used for
+            MASK wildcard alignment.
+
+    Returns:
+        ``(aligned_orig, aligned_mut)``, both same length, with ``None``
+        marking gaps.
     """
-    n, m = len(a), len(b)
+    n, m = len(orig), len(mut)
+    if match_cost is None:
+        def _default_cost(a: T, b: T) -> int:
+            return 0 if a == b else 1
+        match_cost = _default_cost
+
+    INF = n + m + 1
     dp = [[0] * (m + 1) for _ in range(n + 1)]
     for i in range(n + 1):
         dp[i][0] = i
@@ -24,37 +55,88 @@ def _levenshtein_align(a: list[str], b: list[str]) -> tuple[list, list]:
 
     for i in range(1, n + 1):
         for j in range(1, m + 1):
-            cost = 0 if a[i - 1] == b[j - 1] else 1
-            dp[i][j] = min(
-                dp[i - 1][j - 1] + cost,
-                dp[i - 1][j] + 1,
-                dp[i][j - 1] + 1,
-            )
+            cost = match_cost(orig[i - 1], mut[j - 1])
+            if cost is not None:
+                match_val = dp[i - 1][j - 1] + cost
+            else:
+                match_val = INF
+            delete_val = dp[i - 1][j] + 1
+            insert_val = dp[i][j - 1] + 1
 
-    aligned_a: list[str | None] = []
-    aligned_b: list[str | None] = []
+            if cost is not None and cost > 0 and prefer_indel:
+                # Non-zero-cost match competes with indels at ties
+                if delete_val <= insert_val and delete_val <= match_val:
+                    dp[i][j] = delete_val
+                elif insert_val <= delete_val and insert_val <= match_val:
+                    dp[i][j] = insert_val
+                else:
+                    dp[i][j] = match_val
+            elif match_val <= delete_val and match_val <= insert_val:
+                dp[i][j] = match_val
+            elif delete_val <= insert_val:
+                dp[i][j] = delete_val
+            else:
+                dp[i][j] = insert_val
+
+    al_orig: list[T | None] = []
+    al_mut: list[T | None] = []
     i, j = n, m
     while i > 0 or j > 0:
         if i > 0 and j > 0:
-            cost = 0 if a[i - 1] == b[j - 1] else 1
-            if dp[i][j] == dp[i - 1][j - 1] + cost:
-                aligned_a.append(a[i - 1])
-                aligned_b.append(b[j - 1])
+            cost = match_cost(orig[i - 1], mut[j - 1])
+            match_ok = cost is not None and dp[i][j] == dp[i - 1][j - 1] + cost
+        else:
+            cost = None
+            match_ok = False
+        if prefer_indel:
+            # delete > insert > match (indels beat even exact match at ties)
+            if i > 0 and dp[i][j] == dp[i - 1][j] + 1:
+                al_orig.append(orig[i - 1])
+                al_mut.append(None)
+                i -= 1
+            elif j > 0 and dp[i][j] == dp[i][j - 1] + 1:
+                al_orig.append(None)
+                al_mut.append(mut[j - 1])
+                j -= 1
+            else:
+                al_orig.append(orig[i - 1])
+                al_mut.append(mut[j - 1])
                 i -= 1
                 j -= 1
-                continue
-        if i > 0 and dp[i][j] == dp[i - 1][j] + 1:
-            aligned_a.append(a[i - 1])
-            aligned_b.append(None)
-            i -= 1
+        elif prefer_insert:
+            # insert > delete > match
+            if j > 0 and dp[i][j] == dp[i][j - 1] + 1:
+                al_orig.append(None)
+                al_mut.append(mut[j - 1])
+                j -= 1
+            elif i > 0 and dp[i][j] == dp[i - 1][j] + 1:
+                al_orig.append(orig[i - 1])
+                al_mut.append(None)
+                i -= 1
+            else:
+                al_orig.append(orig[i - 1])
+                al_mut.append(mut[j - 1])
+                i -= 1
+                j -= 1
         else:
-            aligned_a.append(None)
-            aligned_b.append(b[j - 1])
-            j -= 1
+            # standard: match > delete > insert
+            if match_ok:
+                al_orig.append(orig[i - 1])
+                al_mut.append(mut[j - 1])
+                i -= 1
+                j -= 1
+            elif i > 0 and dp[i][j] == dp[i - 1][j] + 1:
+                al_orig.append(orig[i - 1])
+                al_mut.append(None)
+                i -= 1
+            else:
+                al_orig.append(None)
+                al_mut.append(mut[j - 1])
+                j -= 1
 
-    aligned_a.reverse()
-    aligned_b.reverse()
-    return aligned_a, aligned_b
+    al_orig.reverse()
+    al_mut.reverse()
+    return al_orig, al_mut
 
 
 def _build_consensus(rows: list[list[str | None]]) -> list[str | None]:
@@ -76,7 +158,7 @@ def _merge_profile(
 ) -> list[list[str | None]]:
     """Align *new_path* to the existing profile and merge it in."""
     consensus = _build_consensus(rows)
-    al_c, al_p = _levenshtein_align(consensus, new_path)
+    al_c, al_p = align_sequences(consensus, new_path)
 
     # Update existing rows: insert None where consensus had a gap
     new_rows: list[list[str | None]] = []
@@ -153,7 +235,7 @@ def _align_multipath(paths: list[list[str]]) -> list[list[list[str]]]:
         return [[list(paths[0])]]
 
     # Progressive alignment  --  build profile row by row
-    al_a, al_b = _levenshtein_align(paths[0], paths[1])
+    al_a, al_b = align_sequences(paths[0], paths[1])
     rows: list[list[str | None]] = [
         list(al_a),
         list(al_b),

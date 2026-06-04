@@ -13,8 +13,8 @@ from lib.config.io import load_raw_config
 from lib.config.schema import AugmentationConfig, BinarizerFeaturesConfig
 from lib.feature.mel import StretchableMelSpectrogram
 from lib.indexed_dataset import IndexedDataset
-from lib.sequence_edit import apply_sequence_edits
-from lib.vocabulary import MASK_TOKEN, NUM_RESERVED_TOKENS, Vocabulary
+from lib.sequence_mutation import apply_mask_mutations, apply_sequence_edits
+from lib.vocabulary import MASK_TOKEN, SPACE_TOKEN, NUM_RESERVED_TOKENS, Vocabulary
 from .augmentation import (
     AugmentationContext,
     ComposedAugmentation,
@@ -397,21 +397,30 @@ class PhonemeTimingDataset(BaseDataset):
             sample["token_targets"] = token_targets
             sample["is_mlm"] = torch.tensor(False, dtype=torch.bool)
         else:
-            sample["token_targets"] = sample["tokens"].clone()
             mask_cfg = self.augmentation_config and self.augmentation_config.token_masking
             if (
                 mask_cfg is not None and mask_cfg.enabled
                 and not self._ensure_original_tokens
                 and random.random() < mask_cfg.prob
             ):
-                orig_tokens = sample["tokens"].clone()
-                new_tokens = orig_tokens.clone()
-                mlm = torch.rand(new_tokens.shape[0]) < mask_cfg.p_mask
-                new_tokens[mlm] = MASK_TOKEN
-                sample["tokens"] = new_tokens
-                sample["token_targets"] = orig_tokens
+                new_tok, new_spans, new_reg, targets = apply_mask_mutations(
+                    tokens=sample["tokens"],
+                    spans=sample["spans"],
+                    regions=sample["regions"],
+                    p_mask=mask_cfg.p_mask,
+                    p_insert=mask_cfg.p_insert,
+                    p_chain=mask_cfg.p_chain,
+                    max_chain=mask_cfg.max_chain,
+                    mask_token=MASK_TOKEN,
+                    space_token=SPACE_TOKEN,
+                )
+                sample["tokens"] = new_tok
+                sample["spans"] = new_spans
+                sample["regions"] = new_reg
+                sample["token_targets"] = targets
                 sample["is_mlm"] = torch.tensor(True, dtype=torch.bool)
             else:
+                sample["token_targets"] = sample["tokens"].clone()
                 sample["is_mlm"] = torch.tensor(False, dtype=torch.bool)
 
         sample["T"] = torch.tensor(sample["spectrogram"].shape[0], dtype=torch.long)
