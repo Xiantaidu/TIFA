@@ -3,22 +3,12 @@ import torch
 
 from inference.backend import InferenceBackend
 from lib import logging
-from lib.path_traversal import (
-    accumulate_best_alts,
-    build_length_grid,
-    compact_sequences,
-    extract_tokens,
-    gather_query_tokens,
-    layout_segments,
-    sample_paths_perm,
-    scatter_real_tokens,
-    segment_grid_starts,
-)
-from lib.vocabulary import MASK_TOKEN
+from lib.path_traversal import compact_sequences, extract_tokens
+from lib.vocabulary import MASK_TOKEN, SPACE_TOKEN
 
 
 class ForcedAlignmentInferenceModule(pl.LightningModule):
-    """Two-pass forced alignment inference with re-inference skip.
+    """Forced alignment inference with MLM-based pronunciation scoring.
 
     Works with any InferenceBackend.
     """
@@ -42,15 +32,14 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         waveform = batch["waveform"]  # [B, L]
         duration = batch["duration"]  # [B] seconds
 
-        paths = batch["paths"]  # [B, N_grid_max, W_max_max]
-        words = batch["words"]  # [B, N_grid_max]
-        segments = batch["segments"]  # [B, N_grid_max]
+        paths = batch["paths"]  # [B, N_grid, W_max]
+        words = batch["words"]  # [B, N_grid, W_max]
+        segments = batch["segments"]  # [B, N_grid]
         widths = batch["widths"]  # [B, S_max]
         phonemes = batch["phonemes"]  # list[dict[(int,int), list[str]]]
         lexicon = batch["lexicon"]  # pass-through to callbacks
 
         S_max = widths.shape[1]
-        W_max_val = int(widths.max().item())
 
         # Split: multi-path items go through MLM scoring; single-path skip it
         single_path = widths.max(dim=1).values == 1  # [B]
@@ -61,127 +50,84 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
 
         if B_m > 0:
             # Slice to multi-path items only
-            paths_m = paths[multi_idx]  # [B_m, N_grid_max, W_max]
-            segments_m = segments[multi_idx]  # [B_m, N_grid_max]
-            widths_m = widths[multi_idx]  # [B_m, S_max]
+            paths_m = paths[multi_idx]
+            segments_m = segments[multi_idx]
+            widths_m = widths[multi_idx]
             waveform_m = waveform[multi_idx]
             duration_m = duration[multi_idx]
 
-            # ---- Phase A: Build length grid and sample ----
-            length_widths, length_values, alt_lengths = build_length_grid(
-                paths_m, segments_m, widths_m,
+            # ---- Step 1: Build one masked sequence per item ----
+            N_total = int((segments_m != 0).sum(dim=-1).max().item())
+            masked_tokens = paths_m[:, :N_total, 0].clone()
+
+            # Prepend column of 1s to widths: index 0 (padding) -> width 1
+            widths_0 = torch.cat([
+                torch.ones(B_m, 1, dtype=torch.int64, device=device), widths_m,
+            ], dim=1)  # [B_m, 1 + S_max]
+            div_mask = widths_0.gather(1, segments_m[:, :N_total]) > 1
+            masked_tokens[div_mask] = MASK_TOKEN
+
+            # Pad beyond each item's actual length
+            seq_lens = (segments_m != 0).sum(dim=-1)  # [B_m]
+            pos_mask = (
+                torch.arange(N_total, device=device).unsqueeze(0)
+                >= seq_lens.unsqueeze(-1)
             )
+            masked_tokens[pos_mask] = 0
 
-            choices = sample_paths_perm(length_widths, r=2)  # [B_m, K, S_max]
-            K = choices.shape[1]
-
-            item_idx = (
-                torch.arange(B_m, device=device)
-                .unsqueeze(1).expand(B_m, K).reshape(-1, 1)
-            )
-            choices_flat = choices.reshape(B_m * K, S_max)
-            stacked = torch.cat([item_idx, choices_flat], dim=-1)
-            unique, _inverse = torch.unique(stacked, dim=0, return_inverse=True)
-            sample_idx = unique[:, 0]  # [U] — indices into multi-path subset
-            unique_lchoices = unique[:, 1:]  # [U, S_max]
-            U = int(unique_lchoices.shape[0])
-
-            # ---- Phase B: Build masked token sequences ----
-            non_div_m = (widths_m <= 1)  # [B_m, S_max]
-            non_div_u = non_div_m[sample_idx]  # [U, S_max]
-            base_lens = alt_lengths[:, :, 0]  # [B_m, S_max]
-            seg_lens, seg_starts, N_max_val = layout_segments(
-                non_div=non_div_u,
-                base_lens=base_lens,
-                length_values=length_values,
-                unique_lchoices=unique_lchoices,
-                sample_idx=sample_idx,
-            )
-
-            seg_grid_starts = segment_grid_starts(segments_m, S_max)  # [B_m, S_max]
-
-            masked_tokens = torch.full(
-                (U, N_max_val), MASK_TOKEN, dtype=torch.int64, device=device,
-            )
-            pos_range = torch.arange(N_max_val, device=device).unsqueeze(0)
-            masked_tokens[pos_range >= seg_lens.sum(dim=-1).unsqueeze(-1)] = 0
-
-            scatter_real_tokens(
-                target=masked_tokens,
-                paths=paths_m,
-                seg_starts=seg_starts,
-                seg_lens=seg_lens,
-                non_div_mask=non_div_u,
-                item_idx=sample_idx,
-                grid_starts=seg_grid_starts,
-            )
-
-            # ---- Phase C: MLM inference + scoring ----
+            # ---- Step 2: MLM inference (one call) ----
             ctx_mlm = self.backend.infer(
-                waveform_m[sample_idx], duration_m[sample_idx], masked_tokens,
+                waveform_m, duration_m, masked_tokens,
             )
 
-            alt_lens_per_u = alt_lengths[sample_idx]  # [U, S_max, W_max]
-            seg_lens_exp = seg_lens.unsqueeze(-1)
-            match_mask = (
-                (alt_lens_per_u == seg_lens_exp)
-                & ~non_div_u.unsqueeze(-1)
+            # ---- Step 3: Score all alternatives in W_max queries ----
+            # Query w packs every segment's w-th alt at its positions.
+            W_max_val = paths_m.shape[2]
+            w_g = torch.arange(W_max_val, device=device).view(1, 1, -1)
+
+            # segment per grid position (0-based, -1 for padding)
+            s_g = segments_m[:, :N_total].unsqueeze(-1) - 1  # [B_m, N_total, 1]
+            w_at_pos = widths_0.gather(1, segments_m[:, :N_total]).unsqueeze(-1)
+
+            valid_g = (s_g >= 0) & (w_g < w_at_pos) & (w_at_pos > 1)
+
+            flat_g = valid_g.nonzero(as_tuple=False)  # [num_valid, 3]
+            b_f, r_f, w_f = flat_g[:, 0], flat_g[:, 1], flat_g[:, 2]
+            tok_f = paths_m[b_f, r_f, w_f]
+
+            queries = torch.zeros(
+                B_m, W_max_val, N_total, dtype=torch.int64, device=device,
             )
+            queries[b_f, w_f, r_f] = SPACE_TOKEN
+            real = tok_f != 0
+            queries[b_f[real], w_f[real], r_f[real]] = tok_f[real]
 
-            match_flat = match_mask.view(U, S_max * W_max_val)
-            active_u, active_sw = match_flat.nonzero(as_tuple=True)
-            Q = int(active_u.numel())
-            active_s = active_sw // W_max_val
-            active_w = active_sw % W_max_val
-            active_sub_item = sample_idx[active_u]  # [Q] — index into multi-path subset
+            # One batched score call
+            scores = self.backend.score(ctx_mlm, queries)  # [B_m, W_max_val, N_total]
+            mask = queries != 0  # [B_m, W_max_val, N_total]
 
-            q_u = active_u
-            q_seg = active_s
-            q_alt = active_w
-            q_start = seg_starts[active_u, active_s]
-            q_len = seg_lens[active_u, active_s]
+            # Per-segment: mask by segment via one-hot
+            seg_oh = (
+                segments_m[:, :N_total].unsqueeze(1) ==
+                torch.arange(1, S_max + 1, device=device).view(1, -1, 1)
+            )  # [B_m, S_max, N_total]
+            score_sum = (scores.unsqueeze(1) * seg_oh.unsqueeze(2)).sum(dim=-1)
+            score_cnt = (mask.unsqueeze(1) * seg_oh.unsqueeze(2)).sum(dim=-1).clamp(min=1)
+            mean_scores = score_sum / score_cnt  # [B_m, S_max, W_max_val]
 
-            if Q > 0:
-                q_local_flat = match_flat.int().cumsum(dim=-1) - 1
-                q_local = q_local_flat[active_u, active_sw]
-
-                queries_all = gather_query_tokens(
-                    U=U, Q=Q, N=N_max_val,
-                    paths=paths_m,
-                    active_u=active_u,
-                    active_s=active_s,
-                    active_w=active_w,
-                    active_item=active_sub_item,
-                    q_start=q_start,
-                    q_len=q_len,
-                    q_local=q_local,
-                    grid_starts=seg_grid_starts,
-                )
-
-                scores_all = self.backend.score(ctx_mlm, queries_all)
-                q_mask = queries_all != 0
-                q_scores = (
-                    (scores_all * q_mask).sum(dim=-1)
-                    / q_mask.sum(dim=-1).clamp(min=1)
-                )
-
-                best_alts_m = accumulate_best_alts(
-                    q_scores=q_scores,
-                    q_u=q_u,
-                    q_local=q_local,
-                    q_item=active_sub_item,
-                    q_seg=q_seg,
-                    q_alt=q_alt,
-                    B=B_m,
-                    S_max=S_max,
-                    W_max=W_max_val,
-                )
-                best_alts[multi_idx] = best_alts_m
+            # Mask invalid alts, argmax per segment
+            alt_ok = (
+                (torch.arange(W_max_val, device=device).view(1, 1, -1)
+                 < widths_m.unsqueeze(-1)) &
+                (widths_m.unsqueeze(-1) > 1)
+            )
+            mean_scores[~alt_ok] = float("-inf")
+            best_alts[multi_idx] = mean_scores.argmax(dim=-1)  # [B_m, S_max]
 
         # ---- Phase D: Decode with best tokens ----
         tokens_raw, words_raw = extract_tokens(
             paths, words, segments=segments, choices=best_alts,
-        )  # [B, N_grid_max] each
+        )  # [B, N_grid] each
         tokens_best, words_best = compact_sequences(
             tokens_raw, words_raw,
         )  # [B, N_max']
@@ -204,8 +150,8 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
 
             phs: list[str] = []
             pm = phonemes[i]
-            for s, alt in enumerate(best_alts[i].tolist()):
-                phs.extend(pm.get((s, alt), []))
+            for seg, alt in enumerate(best_alts[i].tolist()):
+                phs.extend(pm.get((seg, alt), []))
 
             results.append({
                 "identifier": batch["identifier"][i],
