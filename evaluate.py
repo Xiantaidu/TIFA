@@ -55,6 +55,14 @@ def shared_trainer_options(func):
             help="Batch size for evaluation.",
         ),
         click.option(
+            "--concat-size", type=int, default=None,
+            help="Concatenate up to N samples per item to test context length.",
+        ),
+        click.option(
+            "--concat-deterministic", is_flag=True, default=False,
+            help="Use deterministic grouping for sample concatenation.",
+        ),
+        click.option(
             "--num-workers", type=int, default=0, show_default=True,
             help="Number of dataloader worker processes.",
         ),
@@ -155,6 +163,8 @@ def _run_online_evaluation(
     prefix: str,
     output_dir: pathlib.Path,
     batch_size: int,
+    concat_size: int,
+    concat_deterministic: bool,
     num_workers: int,
     precision: str,
     ber_tols: list[int],
@@ -190,6 +200,8 @@ def _run_online_evaluation(
     ds = PhonemeTimingDataset(
         data_dir=dataset,
         prefix=prefix,
+        max_concat_size=concat_size,
+        concat_deterministic=concat_deterministic,
         augmentation_config=None,
         return_waveform=True,
     )
