@@ -23,9 +23,9 @@ class OverlapRatioCollection(torchmetrics.Metric):
         k: if set, compute each metric over only its own worst-k token IDs.
 
     Inputs:
-        pred_spans  [B, N, 2]  --  predicted onset/offset in frames
-        target_spans [B, N, 2]  --  ground-truth onset/offset in frames
-        tokens [B, N]  --  token IDs (0 = padding)
+        pred_spans  [..., N, 2]  --  predicted onset/offset in frames
+        target_spans [..., N, 2]  --  ground-truth onset/offset in frames
+        tokens [..., N]  --  token IDs (0 = padding)
 
     Output:
         Dict with formatted precision and recall keys.

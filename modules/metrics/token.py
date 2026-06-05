@@ -7,9 +7,9 @@ class PhonemeErrorRate(torchmetrics.Metric):
     """Fraction of token positions where the predicted phoneme differs from target.
 
     Inputs:
-        preds  [B, N, V]  --  per-position logits
-        target [B, N]     --  ground-truth token IDs
-        mask   [B, N]     --  bool, True for valid positions
+        preds  [..., N, V]  --  per-position logits
+        target [..., N]     --  ground-truth token IDs
+        mask   [..., N]     --  bool, True for valid positions
 
     Output:
         Scalar in [0, 1].  Lower is better.

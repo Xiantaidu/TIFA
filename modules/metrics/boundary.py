@@ -16,9 +16,9 @@ class BoundaryErrorRate(torchmetrics.Metric):
            largest per-ID error rate.
 
     Inputs:
-        pred_spans  [B, N, 2]  --  predicted onset/offset in frames
-        target_spans [B, N, 2]  --  ground-truth onset/offset in frames
-        tokens [B, N]  --  token IDs (0 = padding)
+        pred_spans  [..., N, 2]  --  predicted onset/offset in frames
+        target_spans [..., N, 2]  --  ground-truth onset/offset in frames
+        tokens [..., N]  --  token IDs (0 = padding)
 
     Output:
         Scalar error rate in [0, 1].
@@ -112,9 +112,9 @@ class BoundaryMAE(torchmetrics.Metric):
            per-ID average error.
 
     Inputs:
-        pred_spans  [B, N, 2]  --  predicted onset/offset in frames
-        target_spans [B, N, 2]  --  ground-truth onset/offset in frames
-        tokens [B, N]  --  token IDs (0 = padding)
+        pred_spans  [..., N, 2]  --  predicted onset/offset in frames
+        target_spans [..., N, 2]  --  ground-truth onset/offset in frames
+        tokens [..., N]  --  token IDs (0 = padding)
 
     Output:
         Scalar MAE in frames.

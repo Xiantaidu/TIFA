@@ -190,21 +190,17 @@ class DiagnosisCallback(lightning.pytorch.callbacks.Callback):
             if T_i == 0 or N_i == 0:
                 continue
 
-            t_mask = torch.arange(T_max, device=device).unsqueeze(0) < T_i
-            n_mask = tokens[i:i + 1] != 0
+            sim_i = similarity[i, :T_i, :N_i]
+            span_i = spans[i, :N_i]
+            t_mask = torch.ones(sim_i.shape[0], dtype=torch.bool, device=device)
+            n_mask = tokens[i, :N_i] != 0
 
             confidence = compute_confidence(
-                spans[i:i + 1, :N_i],
-                similarity[i:i + 1, :T_i, :N_i],
-                t_mask[:, :T_i],
-                n_mask[:, :N_i],
+                span_i, sim_i, t_mask, n_mask,
             ).item()
 
             num, denom = compute_determinacy(
-                spans[i:i + 1, :N_i],
-                similarity[i:i + 1, :T_i, :N_i],
-                t_mask[:, :T_i],
-                n_mask[:, :N_i],
+                span_i, sim_i, t_mask, n_mask,
                 power=self.power,
                 width=self.width,
             )
@@ -247,19 +243,19 @@ class DiagnosisCallback(lightning.pytorch.callbacks.Callback):
             spans_frames = spans_sec[:N_i] / timestep
             device = similarity.device
 
-            t_mask = torch.ones(1, T_i, dtype=torch.bool, device=device)
-            n_mask = (tokens[:N_i] != 0).unsqueeze(0).to(device)
+            t_mask = torch.ones(T_i, dtype=torch.bool, device=device)
+            n_mask = (tokens[:N_i] != 0).to(device)
 
             confidence = compute_confidence(
-                spans_frames.unsqueeze(0),
-                similarity[:T_i, :N_i].unsqueeze(0),
+                spans_frames,
+                similarity[:T_i, :N_i],
                 t_mask,
                 n_mask,
             ).item()
 
             num, denom = compute_determinacy(
-                spans_frames.unsqueeze(0),
-                similarity[:T_i, :N_i].unsqueeze(0),
+                spans_frames,
+                similarity[:T_i, :N_i],
                 t_mask,
                 n_mask,
                 power=self.power,

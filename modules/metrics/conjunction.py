@@ -17,9 +17,9 @@ class PairConjunctionMAE(torchmetrics.Metric):
         k: number of worst pairs to average over.
 
     Inputs:
-        pred_spans  [B, N, 2]  --  predicted onset/offset in frames
-        target_spans [B, N, 2]  --  ground-truth onset/offset in frames
-        tokens [B, N]  --  token IDs (0 = padding)
+        pred_spans  [..., N, 2]  --  predicted onset/offset in frames
+        target_spans [..., N, 2]  --  ground-truth onset/offset in frames
+        tokens [..., N]  --  token IDs (0 = padding)
 
     Output:
         Scalar MAE in frames over the top-k worst pairs.
@@ -39,6 +39,10 @@ class PairConjunctionMAE(torchmetrics.Metric):
         )
 
     def update(self, pred_spans: Tensor, target_spans: Tensor, tokens: Tensor) -> None:
+        N = tokens.shape[-1]
+        tokens = tokens.reshape(-1, N)
+        pred_spans = pred_spans.reshape(-1, N, 2)
+        target_spans = target_spans.reshape(-1, N, 2)
         B, N = tokens.shape
         onset_err = (pred_spans[..., 0] - target_spans[..., 0]).abs().float()  # [B, N]
         offset_err = (pred_spans[..., 1] - target_spans[..., 1]).abs().float()  # [B, N]

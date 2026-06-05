@@ -15,16 +15,23 @@ def compute_determinacy(
     """Per-item numerator and denominator for the PathDeterminacy metric.
 
     Args:
-        pred_spans: ``[B, N_max, 2]`` predicted token spans in frames.
-        similarity: ``[B, T_max, N_max]`` frame/token similarity matrix.
-        t_mask: ``[B, T_max]`` valid frames.
-        n_mask: ``[B, N_max]`` valid tokens.
+        pred_spans: ``[..., N_max, 2]`` predicted token spans in frames.
+        similarity: ``[..., T_max, N_max]`` frame/token similarity matrix.
+        t_mask: ``[..., T_max]`` valid frames.
+        n_mask: ``[..., N_max]`` valid tokens.
         power: exponent for ReLU-activated similarities.
         width: neighborhood half-width in tokens (``None`` = unlimited).
 
     Returns:
-        ``(numerator, denominator)`` as ``[B]`` tensors.
+        ``(numerator, denominator)`` with the same batch shape as the inputs.
     """
+    batch_shape = similarity.shape[:-2]
+
+    similarity = similarity.reshape(-1, *similarity.shape[-2:])
+    pred_spans = pred_spans.reshape(-1, *pred_spans.shape[-2:])
+    t_mask = t_mask.reshape(-1, t_mask.shape[-1])
+    n_mask = n_mask.reshape(-1, n_mask.shape[-1])
+
     B, T_max, N_max = similarity.shape
 
     a = torch.relu(similarity) ** power
@@ -69,7 +76,7 @@ def compute_determinacy(
     denom_contrib[~t_mask] = 0
     denominator = denom_contrib.sum(dim=1)
 
-    return numerator, denominator
+    return numerator.reshape(batch_shape), denominator.reshape(batch_shape)
 
 
 class PathDeterminacy(torchmetrics.Metric):
@@ -89,10 +96,10 @@ class PathDeterminacy(torchmetrics.Metric):
             (default 5).  ``None`` uses all tokens regardless of distance.
 
     Inputs:
-        pred_spans  [B, N_max, 2]  --  predicted token spans in frames
-        similarity  [B, T_max, N_max]  --  frame/token similarity matrix
-        t_mask  [B, T_max]  --  valid frames
-        n_mask  [B, N_max]  --  valid tokens
+        pred_spans  [..., N_max, 2]  --  predicted token spans in frames
+        similarity  [..., T_max, N_max]  --  frame/token similarity matrix
+        t_mask  [..., T_max]  --  valid frames
+        n_mask  [..., N_max]  --  valid tokens
 
     Output:
         Scalar determinacy in [0, 1].
@@ -133,15 +140,22 @@ def compute_confidence(
     """Per-sample mean similarity within predicted spans.
 
     Args:
-        pred_spans: ``[B, N_max, 2]`` predicted token spans in frames.
-        similarity: ``[B, T_max, N_max]`` frame/token similarity matrix.
-        t_mask: ``[B, T_max]`` valid frames.
-        n_mask: ``[B, N_max]`` valid tokens.
+        pred_spans: ``[..., N_max, 2]`` predicted token spans in frames.
+        similarity: ``[..., T_max, N_max]`` frame/token similarity matrix.
+        t_mask: ``[..., T_max]`` valid frames.
+        n_mask: ``[..., N_max]`` valid tokens.
         reduction: ``"mean"`` or ``"min"`` across tokens within each sample.
 
     Returns:
-        ``[B]`` per-sample confidence values.
+        Per-sample confidence with the same batch shape as the inputs.
     """
+    batch_shape = similarity.shape[:-2]
+
+    similarity = similarity.reshape(-1, *similarity.shape[-2:])
+    pred_spans = pred_spans.reshape(-1, *pred_spans.shape[-2:])
+    t_mask = t_mask.reshape(-1, t_mask.shape[-1])
+    n_mask = n_mask.reshape(-1, n_mask.shape[-1])
+
     B, T_max, N_max = similarity.shape
     device = similarity.device
 
@@ -168,7 +182,7 @@ def compute_confidence(
         valid_count = n_mask.sum(dim=1).clamp(min=1)
         result = token_conf.sum(dim=1) / valid_count
 
-    return result
+    return result.reshape(batch_shape)
 
 
 class Confidence(torchmetrics.Metric):
@@ -183,10 +197,10 @@ class Confidence(torchmetrics.Metric):
             (``"mean"`` default, or ``"min"``).
 
     Inputs:
-        pred_spans  [B, N_max, 2]  --  predicted token spans in frames
-        similarity  [B, T_max, N_max]  --  frame/token similarity matrix
-        t_mask  [B, T_max]  --  valid frames
-        n_mask  [B, N_max]  --  valid tokens
+        pred_spans  [..., N_max, 2]  --  predicted token spans in frames
+        similarity  [..., T_max, N_max]  --  frame/token similarity matrix
+        t_mask  [..., T_max]  --  valid frames
+        n_mask  [..., N_max]  --  valid tokens
 
     Output:
         Scalar confidence.
@@ -210,7 +224,7 @@ class Confidence(torchmetrics.Metric):
             reduction=self.reduction,
         )
         self.total += values.sum()
-        self.count += values.shape[0]
+        self.count += values.numel()
 
     def compute(self) -> Tensor:
         return self.total / self.count
