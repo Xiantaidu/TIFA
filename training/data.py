@@ -481,6 +481,8 @@ class PhonemeTimingDataset(BaseDataset):
             "T": torch.tensor(sum(s["T"].item() for s in processed)),
             "N": torch.tensor(sum(N_vals)),
         }
+        if "spectrogram_dirty" in processed[0]:
+            result["spectrogram_dirty"] = torch.cat([s["spectrogram_dirty"] for s in processed], dim=0)
         if "tokens_mutated" in processed[0]:
             result["tokens_mutated"] = torch.cat([s["tokens_mutated"] for s in processed])
             result["token_targets_mutated"] = torch.cat([s["token_targets_mutated"] for s in processed])
