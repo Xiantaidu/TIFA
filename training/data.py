@@ -337,7 +337,8 @@ class PhonemeTimingDataset(BaseDataset):
         sample = super().__getitem__(index)
         if self._group_indices is not None:
             return sample  # already processed by concat_samples
-        return self._prepare_item(sample)
+        sample = self._prepare_item(sample)
+        return self._apply_mutation(sample)
 
     def _prepare_item(self, sample: dict) -> dict:
         # Per-frame ground-truth token IDs, computed before any token edits.
@@ -351,22 +352,31 @@ class PhonemeTimingDataset(BaseDataset):
             frame_targets[valid] = tokens_orig[idx]
         sample["frame_targets"] = frame_targets
 
-        rng = random.Random(sample["_idx"].item()) if self.augmentation_deterministic else None
-        _rand = rng or random
+        sample["token_targets"] = sample["tokens"].clone()
+        sample["is_mlm"] = torch.tensor(False, dtype=torch.bool)
+        if self._augmentation_return_mutated:
+            sample["tokens_mutated"] = sample["tokens"].clone()
+            sample["token_targets_mutated"] = sample["tokens"].clone()
 
-        # Determine whether and how to mutate
+        sample["T"] = torch.tensor(sample["spectrogram"].shape[0], dtype=torch.long)
+        sample["N"] = torch.tensor(sample["tokens"].shape[0], dtype=torch.long)
+        return sample
+
+    def _apply_mutation(self, sample: dict) -> dict:
+        seed = sample["_idx"].item() if self.augmentation_deterministic else None
+        rng = np.random.default_rng(seed)
+
         edit_cfg = self.augmentation_config and self.augmentation_config.sequence_edit
         mask_cfg = self.augmentation_config and self.augmentation_config.token_masking
-        mutation_type = None  # "edit", "mask", or None (identity)
-        if self._vocab_size is not None and _rand.random() < edit_cfg.prob:
+        # Determine whether and how to mutate
+        mutation_type = None
+        if self._vocab_size is not None and edit_cfg and rng.random() < edit_cfg.prob:
             mutation_type = "edit"
-        elif mask_cfg is not None and mask_cfg.enabled and _rand.random() < mask_cfg.prob:
+        elif mask_cfg is not None and mask_cfg.enabled and rng.random() < mask_cfg.prob:
             mutation_type = "mask"
 
         if self._augmentation_return_mutated:
             # Keep originals clean; emit mutated copy
-            sample["token_targets"] = sample["tokens"].clone()
-            sample["is_mlm"] = torch.tensor(False, dtype=torch.bool)
             if mutation_type == "edit":
                 mutated_tok, _, _, mutated_targets = apply_sequence_edits(
                     tokens=sample["tokens"],
@@ -396,9 +406,6 @@ class PhonemeTimingDataset(BaseDataset):
                 )
                 sample["tokens_mutated"] = mutated_tok
                 sample["token_targets_mutated"] = mutated_targets
-            else:
-                sample["tokens_mutated"] = sample["tokens"].clone()
-                sample["token_targets_mutated"] = sample["tokens"].clone()
         else:
             # Mutate in-place
             if mutation_type == "edit":
@@ -435,16 +442,13 @@ class PhonemeTimingDataset(BaseDataset):
                 )
                 sample["is_mlm"] = torch.tensor(True, dtype=torch.bool)
             else:
-                sample["token_targets"] = sample["tokens"].clone()
                 sample["is_mlm"] = torch.tensor(False, dtype=torch.bool)
-
-        sample["T"] = torch.tensor(sample["spectrogram"].shape[0], dtype=torch.long)
-        sample["N"] = torch.tensor(sample["tokens"].shape[0], dtype=torch.long)
         return sample
 
     def concat_samples(self, samples: list[dict]) -> dict:
         if len(samples) == 1:
-            return self._prepare_item(samples[0])
+            sample = self._prepare_item(samples[0])
+            return self._apply_mutation(sample)
 
         processed = [self._prepare_item(s) for s in samples]
 
@@ -477,20 +481,17 @@ class PhonemeTimingDataset(BaseDataset):
             "regions": torch.cat(shifted_regions),
             "token_targets": torch.cat([s["token_targets"] for s in processed]),
             "frame_targets": torch.cat([s["frame_targets"] for s in processed]),
-            "is_mlm": torch.any(torch.stack([s["is_mlm"] for s in processed])),
             "T": torch.tensor(sum(s["T"].item() for s in processed)),
             "N": torch.tensor(sum(N_vals)),
         }
         if "spectrogram_dirty" in processed[0]:
             result["spectrogram_dirty"] = torch.cat([s["spectrogram_dirty"] for s in processed], dim=0)
-        if "tokens_mutated" in processed[0]:
-            result["tokens_mutated"] = torch.cat([s["tokens_mutated"] for s in processed])
-            result["token_targets_mutated"] = torch.cat([s["token_targets_mutated"] for s in processed])
         if "f0" in processed[0]:
             result["f0"] = torch.cat([s["f0"] for s in processed], dim=0)
         if "waveform" in processed[0]:
             result["waveform"] = torch.cat([s["waveform"] for s in processed], dim=0)
             result["duration"] = torch.stack([s["duration"] for s in processed]).sum()
+        result = self._apply_mutation(result)
         return result
 
 
