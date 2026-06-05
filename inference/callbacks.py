@@ -15,11 +15,12 @@ from lib.vocabulary import Vocabulary
 from modules.metrics import (
     BoundaryErrorRate,
     BoundaryMAE,
+    Confidence,
     OverlapRatioCollection,
     PairConjunctionMAE,
     PathDeterminacy,
 )
-from modules.metrics.determinacy import compute_determinacy
+from modules.metrics.reference_free import compute_confidence, compute_determinacy
 
 
 class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
@@ -192,6 +193,13 @@ class DiagnosisCallback(lightning.pytorch.callbacks.Callback):
             t_mask = torch.arange(T_max, device=device).unsqueeze(0) < T_i
             n_mask = tokens[i:i + 1] != 0
 
+            confidence = compute_confidence(
+                spans[i:i + 1, :N_i],
+                similarity[i:i + 1, :T_i, :N_i],
+                t_mask[:, :T_i],
+                n_mask[:, :N_i],
+            ).item()
+
             num, denom = compute_determinacy(
                 spans[i:i + 1, :N_i],
                 similarity[i:i + 1, :T_i, :N_i],
@@ -200,13 +208,14 @@ class DiagnosisCallback(lightning.pytorch.callbacks.Callback):
                 power=self.power,
                 width=self.width,
             )
-            value = (num / (denom + 1e-8)).item()
+            determinacy = (num / (denom + 1e-8)).item()
 
             data_idx = int(indices[i].item())
             record = {
                 "index": data_idx,
                 "identifier": self._identifiers[data_idx] if self._identifiers else str(data_idx),
-                "determinacy": value,
+                "confidence": confidence,
+                "determinacy": determinacy,
                 "num_tokens": N_i,
                 "num_frames": T_i,
             }
@@ -241,6 +250,13 @@ class DiagnosisCallback(lightning.pytorch.callbacks.Callback):
             t_mask = torch.ones(1, T_i, dtype=torch.bool, device=device)
             n_mask = (tokens[:N_i] != 0).unsqueeze(0).to(device)
 
+            confidence = compute_confidence(
+                spans_frames.unsqueeze(0),
+                similarity[:T_i, :N_i].unsqueeze(0),
+                t_mask,
+                n_mask,
+            ).item()
+
             num, denom = compute_determinacy(
                 spans_frames.unsqueeze(0),
                 similarity[:T_i, :N_i].unsqueeze(0),
@@ -249,11 +265,12 @@ class DiagnosisCallback(lightning.pytorch.callbacks.Callback):
                 power=self.power,
                 width=self.width,
             )
-            value = (num / (denom + 1e-8)).item()
+            determinacy = (num / (denom + 1e-8)).item()
 
             self._records.append({
                 "identifier": result["identifier"],
-                "determinacy": value,
+                "confidence": confidence,
+                "determinacy": determinacy,
                 "num_frames": T_i,
                 "num_tokens": N_i,
             })
@@ -294,7 +311,15 @@ class DiagnosisCallback(lightning.pytorch.callbacks.Callback):
                 or not torch.distributed.is_initialized()
                 or torch.distributed.get_rank() == 0
         ):
-            records.sort(key=lambda rc: rc["determinacy"])
+            sorted_by_conf = sorted(records, key=lambda rc: rc["confidence"])
+            sorted_by_det = sorted(records, key=lambda rc: rc["determinacy"])
+            rank_conf = {rc["identifier"]: i for i, rc in enumerate(sorted_by_conf)}
+            rank_det = {rc["identifier"]: i for i, rc in enumerate(sorted_by_det)}
+            records.sort(key=lambda rc: (
+                min(rank_conf[rc["identifier"]], rank_det[rc["identifier"]]),
+                rank_conf[rc["identifier"]],
+                rank_det[rc["identifier"]],
+            ))
             self.save_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.save_path, "w", encoding="utf8") as f:
                 json.dump(records, f, indent=2, ensure_ascii=False)
@@ -336,9 +361,9 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
         self.token_topk = token_topk or []
         self.pair_topk = pair_topk or []
         self._vocab = vocab
+        self._similarity_seen = False
         self.determinacy_power = determinacy_power
         self.determinacy_width = determinacy_width
-        self._determinacy_seen = False
         self._results: dict | None = None
 
         metrics: dict[str, nn.Module] = {}
@@ -366,6 +391,7 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
             metrics[f"conj_mae/{k}"] = PairConjunctionMAE(
                 vocab_size=self._vocab.vocab_size, k=k,
             )
+        self.confidence = Confidence()
         self.determinacy = PathDeterminacy(
             power=determinacy_power, width=determinacy_width,
         )
@@ -378,6 +404,7 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
             *args, **kwargs,
     ) -> None:
         self.metrics.to(trainer.strategy.root_device)
+        self.confidence.to(trainer.strategy.root_device)
         self.determinacy.to(trainer.strategy.root_device)
 
     def on_test_batch_end(
@@ -399,13 +426,19 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
             device = batch["T"].device
             t_mask = torch.arange(T_max, device=device).unsqueeze(0) < batch["T"].unsqueeze(1)
             n_mask = tokens != 0
+            self.confidence.update(
+                outputs["spans"],
+                outputs["similarity"],
+                t_mask,
+                n_mask,
+            )
             self.determinacy.update(
                 outputs["spans"],
                 outputs["similarity"],
                 t_mask,
                 n_mask,
             )
-            self._determinacy_seen = True
+            self._similarity_seen = True
 
     def on_test_end(
             self,
@@ -562,8 +595,17 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
             "variants": cm_variants, "statistics": cm_statistics,
         })
 
-        # Determinacy
-        if self._determinacy_seen:
+        # Confidence and Determinacy
+        if self._similarity_seen:
+            conf_variants = [{
+                "arguments": {},
+                "value": float(self.confidence.compute().item()),
+            }]
+            metrics_list.append({
+                "name": "Confidence",
+                "variants": conf_variants,
+            })
+
             det_variants = [{
                 "arguments": {"power": self.determinacy_power, "width": self.determinacy_width},
                 "value": float(self.determinacy.compute().item()),

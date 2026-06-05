@@ -149,6 +149,7 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
             spans_i = spans[i, :N_i]
             tokens_i = tokens_best[i, :N_i]
             groups_i = groups_best[i, :N_i]
+            word_idx_i = word_idx_best[i, :N_i]
             sim_i = sim[i, :T_i, :N_i]
 
             phs: list[str] = []
@@ -159,13 +160,13 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
             results.append({
                 "identifier": batch["identifier"][i],
                 "duration": Lq[i].item(),
+                "spans": spans_i,
                 "tokens": tokens_i,
                 "groups": groups_i,
-                "word_idx": word_idx_best[i, :N_i],
-                "spans": spans_i,
+                "word_idx": word_idx_i,
+                "similarity": sim_i,
                 "phonemes": phs,
                 "words": words[i],
-                "similarity": sim_i,
             })
 
         return results

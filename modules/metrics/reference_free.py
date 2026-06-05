@@ -121,3 +121,96 @@ class PathDeterminacy(torchmetrics.Metric):
 
     def compute(self) -> Tensor:
         return self.numerator / (self.denominator + 1e-8)
+
+
+def compute_confidence(
+    pred_spans: Tensor,
+    similarity: Tensor,
+    t_mask: Tensor,
+    n_mask: Tensor,
+    reduction: str = "mean",
+) -> Tensor:
+    """Per-sample mean similarity within predicted spans.
+
+    Args:
+        pred_spans: ``[B, N_max, 2]`` predicted token spans in frames.
+        similarity: ``[B, T_max, N_max]`` frame/token similarity matrix.
+        t_mask: ``[B, T_max]`` valid frames.
+        n_mask: ``[B, N_max]`` valid tokens.
+        reduction: ``"mean"`` or ``"min"`` across tokens within each sample.
+
+    Returns:
+        ``[B]`` per-sample confidence values.
+    """
+    B, T_max, N_max = similarity.shape
+    device = similarity.device
+
+    t_idx = torch.arange(T_max, device=device).unsqueeze(0).unsqueeze(-1)  # [1, T, 1]
+    onsets = pred_spans[:, :, 0].unsqueeze(1)   # [B, 1, N]
+    offsets = pred_spans[:, :, 1].unsqueeze(1)  # [B, 1, N]
+
+    span_mask = (t_idx >= onsets) & (t_idx < offsets)  # [B, T, N]
+    span_mask = span_mask & t_mask.unsqueeze(-1) & n_mask.unsqueeze(1)
+
+    token_sum = (similarity * span_mask.float()).sum(dim=1)  # [B, N]
+    token_count = span_mask.float().sum(dim=1)                # [B, N]
+
+    token_conf = torch.zeros(B, N_max, device=device)
+    nonzero = token_count > 0
+    token_conf[nonzero] = token_sum[nonzero] / token_count[nonzero]
+
+    token_conf[~n_mask] = float("inf" if reduction == "min" else 0)
+
+    if reduction == "min":
+        result = token_conf.min(dim=1).values  # [B]
+        result[result.isinf()] = 0.0
+    else:
+        valid_count = n_mask.sum(dim=1).clamp(min=1)
+        result = token_conf.sum(dim=1) / valid_count
+
+    return result
+
+
+class Confidence(torchmetrics.Metric):
+    """Reference-free metric: mean cosine similarity within each predicted span.
+
+    For each token, the average similarity across its predicted duration is
+    computed.  Zero-width spans get confidence 0.  The per-sample reduction
+    (``"mean"`` or ``"min"``) is then averaged across items.
+
+    Arguments:
+        reduction: how to aggregate across tokens within a sample
+            (``"mean"`` default, or ``"min"``).
+
+    Inputs:
+        pred_spans  [B, N_max, 2]  --  predicted token spans in frames
+        similarity  [B, T_max, N_max]  --  frame/token similarity matrix
+        t_mask  [B, T_max]  --  valid frames
+        n_mask  [B, N_max]  --  valid tokens
+
+    Output:
+        Scalar confidence.
+    """
+
+    def __init__(self, reduction: str = "mean", **kwargs):
+        super().__init__(**kwargs)
+        self.reduction = reduction
+        self.add_state("total", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("count", default=torch.tensor(0), dist_reduce_fx="sum")
+
+    def update(
+        self,
+        pred_spans: Tensor,
+        similarity: Tensor,
+        t_mask: Tensor,
+        n_mask: Tensor,
+    ) -> None:
+        values = compute_confidence(
+            pred_spans, similarity, t_mask, n_mask,
+            reduction=self.reduction,
+        )
+        self.total += values.sum()
+        self.count += values.shape[0]
+
+    def compute(self) -> Tensor:
+        return self.total / self.count

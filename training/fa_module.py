@@ -18,6 +18,7 @@ from modules.losses import (
 from modules.metrics import (
     BoundaryErrorRate,
     BoundaryMAE,
+    Confidence,
     PairConjunctionMAE,
     OverlapRatioCollection,
     PathDeterminacy,
@@ -44,6 +45,7 @@ _B_MAE_ONSET = "B-MAE_onset"
 _B_MAE_OFFSET = "B-MAE_offset"
 _OVERLAP = "Overlap"
 _CONJ_MAE = "Conj-MAE"
+_CONFIDENCE = "Confidence"
 _DETERMINACY = "Determinacy"
 
 
@@ -152,6 +154,11 @@ class ForcedAlignmentModule(BaseLightningModule):
                 ),
             )
 
+        # Confidence
+        self.register_metric(
+            f"{_CONFIDENCE}{postfix}",
+            Confidence(),
+        )
         # Path Determinacy
         det_power = self.training_config.validation.metrics_determinacy_power
         det_width = self.training_config.validation.metrics_determinacy_width
@@ -302,6 +309,9 @@ class ForcedAlignmentModule(BaseLightningModule):
             pred_spans = decode_alignment_flat(similarity, T, N)
             target_spans = main_sample["spans"]
             self._update_fa_metrics(pred_spans, target_spans, tokens)
+            self.metrics[_CONFIDENCE].update(
+                pred_spans, similarity, t_mask_fa, n_mask_fa,
+            )
             self.metrics[_DETERMINACY].update(
                 pred_spans, similarity, t_mask_fa, n_mask_fa,
             )
@@ -314,6 +324,9 @@ class ForcedAlignmentModule(BaseLightningModule):
                 pred_spans_dirty = decode_alignment_flat(sim_dirty, T, N)
                 self._update_fa_metrics(
                     pred_spans_dirty, target_spans, tokens, postfix="_dirty",
+                )
+                self.metrics[f"{_CONFIDENCE}_dirty"].update(
+                    pred_spans_dirty, sim_dirty, t_mask_fa, n_mask_fa,
                 )
                 self.metrics[f"{_DETERMINACY}_dirty"].update(
                     pred_spans_dirty, sim_dirty, t_mask_fa, n_mask_fa,
