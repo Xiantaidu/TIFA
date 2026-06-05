@@ -153,8 +153,6 @@ class JapaneseKanaConverter(PronunciationScriptDictionaryConverter):
         return False
 
     def script_to_phonemes(self, script: str) -> list[list[str]]:
-        if script == "cl":
-            return [["cl"]]
         if script == "":
             return [[]]
         if script in self._script_dict:

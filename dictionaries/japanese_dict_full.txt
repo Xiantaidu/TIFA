@@ -3,6 +3,7 @@ i	i
 u	u
 e	e
 o	o
+cl	cl
 n	N
 ka	k a
 ki	k i
