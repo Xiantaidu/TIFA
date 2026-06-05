@@ -40,6 +40,7 @@ def apply_sequence_edits(
     p_sub: float,
     p_del: float,
     p_ins: float,
+    rng: random.Random | None = None,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """Apply random edits to a token sequence.
 
@@ -52,6 +53,7 @@ def apply_sequence_edits(
         p_sub: per-token substitution probability.
         p_del: per-token deletion probability.
         p_ins: per-gap insertion probability.
+        rng: optional ``random.Random`` for deterministic edits.
 
     Returns:
         ``(new_tokens, new_spans, new_regions, original_tokens)`` where:
@@ -62,6 +64,7 @@ def apply_sequence_edits(
           position: the original token ID for kept and substituted tokens, 0
           for insertions.
     """
+    _rand = rng or random
     N = tokens.shape[0]
     T = regions.shape[0]
     device = tokens.device
@@ -70,13 +73,13 @@ def apply_sequence_edits(
     # Phase 1  --  Sample edits and build target sequence
     # ------------------------------------------------------------------
 
-    do_sub = [random.random() < p_sub for _ in range(N)]
-    do_del = [random.random() < p_del for _ in range(N)]
-    do_ins = [random.random() < p_ins for _ in range(N + 1)]
+    do_sub = [_rand.random() < p_sub for _ in range(N)]
+    do_del = [_rand.random() < p_del for _ in range(N)]
+    do_ins = [_rand.random() < p_ins for _ in range(N + 1)]
 
     # Guard: can't delete all tokens
     if all(do_del):
-        keep_idx = random.randrange(N)
+        keep_idx = _rand.randrange(N)
         do_del[keep_idx] = False
 
     # Priority: sub > del > ins (at most one operation per place)
@@ -93,21 +96,21 @@ def apply_sequence_edits(
 
     for i in range(N):
         if do_ins[i]:
-            tgt_tokens.append(random.randint(min_token, max_token))
+            tgt_tokens.append(_rand.randint(min_token, max_token))
             tgt_original_tokens.append(0)
 
         if do_del[i]:
             continue
 
         if do_sub[i]:
-            tgt_tokens.append(random.randint(min_token, max_token))
+            tgt_tokens.append(_rand.randint(min_token, max_token))
             tgt_original_tokens.append(orig_tokens[i])
         else:
             tgt_tokens.append(orig_tokens[i])
             tgt_original_tokens.append(orig_tokens[i])
 
     if do_ins[N]:
-        tgt_tokens.append(random.randint(min_token, max_token))
+        tgt_tokens.append(_rand.randint(min_token, max_token))
         tgt_original_tokens.append(0)
 
     M = len(tgt_tokens)
@@ -169,6 +172,7 @@ def apply_mask_mutations(
         max_chain: int,
         mask_token: int,
         space_token: int,
+        rng: random.Random | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Apply MASK replacement and chained insertion, resolve with alignment.
 
@@ -195,6 +199,7 @@ def apply_mask_mutations(
         max_chain: maximum number of consecutive MASKs in a run.
         mask_token: token ID used for MASK.
         space_token: token ID used for SPACE (insertion target).
+        rng: optional ``random.Random`` for deterministic mutations.
 
     Returns:
         ``(new_tokens, new_spans, new_regions, targets)`` where targets
@@ -202,6 +207,7 @@ def apply_mask_mutations(
         for kept or replaced positions.
     """
 
+    _rand = rng or random
     N = tokens.shape[0]
     T = regions.shape[0]
     device = tokens.device
@@ -212,7 +218,7 @@ def apply_mask_mutations(
     # Step 1: MASK replacement (per-token)
     mut_list: list[int] = []
     for i in range(N):
-        if random.random() < p_mask:
+        if _rand.random() < p_mask:
             mut_list.append(mask_token)
         else:
             mut_list.append(orig_list[i])
@@ -221,10 +227,10 @@ def apply_mask_mutations(
     # the alignment step resolves any ambiguity)
     insertions: list[list[int]] = [[] for _ in range(N + 1)]
     for gap in range(N + 1):
-        if random.random() >= p_insert:
+        if _rand.random() >= p_insert:
             continue
         run: list[int] = [mask_token]
-        while len(run) < max_chain and random.random() < p_chain:
+        while len(run) < max_chain and _rand.random() < p_chain:
             run.append(mask_token)
         insertions[gap] = run
 

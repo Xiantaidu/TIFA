@@ -310,6 +310,15 @@ class AugmentationConfig(ConfigBaseModel):
         "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA),
     })
 
+    @classmethod
+    def destructive_augmentation_names(cls) -> set[str]:
+        return {
+            "spectrogram_masking",
+            "colored_noise",
+            "natural_noise",
+            "rir_reverb",
+        }
+
     @property
     def has_destructive_augmentations(self) -> bool:
         return (
@@ -365,12 +374,7 @@ class AugmentationConfig(ConfigBaseModel):
     def keep_destructive(self) -> "AugmentationConfig":
         """Keep only the destructive augmentation types at their current
         ``enabled`` state.  Matches :attr:`has_destructive_augmentations`."""
-        return self.keep(
-            "colored_noise",
-            "natural_noise",
-            "rir_reverb",
-            "spectrogram_masking",
-        )
+        return self.keep(*self.destructive_augmentation_names())
 
 
 class IterativeRankingConfig(ConfigBaseModel):

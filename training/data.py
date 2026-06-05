@@ -253,7 +253,7 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
         expected_len = int(self.info["lengths"][index])
         spectrogram = _align_length(spectrogram, expected_len)
 
-        if self.augmentation_return_dirty:
+        if self.augmentation_config is not None and self.augmentation_return_dirty:
             spectrogram_clean = torch.clamp(spectrogram_clean, min=math.log(1e-5))
             spectrogram_clean = _align_length(spectrogram_clean, expected_len)
             sample["spectrogram"] = spectrogram_clean
@@ -312,7 +312,7 @@ class PhonemeTimingDataset(BaseDataset):
     def __init__(
         self,
         *args,
-        ensure_original_tokens: bool = False,
+        augmentation_return_mutated: bool = False,
         augmentation_config=None,
         **kwargs,
     ):
@@ -324,7 +324,7 @@ class PhonemeTimingDataset(BaseDataset):
             augmentation_config=augmentation_config,
             **kwargs,
         )
-        self._ensure_original_tokens = ensure_original_tokens
+        self._augmentation_return_mutated = augmentation_return_mutated
         self._vocab_size: int | None = None
         if (
             self.augmentation_config is not None
@@ -364,7 +364,7 @@ class PhonemeTimingDataset(BaseDataset):
             frame_targets[valid] = tokens_orig[idx]
         sample["frame_targets"] = frame_targets
 
-        if self._token_peers and not self._ensure_original_tokens:
+        if self._token_peers:
             pert_cfg = self.augmentation_config.token_perturbation
             if random.random() < pert_cfg.prob:
                 new_tokens = []
@@ -378,7 +378,6 @@ class PhonemeTimingDataset(BaseDataset):
 
         if (
                 self._vocab_size is not None
-                and not self._ensure_original_tokens
                 and random.random() < (edit_cfg := self.augmentation_config.sequence_edit).prob
         ):
             new_tokens, new_spans, new_regions, token_targets = apply_sequence_edits(
@@ -400,7 +399,6 @@ class PhonemeTimingDataset(BaseDataset):
             mask_cfg = self.augmentation_config and self.augmentation_config.token_masking
             if (
                 mask_cfg is not None and mask_cfg.enabled
-                and not self._ensure_original_tokens
                 and random.random() < mask_cfg.prob
             ):
                 new_tok, new_spans, new_reg, targets = apply_mask_mutations(
@@ -422,6 +420,54 @@ class PhonemeTimingDataset(BaseDataset):
             else:
                 sample["token_targets"] = sample["tokens"].clone()
                 sample["is_mlm"] = torch.tensor(False, dtype=torch.bool)
+
+        if self._augmentation_return_mutated:
+            edit_cfg = self.augmentation_config.sequence_edit
+            mask_cfg = self.augmentation_config and self.augmentation_config.token_masking
+            edit_ok = self._vocab_size is not None and edit_cfg.enabled
+            mask_ok = mask_cfg is not None and mask_cfg.enabled
+
+            if edit_ok or mask_ok:
+                rng = random.Random(sample["_idx"].item()) if self.augmentation_deterministic else None
+                _rand = rng or random
+
+                # Pick mutation type proportionally to prob
+                if edit_ok and mask_ok:
+                    e_prob = edit_cfg.prob
+                    m_prob = mask_cfg.prob
+                    pick_edit = _rand.random() < e_prob / (e_prob + m_prob)
+                elif edit_ok:
+                    pick_edit = True
+                else:
+                    pick_edit = False
+
+                if pick_edit:
+                    mutated_tok, _, _, mutated_targets = apply_sequence_edits(
+                        tokens=sample["tokens"],
+                        spans=sample["spans"],
+                        regions=sample["regions"],
+                        min_token=NUM_RESERVED_TOKENS,
+                        max_token=self._vocab_size - 1,
+                        p_sub=edit_cfg.p_sub,
+                        p_del=edit_cfg.p_del,
+                        p_ins=edit_cfg.p_ins,
+                        rng=rng,
+                    )
+                else:
+                    mutated_tok, _, _, mutated_targets = apply_mask_mutations(
+                        tokens=sample["tokens"],
+                        spans=sample["spans"],
+                        regions=sample["regions"],
+                        p_mask=mask_cfg.p_mask,
+                        p_insert=mask_cfg.p_insert,
+                        p_chain=mask_cfg.p_chain,
+                        max_chain=mask_cfg.max_chain,
+                        mask_token=MASK_TOKEN,
+                        space_token=SPACE_TOKEN,
+                        rng=rng,
+                    )
+                sample["tokens_mutated"] = mutated_tok
+                sample["token_targets_mutated"] = mutated_targets
 
         sample["T"] = torch.tensor(sample["spectrogram"].shape[0], dtype=torch.long)
         sample["N"] = torch.tensor(sample["tokens"].shape[0], dtype=torch.long)
@@ -466,6 +512,9 @@ class PhonemeTimingDataset(BaseDataset):
             "T": torch.tensor(sum(s["T"].item() for s in processed)),
             "N": torch.tensor(sum(N_vals)),
         }
+        if "tokens_mutated" in processed[0]:
+            result["tokens_mutated"] = torch.cat([s["tokens_mutated"] for s in processed])
+            result["token_targets_mutated"] = torch.cat([s["token_targets_mutated"] for s in processed])
         if "f0" in processed[0]:
             result["f0"] = torch.cat([s["f0"] for s in processed], dim=0)
         if "waveform" in processed[0]:

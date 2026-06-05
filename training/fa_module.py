@@ -6,7 +6,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
-from lib.config.schema import RootConfig, LossConfig
+from lib.config.schema import RootConfig, LossConfig, AugmentationConfig
 from lib.plot import alignment_to_figure, cross_similarity_to_figure, topk_bar_figure
 from modules.decoding import decode_alignment_flat
 from modules.forced_alignment import ForcedAlignmentModel
@@ -22,6 +22,7 @@ from modules.metrics import (
     PairConjunctionMAE,
     OverlapRatioCollection,
     PathDeterminacy,
+    PhonemeErrorRate,
 )
 from training.data import (
     BaseDataset,
@@ -47,6 +48,7 @@ _OVERLAP = "Overlap"
 _CONJ_MAE = "Conj-MAE"
 _CONFIDENCE = "Confidence"
 _DETERMINACY = "Determinacy"
+_PHONEME_ERROR_RATE = "PER"
 
 
 class ForcedAlignmentModule(BaseLightningModule):
@@ -154,6 +156,12 @@ class ForcedAlignmentModule(BaseLightningModule):
                 ),
             )
 
+        # Phoneme Error Rate
+        self.register_metric(
+            f"{_PHONEME_ERROR_RATE}{postfix}",
+            PhonemeErrorRate(),
+        )
+
         # Confidence
         self.register_metric(
             f"{_CONFIDENCE}{postfix}",
@@ -188,26 +196,20 @@ class ForcedAlignmentModule(BaseLightningModule):
 
     def build_valid_dataset(self) -> BaseDataset:
         dl_cfg = self.training_config.dataloader
-        if self.use_parallel_dirty_metrics:
-            aug_cfg = self.training_config.augmentation.keep_destructive()
-            return PhonemeTimingDataset(
-                self.data_dir, "valid",
-                augmentation_config=aug_cfg,
-                augmentation_deterministic=True,
-                augmentation_return_dirty=True,
-                ensure_original_tokens=True,
-                max_concat_size=dl_cfg.max_concat_size,
-                max_concat_frames=dl_cfg.max_concat_frames,
-                concat_deterministic=True,
-            )
-        else:
-            return PhonemeTimingDataset(
-                self.data_dir, "valid",
-                ensure_original_tokens=True,
-                max_concat_size=dl_cfg.max_concat_size,
-                max_concat_frames=dl_cfg.max_concat_frames,
-                concat_deterministic=True,
-            )
+        aug_cfg = self.training_config.augmentation.keep(
+            *AugmentationConfig.destructive_augmentation_names(),
+            "token_masking", "sequence_edit",
+        )
+        return PhonemeTimingDataset(
+            self.data_dir, "valid",
+            augmentation_config=aug_cfg,
+            augmentation_deterministic=True,
+            augmentation_return_dirty=True,
+            augmentation_return_mutated=True,
+            max_concat_size=dl_cfg.max_concat_size,
+            max_concat_frames=dl_cfg.max_concat_frames,
+            concat_deterministic=True,
+        )
 
     def build_aux_dataset(self) -> BaseDataset | None:
         dl_cfg = self.training_config.dataloader
@@ -331,6 +333,26 @@ class ForcedAlignmentModule(BaseLightningModule):
                 self.metrics[f"{_DETERMINACY}_dirty"].update(
                     pred_spans_dirty, sim_dirty, t_mask_fa, n_mask_fa,
                 )
+
+            if "tokens_mutated" in main_sample:
+                tokens_mutated = main_sample["tokens_mutated"]
+                token_targets_mutated = main_sample["token_targets_mutated"]
+                n_mask_mutated = tokens_mutated != 0
+
+                _, _, _, token_logits_mutated = self.model(
+                    spectrogram, tokens_mutated, t_mask, n_mask_mutated,
+                )
+                self.metrics[_PHONEME_ERROR_RATE].update(
+                    token_logits_mutated, token_targets_mutated, n_mask_mutated,
+                )
+
+                if self.use_parallel_dirty_metrics and "spectrogram_dirty" in main_sample:
+                    _, _, _, token_logits_both = self.model(
+                        main_sample["spectrogram_dirty"], tokens_mutated, t_mask, n_mask_mutated,
+                    )
+                    self.metrics[f"{_PHONEME_ERROR_RATE}_dirty"].update(
+                        token_logits_both, token_targets_mutated, n_mask_mutated,
+                    )
 
             return {
                 "spans": pred_spans,

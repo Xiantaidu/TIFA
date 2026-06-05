@@ -190,7 +190,6 @@ def _run_online_evaluation(
     ds = PhonemeTimingDataset(
         data_dir=dataset,
         prefix=prefix,
-        ensure_original_tokens=True,
         augmentation_config=None,
         return_waveform=True,
     )
