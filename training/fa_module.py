@@ -396,8 +396,6 @@ class ForcedAlignmentModule(BaseLightningModule):
     def plot_validation_results(self, sample, outputs):
         main = sample["main"]
         indices = main["indices"]
-        max_plots = self.training_config.validation.max_plots
-        stride = max(1, len(self.valid_dataset) // max_plots)
 
         tokens = main["tokens"]
         gt_spans = main["spans"]
@@ -410,7 +408,7 @@ class ForcedAlignmentModule(BaseLightningModule):
 
         for i in range(indices.shape[0]):
             data_idx = int(indices[i].item())
-            if data_idx % stride != 0:
+            if data_idx not in self.plot_indices:
                 continue
 
             T_i = int(T_all[i].item())

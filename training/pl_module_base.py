@@ -5,6 +5,7 @@ from fnmatch import fnmatch
 
 import lightning.pytorch
 import matplotlib
+import numpy
 import torch
 from lightning_utilities.core.rank_zero import rank_zero_info
 from torch import nn
@@ -61,6 +62,7 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         self.val_losses: dict[str, Metric] = {  # use built-in dict to not be printed in the model summary
             "total_loss": MeanMetric()
         }
+        self.plot_indices: set[int] = set()  # validation sample indices to plot after each epoch
         self.use_parallel_dirty_metrics = (
                 self.training_config.augmentation.has_destructive_augmentations
                 and self.training_config.validation.parallel_dirty_metrics
@@ -390,6 +392,9 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
             metric.reset()
         if self.use_ema:
             self.ema.apply()  # switch to EMA parameters for validation
+        n = len(self.valid_dataset)
+        k = min(n, self.training_config.validation.max_plots)
+        self.plot_indices = set(numpy.linspace(0, n, k, endpoint=False, dtype=int).tolist())
 
     def validation_step(self, sample: dict[str, torch.Tensor], batch_index: int):
         if sample["size"] == 0:
@@ -398,8 +403,7 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         with torch.autocast(self.device.type, enabled=False):
             losses = self.forward_model(sample, infer=False)
             outputs = self.forward_model(sample, infer=True)
-            stride = max(1, len(self.valid_dataset) // self.training_config.validation.max_plots)
-            if ((sample["indices"] % stride) == 0).any():
+            if any(idx in self.plot_indices for idx in sample["indices"].tolist()):
                 save_obj["sample"] = sample
                 save_obj["outputs"] = outputs
                 filename = f"validation_step{self.global_step}_rank{self.global_rank}_batch{batch_index}.pt"

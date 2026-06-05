@@ -478,7 +478,7 @@ class PhonemeTimingDataset(BaseDataset):
             "spans": torch.cat(shifted_spans),
             "regions": torch.cat(shifted_regions),
             "frame_targets": torch.cat([s["frame_targets"] for s in processed]),
-            "T": torch.tensor(sum(s["T"].item() for s in processed)),
+            "T": torch.stack([s["T"] for s in processed]).sum(),
             "N": torch.tensor(sum(N_vals)),
         }
         if "spectrogram_dirty" in processed[0]:
