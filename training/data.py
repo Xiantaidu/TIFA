@@ -200,12 +200,12 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
         for idx in indices:
             frames = self._single_num_frames(idx)
             exceed_size = (
-                self.max_concat_size is not None
-                and len(current) >= self.max_concat_size
+                    self.max_concat_size is not None
+                    and len(current) >= self.max_concat_size
             )
             exceed_frames = (
-                self.max_concat_frames is not None
-                and current_frames + frames > self.max_concat_frames
+                    self.max_concat_frames is not None
+                    and current_frames + frames > self.max_concat_frames
             )
             if current and (exceed_size or exceed_frames):
                 groups.append(current)
@@ -309,11 +309,11 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
 
 class PhonemeTimingDataset(BaseDataset):
     def __init__(
-        self,
-        *args,
-        augmentation_return_mutated: bool = False,
-        augmentation_config=None,
-        **kwargs,
+            self,
+            *args,
+            augmentation_return_mutated: bool = False,
+            augmentation_config=None,
+            **kwargs,
     ):
         # Time stretching is not supported for token-spectrogram aligned datasets.
         if augmentation_config is not None:
@@ -326,14 +326,12 @@ class PhonemeTimingDataset(BaseDataset):
         self._augmentation_return_mutated = augmentation_return_mutated
         self._vocab_size: int | None = None
         if (
-            self.augmentation_config is not None
-            and self.augmentation_config.sequence_edit.enabled
+                self.augmentation_config is not None
+                and self.augmentation_config.sequence_edit.enabled
         ):
             self._vocab_size = Vocabulary.from_file(
                 self.data_dir / "vocabulary.json"
             ).vocab_size
-
-
 
     def __getitem__(self, index: int) -> dict:
         sample = super().__getitem__(index)

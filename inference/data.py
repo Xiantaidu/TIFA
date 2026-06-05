@@ -133,10 +133,11 @@ class AudioTextDataset(torch.utils.data.Dataset):
                         self.vocabulary.encode(ph, gt.language) for ph in path
                     ]
                     if any(tid is None for tid in tok_ids):
+                        oov_phs = [ph for tid, ph in zip(tok_ids, path) if tid is None]
                         if self.oov_handling == "raise":
-                            return {"skip": True, "error": f"Unknown phoneme in text for '{identifier}'"}
+                            return {"skip": True, "error": f"Unknown phonemes {oov_phs} in text for '{identifier}'"}
                         if self.oov_handling == "skip":
-                            return _skip(identifier, "Unknown phoneme in text")
+                            return _skip(identifier, f"Unknown phoneme {oov_phs} in text")
                         # forced: drop this path
                         oov_count += 1
                         continue

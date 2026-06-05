@@ -66,15 +66,10 @@ class RequiredOnGivenScope(DynamicCheck):
         )
 
 
-class MergedSymbolGroupConfig(ConfigBaseModel):
-    name: str = Field(...)
-    symbols: list[str] = Field(...)
-
-
 class VocabularyConfig(ConfigBaseModel):
     global_symbols: list[str] = Field(default_factory=list)
     stop_symbols: list[str] = Field(default_factory=list)
-    merged_groups: list[MergedSymbolGroupConfig] = Field(default_factory=list)
+    merged_groups: list[list[str]] = Field(default_factory=list)
 
 
 class SpectrogramConfig(ConfigBaseModel):
