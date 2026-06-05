@@ -1,7 +1,7 @@
 import json
 import pathlib
 from types import MappingProxyType
-from typing import Iterable, Mapping, Sequence, TypeVar
+from typing import Iterable, Mapping, TypeVar
 
 from lib.config.schema import MergedSymbolGroupConfig
 
@@ -27,12 +27,10 @@ class VocabularyBuilder:
             global_symbols: Iterable[str] = (),
             stop_symbols: Iterable[str] = (),
             merged_groups: Iterable[MergedSymbolGroupConfig] | None = None,
-            peers: Iterable[Sequence[str]] | None = None,
     ):
         self.global_symbols = frozenset(global_symbols)
         self.stop_symbols = frozenset(stop_symbols)
         self.merged_groups = list(merged_groups or ())
-        self.peers = list(peers or ())
         self._symbol_counts: dict[str, int] = {}
 
     def add(self, symbols: Iterable[str], default_language: str) -> None:
@@ -101,46 +99,9 @@ class VocabularyBuilder:
             for s in group_map[name]:
                 symbol_to_id[s] = gid
 
-        # Resolve peer groups through name_to_id, then disjoint-set
-        all_peer_ids: set[int] = set()
-        resolved: list[tuple[str, list[int]]] = []
-        for i, group in enumerate(self.peers):
-            ids = []
-            for s in group:
-                if s in self.stop_symbols:
-                    raise ValueError(
-                        f"Stop symbol '{s}' cannot be used in peers.")
-                try:
-                    ids.append(name_to_id[s])
-                except KeyError as e:
-                    raise ValueError(
-                        f"Unknown symbol or group in peers: '{s}'.") from e
-            ids = list(dict.fromkeys(ids))
-            all_peer_ids.update(ids)
-            resolved.append((f"__c{i}", ids))
-
-        peer_map = _disjoint_sets(all_peer_ids, resolved)
-
-        # Filter singletons
-        self._peer_ids = tuple(
-            members for members in peer_map.values() if len(members) >= 2
-        )
-
         return Vocabulary(
             symbol_to_id=symbol_to_id,
         )
-
-    def dump_token_peers(self, path: str | pathlib.Path) -> None:
-        if not hasattr(self, "_peer_ids"):
-            raise RuntimeError(
-                "dump_token_peers() called before build(). "
-                "Call build() first to compute peer groups."
-            )
-        with open(path, "w", encoding="utf8") as f:
-            json.dump(
-                {"token_peer_ids": [list(ids) for ids in self._peer_ids]},
-                f, ensure_ascii=False, indent=2,
-            )
 
 
 class Vocabulary:

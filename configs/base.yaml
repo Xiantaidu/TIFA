@@ -59,10 +59,7 @@ training:
       enabled: true
       prob: 0.25
       kernel_path_glob: "data/reverb/**/*.wav"
-    token_perturbation:
-      enabled: false
-      prob: 0.2
-      p_sub: 0.05
+
   loss: {}
 #  optimizer:
 #    cls: torch.optim.AdamW

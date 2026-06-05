@@ -75,7 +75,6 @@ class VocabularyConfig(ConfigBaseModel):
     global_symbols: list[str] = Field(default_factory=list)
     stop_symbols: list[str] = Field(default_factory=list)
     merged_groups: list[MergedSymbolGroupConfig] = Field(default_factory=list)
-    peers: list[list[str]] = Field(default_factory=list)
 
 
 class SpectrogramConfig(ConfigBaseModel):
@@ -286,12 +285,6 @@ class TokenMaskingAugmentationConfig(ConfigBaseModel):
     max_chain: int = Field(3, ge=1)
 
 
-class TokenPerturbationConfig(ConfigBaseModel):
-    enabled: bool = False
-    prob: float = Field(0.3, gt=0.0, le=1.0)
-    p_sub: float = Field(0.1, gt=0.0, le=1.0)
-
-
 class AugmentationConfig(ConfigBaseModel):
     pitch_shifting: PitchShiftingAugmentationConfig = Field(...)
     time_stretching: TimeStretchingAugmentationConfig = Field(...)
@@ -300,7 +293,6 @@ class AugmentationConfig(ConfigBaseModel):
     colored_noise: ColoredNoiseAugmentationConfig = Field(...)
     natural_noise: NaturalNoiseAugmentationConfig = Field(...)
     rir_reverb: RIRReverbAugmentationConfig = Field(...)
-    token_perturbation: TokenPerturbationConfig = Field(...)
     sequence_edit: SequenceEditAugmentationConfig = Field(None, json_schema_extra={
         "scope": ConfigurationScope.FA,
         "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA),
@@ -340,7 +332,7 @@ class AugmentationConfig(ConfigBaseModel):
         return names_set
 
     def _clone_enabled(
-        self, compute: Callable[[str, bool], bool]
+            self, compute: Callable[[str, bool], bool]
     ) -> "AugmentationConfig":
         updates: dict[str, object] = {}
         for field_name in self.model_fields:

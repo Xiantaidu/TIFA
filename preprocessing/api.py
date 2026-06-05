@@ -33,7 +33,6 @@ def build_shared_vocab(vocab_config, metadata_list) -> tuple[Vocabulary, Mapping
         global_symbols=vocab_config.global_symbols,
         stop_symbols=vocab_config.stop_symbols,
         merged_groups=vocab_config.merged_groups,
-        peers=vocab_config.peers,
     )
     for item in metadata_list:
         builder.add(item.raw_symbols, default_language=item.language)

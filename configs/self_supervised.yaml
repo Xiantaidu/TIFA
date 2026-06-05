@@ -8,7 +8,6 @@ binarizer:
     global_symbols: [AP, SP, EP, GS, sil, br, pau, cl]
     stop_symbols: [AP, SP, EP, GS, sil, br, pau, cl]
     merged_groups: []
-    peers: []
   features:
     f0:
       method: parselmouth
