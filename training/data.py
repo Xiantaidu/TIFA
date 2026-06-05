@@ -364,44 +364,50 @@ class PhonemeTimingDataset(BaseDataset):
             frame_targets[valid] = tokens_orig[idx]
         sample["frame_targets"] = frame_targets
 
+        rng = random.Random(sample["_idx"].item()) if self.augmentation_deterministic else None
+        _rand = rng or random
+
         if self._token_peers:
             pert_cfg = self.augmentation_config.token_perturbation
-            if random.random() < pert_cfg.prob:
+            if _rand.random() < pert_cfg.prob:
                 new_tokens = []
                 for tid in sample["tokens"].tolist():
                     peers = self._token_peers.get(tid)
-                    if peers and random.random() < pert_cfg.p_sub:
-                        new_tokens.append(random.choice(peers))
+                    if peers and _rand.random() < pert_cfg.p_sub:
+                        new_tokens.append(_rand.choice(peers))
                     else:
                         new_tokens.append(tid)
                 sample["tokens"] = torch.tensor(new_tokens, dtype=torch.long)
 
-        if (
-                self._vocab_size is not None
-                and random.random() < (edit_cfg := self.augmentation_config.sequence_edit).prob
-        ):
-            new_tokens, new_spans, new_regions, token_targets = apply_sequence_edits(
-                tokens=sample["tokens"],
-                spans=sample["spans"],
-                regions=sample["regions"],
-                min_token=NUM_RESERVED_TOKENS,
-                max_token=self._vocab_size - 1,
-                p_sub=edit_cfg.p_sub,
-                p_del=edit_cfg.p_del,
-                p_ins=edit_cfg.p_ins,
-            )
-            sample["tokens"] = new_tokens
-            sample["spans"] = new_spans
-            sample["regions"] = new_regions
-            sample["token_targets"] = token_targets
+        # Determine whether and how to mutate
+        edit_cfg = self.augmentation_config and self.augmentation_config.sequence_edit
+        mask_cfg = self.augmentation_config and self.augmentation_config.token_masking
+        mutation_type = None  # "edit", "mask", or None (identity)
+        if self._vocab_size is not None and _rand.random() < edit_cfg.prob:
+            mutation_type = "edit"
+        elif mask_cfg is not None and mask_cfg.enabled and _rand.random() < mask_cfg.prob:
+            mutation_type = "mask"
+
+        if self._augmentation_return_mutated:
+            # Keep originals clean; emit mutated copy
+            sample["token_targets"] = sample["tokens"].clone()
             sample["is_mlm"] = torch.tensor(False, dtype=torch.bool)
-        else:
-            mask_cfg = self.augmentation_config and self.augmentation_config.token_masking
-            if (
-                mask_cfg is not None and mask_cfg.enabled
-                and random.random() < mask_cfg.prob
-            ):
-                new_tok, new_spans, new_reg, targets = apply_mask_mutations(
+            if mutation_type == "edit":
+                mutated_tok, _, _, mutated_targets = apply_sequence_edits(
+                    tokens=sample["tokens"],
+                    spans=sample["spans"],
+                    regions=sample["regions"],
+                    min_token=NUM_RESERVED_TOKENS,
+                    max_token=self._vocab_size - 1,
+                    p_sub=edit_cfg.p_sub,
+                    p_del=edit_cfg.p_del,
+                    p_ins=edit_cfg.p_ins,
+                    rng=rng,
+                )
+                sample["tokens_mutated"] = mutated_tok
+                sample["token_targets_mutated"] = mutated_targets
+            elif mutation_type == "mask":
+                mutated_tok, _, _, mutated_targets = apply_mask_mutations(
                     tokens=sample["tokens"],
                     spans=sample["spans"],
                     regions=sample["regions"],
@@ -411,63 +417,51 @@ class PhonemeTimingDataset(BaseDataset):
                     max_chain=mask_cfg.max_chain,
                     mask_token=MASK_TOKEN,
                     space_token=SPACE_TOKEN,
+                    rng=rng,
                 )
-                sample["tokens"] = new_tok
-                sample["spans"] = new_spans
-                sample["regions"] = new_reg
-                sample["token_targets"] = targets
+                sample["tokens_mutated"] = mutated_tok
+                sample["token_targets_mutated"] = mutated_targets
+            else:
+                sample["tokens_mutated"] = sample["tokens"].clone()
+                sample["token_targets_mutated"] = sample["tokens"].clone()
+        else:
+            # Mutate in-place
+            if mutation_type == "edit":
+                (
+                    sample["tokens"], sample["spans"], sample["regions"],
+                    sample["token_targets"],
+                ) = apply_sequence_edits(
+                    tokens=sample["tokens"],
+                    spans=sample["spans"],
+                    regions=sample["regions"],
+                    min_token=NUM_RESERVED_TOKENS,
+                    max_token=self._vocab_size - 1,
+                    p_sub=edit_cfg.p_sub,
+                    p_del=edit_cfg.p_del,
+                    p_ins=edit_cfg.p_ins,
+                    rng=rng,
+                )
+                sample["is_mlm"] = torch.tensor(False, dtype=torch.bool)
+            elif mutation_type == "mask":
+                (
+                    sample["tokens"], sample["spans"], sample["regions"],
+                    sample["token_targets"],
+                ) = apply_mask_mutations(
+                    tokens=sample["tokens"],
+                    spans=sample["spans"],
+                    regions=sample["regions"],
+                    p_mask=mask_cfg.p_mask,
+                    p_insert=mask_cfg.p_insert,
+                    p_chain=mask_cfg.p_chain,
+                    max_chain=mask_cfg.max_chain,
+                    mask_token=MASK_TOKEN,
+                    space_token=SPACE_TOKEN,
+                    rng=rng,
+                )
                 sample["is_mlm"] = torch.tensor(True, dtype=torch.bool)
             else:
                 sample["token_targets"] = sample["tokens"].clone()
                 sample["is_mlm"] = torch.tensor(False, dtype=torch.bool)
-
-        if self._augmentation_return_mutated:
-            edit_cfg = self.augmentation_config.sequence_edit
-            mask_cfg = self.augmentation_config and self.augmentation_config.token_masking
-            edit_ok = self._vocab_size is not None and edit_cfg.enabled
-            mask_ok = mask_cfg is not None and mask_cfg.enabled
-
-            if edit_ok or mask_ok:
-                rng = random.Random(sample["_idx"].item()) if self.augmentation_deterministic else None
-                _rand = rng or random
-
-                # Pick mutation type proportionally to prob
-                if edit_ok and mask_ok:
-                    e_prob = edit_cfg.prob
-                    m_prob = mask_cfg.prob
-                    pick_edit = _rand.random() < e_prob / (e_prob + m_prob)
-                elif edit_ok:
-                    pick_edit = True
-                else:
-                    pick_edit = False
-
-                if pick_edit:
-                    mutated_tok, _, _, mutated_targets = apply_sequence_edits(
-                        tokens=sample["tokens"],
-                        spans=sample["spans"],
-                        regions=sample["regions"],
-                        min_token=NUM_RESERVED_TOKENS,
-                        max_token=self._vocab_size - 1,
-                        p_sub=edit_cfg.p_sub,
-                        p_del=edit_cfg.p_del,
-                        p_ins=edit_cfg.p_ins,
-                        rng=rng,
-                    )
-                else:
-                    mutated_tok, _, _, mutated_targets = apply_mask_mutations(
-                        tokens=sample["tokens"],
-                        spans=sample["spans"],
-                        regions=sample["regions"],
-                        p_mask=mask_cfg.p_mask,
-                        p_insert=mask_cfg.p_insert,
-                        p_chain=mask_cfg.p_chain,
-                        max_chain=mask_cfg.max_chain,
-                        mask_token=MASK_TOKEN,
-                        space_token=SPACE_TOKEN,
-                        rng=rng,
-                    )
-                sample["tokens_mutated"] = mutated_tok
-                sample["token_targets_mutated"] = mutated_targets
 
         sample["T"] = torch.tensor(sample["spectrogram"].shape[0], dtype=torch.long)
         sample["N"] = torch.tensor(sample["tokens"].shape[0], dtype=torch.long)
