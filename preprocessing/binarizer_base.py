@@ -34,7 +34,6 @@ class DataSample:
     path: str
     name: str
     length: int
-    text: str
     data: dict[str, int | float | numpy.ndarray]
     derived: dict[str, int] = None
     error: str = None
@@ -112,7 +111,6 @@ class BaseBinarizer(abc.ABC):
             logging.debug(f"Processing {prefix} items in main process.")
             iterable = (self.process_item(item) for item in items)
         item_paths = []
-        item_texts = []
         lengths = []
         attr_lengths = {}
         total_duration = 0
@@ -133,7 +131,6 @@ class BaseBinarizer(abc.ABC):
                     continue
                 builder.add_item(sample.data)
                 item_paths.append(sample.path)
-                item_texts.append(sample.text)
                 lengths.append(sample.length)
                 for k, v in sample.data.items():
                     if isinstance(v, numpy.ndarray) and v.ndim > 0:
@@ -149,7 +146,6 @@ class BaseBinarizer(abc.ABC):
         builder.finalize()
         metadata = {
             "item_paths": item_paths,
-            "item_texts": item_texts,
             "lengths": lengths,
             **attr_lengths
         }

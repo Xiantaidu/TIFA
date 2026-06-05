@@ -93,7 +93,6 @@ class PhonemeTimingBinarizer(BaseBinarizer):
             path=item.waveform_fn.relative_to(self.data_dir).as_posix(),
             name=item.name,
             length=length,
-            text=" ".join(symbols),
             data=data,
             derived={"valid_frames": valid_frames},
         )

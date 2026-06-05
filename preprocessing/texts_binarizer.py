@@ -161,6 +161,5 @@ class TextOnlyBinarizer(BaseBinarizer):
             path=item.waveform_fn.relative_to(self.data_dir).as_posix(),
             name=item.name,
             length=length,
-            text=item.text,
             data=data,
         )

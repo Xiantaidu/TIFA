@@ -154,8 +154,8 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
             return self.info[key][index]
 
         values = [self.info[key][orig_idx] for orig_idx in self._group_indices[index]]
-        if key in ("item_paths", "item_texts"):
-            return " ".join(str(v) for v in values)
+        if key == "item_paths":
+            return "Concatenation of " + ", ".join(str(org_idx) for org_idx in self._group_indices[index])
         return sum(int(v) for v in values)
 
     @abc.abstractmethod
