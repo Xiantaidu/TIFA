@@ -358,6 +358,15 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
             total_loss += lv.mean * self.loss_weights[name] * grad_weight
 
         unweighted_total = sum(lv.mean for lv in loss_values.values())
+        if torch.isinf(unweighted_total) or torch.isnan(unweighted_total):
+            detail = " ".join(
+                f"{name}={lv.mean.item():.4f}(bc={lv.batch_count},gc={lv.group_count})"
+                for name, lv in loss_values.items()
+            )
+            logging.warning(
+                f"Non-finite total_loss at step {self.global_step}: {detail}",
+                callback=self.trainer.progress_bar_callback.print,
+            )
         log_outputs = {
             **{name: lv.mean for name, lv in loss_values.items()},
             "batch_size": sample["size"],

@@ -423,6 +423,7 @@ class PhonemeTimingDataset(BaseDataset):
                     p_ins=edit_cfg.p_ins,
                     rng=rng,
                 )
+                sample["N"] = torch.tensor(sample["tokens"].shape[0], dtype=torch.long)
             elif mutation_type == "mask":
                 (
                     sample["tokens"], sample["spans"], sample["regions"],
@@ -440,6 +441,7 @@ class PhonemeTimingDataset(BaseDataset):
                     rng=rng,
                 )
                 sample["is_mlm"] = torch.tensor(True, dtype=torch.bool)
+                sample["N"] = torch.tensor(sample["tokens"].shape[0], dtype=torch.long)
             else:
                 sample["token_targets"] = sample["tokens"].clone()
         return sample
