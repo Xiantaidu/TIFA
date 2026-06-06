@@ -109,12 +109,18 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
         self.return_waveform = return_waveform
         self._n_original = len(self.info["lengths"])
         self._group_indices: list[list[int]] | None = None
+        self._group_epoch: int = 0
         self._setup()
         if self.max_concat_size is not None or self.max_concat_frames is not None:
             self._form_groups(0)
+            self._group_epoch = 0
 
     def __getitem__(self, index):
         if self._group_indices is not None:
+            current_epoch = self.epoch.value
+            if self._group_epoch != current_epoch:
+                self._form_groups(current_epoch)
+                self._group_epoch = current_epoch
             samples = [self._get_single_item(i) for i in self._group_indices[index]]
             result = self.concat_samples(samples)
             result["_idx"] = torch.tensor(index, dtype=torch.long)
@@ -131,6 +137,7 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
         self.epoch.value = epoch
         if self.max_concat_size is not None or self.max_concat_frames is not None:
             self._form_groups(epoch)
+            self._group_epoch = epoch
         if self.augmentation_config is not None and not self.augmentation_deterministic:
             self._build_chains(numpy.random.default_rng())
 
