@@ -177,22 +177,22 @@ class DiagnosisCallback(lightning.pytorch.callbacks.Callback):
         spans = outputs["spans"].float()  # [B, N_max, 2] frames
         similarity = outputs["similarity"].float()  # [B, T_max, N_max]
         tokens = batch["tokens"]  # [B, N_max]
-        T_all = batch["T"]  # [B]
         indices = batch["indices"]  # [B]
 
         B = indices.shape[0]
-        T_max = similarity.shape[1]
         device = similarity.device
 
         for i in range(B):
-            T_i = int(T_all[i].item())
             N_i = int((tokens[i] != 0).sum().item())
-            if T_i == 0 or N_i == 0:
+            if N_i == 0:
                 continue
 
-            sim_i = similarity[i, :T_i, :N_i]
+            sim_i = similarity[i, :, :N_i]
             span_i = spans[i, :N_i]
-            t_mask = torch.ones(sim_i.shape[0], dtype=torch.bool, device=device)
+            T_i = sim_i.shape[0]
+            if T_i == 0:
+                continue
+            t_mask = torch.ones(T_i, dtype=torch.bool, device=device)
             n_mask = tokens[i, :N_i] != 0
 
             confidence = compute_confidence(
