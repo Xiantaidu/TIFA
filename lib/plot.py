@@ -4,6 +4,42 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+def vocab_distribution_to_figure(symbol_counts: dict[str, int]) -> "plt.Figure":
+    lang_data: dict[str, dict[str, int]] = defaultdict(dict)
+    for sym, count in symbol_counts.items():
+        lang = sym.split("/")[0] if "/" in sym else "_"
+        short = sym.split("/")[-1] if "/" in sym else sym
+        lang_data[lang][short] = lang_data[lang].get(short, 0) + count
+
+    sorted_langs = sorted(lang_data, key=lambda ln: (ln != "_", ln))
+    n_langs = len(sorted_langs)
+    if n_langs == 0:
+        return None
+
+    max_symbols = max(len(lang_data[ln]) for ln in sorted_langs)
+    fig_width = max(16, max_symbols * 0.4)
+    fig, axes = plt.subplots(n_langs, 1, figsize=(fig_width, 5 * n_langs), squeeze=False)
+    for i, lang in enumerate(sorted_langs):
+        ax = axes[i][0]
+        data = lang_data[lang]
+        symbols = sorted(data.keys())
+        xs = range(len(symbols))
+        counts = [data[s] for s in symbols]
+        ax.bar(xs, counts)
+        max_count = max(counts)
+        for x, c in zip(xs, counts):
+            ax.text(x, c + max_count * 0.01, str(c), ha="center", va="bottom", fontsize=10)
+        ax.set_xticks(xs)
+        ax.set_xticklabels(symbols, fontsize=10)
+        ax.set_xlim(-0.6, len(symbols) - 0.4)
+        ax.set_title(f"{lang}  ({len(symbols)} symbols, {sum(counts)} occurrences)", fontsize=15)
+        ax.set_ylabel("Count", fontsize=10)
+        ax.grid(axis="y", alpha=0.3)
+        ax.set_ylim(0, max_count * 1.15)
+    fig.tight_layout()
+    return fig
+
+
 def cross_similarity_to_figure(sim, regions=None, title=None, token_labels=None) -> "plt.Figure":
     """Plot cross cosine similarity matrix [N, T].
 
@@ -181,37 +217,50 @@ def topk_bar_figure(
     return fig
 
 
-def vocab_distribution_to_figure(symbol_counts: dict[str, int]) -> "plt.Figure":
-    lang_data: dict[str, dict[str, int]] = defaultdict(dict)
-    for sym, count in symbol_counts.items():
-        lang = sym.split("/")[0] if "/" in sym else "_"
-        short = sym.split("/")[-1] if "/" in sym else sym
-        lang_data[lang][short] = lang_data[lang].get(short, 0) + count
+def metric_histogram_figure(values, label) -> "plt.Figure":
+    """Single histogram with mean/median and percentile lines.
 
-    sorted_langs = sorted(lang_data, key=lambda ln: (ln != "_", ln))
-    n_langs = len(sorted_langs)
-    if n_langs == 0:
-        return None
+    values: 1-D array of metric values
+    label: axis label and title
+    color: bar fill color
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.hist(values, bins=80, alpha=0.75, edgecolor="white", linewidth=0.3)
+    ax.set_title(label, fontsize=15)
+    ax.set_xlabel(label, fontsize=12)
+    ax.set_ylabel("Count", fontsize=12)
 
-    max_symbols = max(len(lang_data[ln]) for ln in sorted_langs)
-    fig_width = max(16, max_symbols * 0.4)
-    fig, axes = plt.subplots(n_langs, 1, figsize=(fig_width, 5 * n_langs), squeeze=False)
-    for i, lang in enumerate(sorted_langs):
-        ax = axes[i][0]
-        data = lang_data[lang]
-        symbols = sorted(data.keys())
-        xs = range(len(symbols))
-        counts = [data[s] for s in symbols]
-        ax.bar(xs, counts)
-        max_count = max(counts)
-        for x, c in zip(xs, counts):
-            ax.text(x, c + max_count * 0.01, str(c), ha="center", va="bottom", fontsize=10)
-        ax.set_xticks(xs)
-        ax.set_xticklabels(symbols, fontsize=10)
-        ax.set_xlim(-0.6, len(symbols) - 0.4)
-        ax.set_title(f"{lang}  ({len(symbols)} symbols, {sum(counts)} occurrences)", fontsize=15)
-        ax.set_ylabel("Count", fontsize=10)
-        ax.grid(axis="y", alpha=0.3)
-        ax.set_ylim(0, max_count * 1.15)
+    mv = float(np.mean(values))
+    md = float(np.median(values))
+    ax.axvline(mv, color="red", linestyle="--", linewidth=1, label=f"mean={mv:.4f}")
+    ax.axvline(md, color="orange", linestyle=":", linewidth=1, label=f"median={md:.4f}")
+
+    p1 = float(np.percentile(values, 1))
+    p5 = float(np.percentile(values, 5))
+    p10 = float(np.percentile(values, 10))
+    ax.axvline(p1, color="mediumseagreen", linestyle="-.", linewidth=1, label=f"keep99% >= {p1:.4f}")
+    ax.axvline(p5, color="seagreen", linestyle="-.", linewidth=1, label=f"keep95% >= {p5:.4f}")
+    ax.axvline(p10, color="green", linestyle="-.", linewidth=1, label=f"keep90% >= {p10:.4f}")
+
+    ax.legend(fontsize=10)
+    fig.tight_layout()
+    return fig
+
+
+def metric_scatter_figure(x, y, xlabel, ylabel, title) -> "plt.Figure":
+    """Scatter plot with mean reference lines on both axes.
+
+    x, y: 1-D arrays of equal length
+    xlabel, ylabel: axis labels
+    title: plot title
+    """
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.scatter(x, y, alpha=0.8, s=4, edgecolors="none")
+    ax.set_xlabel(xlabel, fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_title(title, fontsize=15)
+    ax.axhline(float(np.mean(y)), color="red", linestyle="--", linewidth=0.8, alpha=0.7, label="mean")
+    ax.axvline(float(np.mean(x)), color="red", linestyle="--", linewidth=0.8, alpha=0.7)
+    ax.legend()
     fig.tight_layout()
     return fig

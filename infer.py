@@ -81,8 +81,8 @@ def shared_options(func):
             help="How to handle OOV phonemes: raise (error), skip (discard sample), force (drop OOV paths).",
         ),
         click.option(
-            "--diagnosis", is_flag=True,
-            help="Save per-sample diagnosis JSON to <output-dir>/diagnosis.json.",
+            "--stat", is_flag=True,
+            help="Save statistic plots and diagnosis JSON to <output-dir>/statistics/.",
         ),
         click.option(
             "--plot", is_flag=True,
@@ -120,14 +120,14 @@ def _run_inference(
     precision: str,
     topk: int,
     oov_handling: str,
-    diagnosis: bool = False,
+    stat: bool = False,
     plot: bool = False,
 ):
     from lightning_utilities.core.rank_zero import rank_zero_info
 
     from inference.api import load_g2p_config, load_inference_model, run_inference
     from inference.data import AudioTextDataset
-    from inference.callbacks import DiagnosisCallback, SavePlotCallback, SaveTextGridCallback
+    from inference.callbacks import StatisticsCallback, SavePlotCallback, SaveTextGridCallback
 
     g2p_languages = {language} if language else set()
     if extended_language:
@@ -171,11 +171,11 @@ def _run_inference(
         ),
     ]
 
+    if stat:
+        callbacks.append(StatisticsCallback(save_dir=output_dir / "statistics"))
+
     if plot:
         callbacks.append(SavePlotCallback(output_dir=output_dir))
-
-    if diagnosis:
-        callbacks.append(DiagnosisCallback(save_path=output_dir / "diagnosis.json"))
 
     run_inference(
         backend=backend,

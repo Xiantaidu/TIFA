@@ -4,13 +4,20 @@ from typing import Any
 
 import lightning.pytorch.callbacks
 import matplotlib.pyplot as plt
+import numpy as np
 import textgrid
 import torch
 from lightning_utilities.core.rank_zero import rank_zero_only
 from torch import nn
 
 from lib import logging
-from lib.plot import alignment_to_figure, cross_similarity_to_figure, topk_bar_figure
+from lib.plot import (
+    alignment_to_figure,
+    cross_similarity_to_figure,
+    metric_histogram_figure,
+    metric_scatter_figure,
+    topk_bar_figure,
+)
 from lib.vocabulary import Vocabulary
 from modules.metrics import (
     BoundaryErrorRate,
@@ -141,22 +148,20 @@ class SavePlotCallback(lightning.pytorch.callbacks.Callback):
             plt.close(fig)
 
 
-class DiagnosisCallback(lightning.pytorch.callbacks.Callback):
-    """Accumulates per-sample PathDeterminacy scores and saves them as JSON.
-
-    Sorted by determinacy ascending (least decisive first) so problematic
-    samples appear at the top.
+class StatisticsCallback(lightning.pytorch.callbacks.Callback):
+    """Accumulates per-sample determinacy/confidence scores, saves JSON and
+    statistic plots (histograms + scatter).
     """
 
     def __init__(
             self,
-            save_path: pathlib.Path,
+            save_dir: pathlib.Path,
             determinacy_power: float = 2.0,
             determinacy_width: int | None = 5,
             identifiers: list[str] | None = None,
     ):
         super().__init__()
-        self.save_path = pathlib.Path(save_path)
+        self.save_dir = pathlib.Path(save_dir)
         self.power = determinacy_power
         self.width = determinacy_width
         self._identifiers = identifiers
@@ -189,10 +194,10 @@ class DiagnosisCallback(lightning.pytorch.callbacks.Callback):
 
             sim_i = similarity[i, :, :N_i]
             span_i = spans[i, :N_i]
-            T_i = sim_i.shape[0]
-            if T_i == 0:
+            T_sim = sim_i.shape[0]
+            if T_sim == 0:
                 continue
-            t_mask = torch.ones(T_i, dtype=torch.bool, device=device)
+            t_mask = torch.ones(T_sim, dtype=torch.bool, device=device)
             n_mask = tokens[i, :N_i] != 0
 
             confidence = compute_confidence(
@@ -213,7 +218,7 @@ class DiagnosisCallback(lightning.pytorch.callbacks.Callback):
                 "confidence": confidence,
                 "determinacy": determinacy,
                 "num_tokens": N_i,
-                "num_frames": T_i,
+                "num_frames": int(batch["T"][i].item()),
             }
             self._records.append(record)
 
@@ -316,9 +321,30 @@ class DiagnosisCallback(lightning.pytorch.callbacks.Callback):
                 rank_conf[rc["identifier"]],
                 rank_det[rc["identifier"]],
             ))
-            self.save_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.save_path, "w", encoding="utf8") as f:
+            self.save_dir.mkdir(parents=True, exist_ok=True)
+            with open(self.save_dir / "diagnosis.json", "w", encoding="utf8") as f:
                 json.dump(records, f, indent=2, ensure_ascii=False)
+            self._save_stat_plots(records)
+
+    def _save_stat_plots(self, records: list[dict]) -> None:
+        if not records:
+            return
+        m = {
+            "Determinacy": np.array([r["determinacy"] for r in records]),
+            "Confidence": np.array([r["confidence"] for r in records]),
+            "num_frames": np.array([r["num_frames"] for r in records], dtype=np.int32),
+        }
+        for key in ("Determinacy", "Confidence"):
+            fig = metric_histogram_figure(m[key], label=key)
+            fig.savefig(self.save_dir / f"{key.lower()}_histogram.jpg", bbox_inches="tight")
+            plt.close(fig)
+            fig = metric_scatter_figure(
+                m["num_frames"], m[key],
+                xlabel="Number of Frames", ylabel=key,
+                title=key,
+            )
+            fig.savefig(self.save_dir / f"{key.lower()}_scatter.jpg", bbox_inches="tight")
+            plt.close(fig)
 
 
 class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
@@ -336,7 +362,6 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
             unit: str,
             vocab: "Vocabulary",
             save_path: pathlib.Path,
-            plot: bool = False,
             ber_tols: list[int] | None = None,
             token_topk: list[int] | None = None,
             pair_topk: list[int] | None = None,
@@ -352,7 +377,6 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
             raise ValueError(f"Unknown unit: {unit}")
         self.unit = unit
         self.save_path = pathlib.Path(save_path)
-        self.plot = plot
         self.ber_tols = ber_tols or []
         self.token_topk = token_topk or []
         self.pair_topk = pair_topk or []
@@ -445,18 +469,13 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
         self._results = self._build_summary()
 
         @rank_zero_only
-        def _save_summary():
+        def _save_outputs():
             self.save_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.save_path, "w", encoding="utf8") as f:
                 json.dump(self._results, f, indent=2)
+            self._save_statistic_plots()
 
-        @rank_zero_only
-        def _save_plots():
-            if self.plot:
-                self._save_statistic_plots()
-
-        _save_summary()
-        _save_plots()
+        _save_outputs()
 
     @property
     def results(self) -> dict | None:
@@ -491,7 +510,7 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
                         ber_statistics.append({
                             "arguments": {"mode": mode, "tolerance": tol},
                             "groups": [
-                                {"key": self._vocab.decode(tid), "value": float(v.item())}
+                                {"key": self._vocab.decode(tid, stringfy=True), "value": float(v.item())}
                                 for tid, v in sorted(top.items(), key=lambda x: -x[1])
                             ],
                         })
@@ -517,7 +536,7 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
                     b_mae_statistics.append({
                         "arguments": {"mode": mode},
                         "groups": [
-                            {"key": self._vocab.decode(tid), "value": float(v.item())}
+                            {"key": self._vocab.decode(tid, stringfy=True), "value": float(v.item())}
                             for tid, v in sorted(top.items(), key=lambda x: -x[1])
                         ],
                     })
@@ -549,7 +568,7 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
                         ov_statistics.append({
                             "arguments": {"k": max_k, "metric": metric_name.split("_", 1)[1].split("@")[0]},
                             "groups": [
-                                {"key": self._vocab.decode(tid), "value": float(v.item())}
+                                {"key": self._vocab.decode(tid, stringfy=True), "value": float(v.item())}
                                 for tid, v in sorted(
                                     top[metric_name].items(), key=lambda x: -x[1],
                                 )

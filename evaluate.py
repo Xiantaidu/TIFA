@@ -39,8 +39,8 @@ def shared_output_options(func):
             help="Directory to save evaluation results.",
         ),
         click.option(
-            "--plot/--no-plot", default=False, show_default=True,
-            help="Save per-sample and statistic plots.",
+            "--plot", is_flag=True,
+            help="Save per-sample plots.",
         ),
     ]
     for option in options[::-1]:
@@ -184,7 +184,7 @@ def _run_online_evaluation(
         load_inference_model,
         run_inference,
     )
-    from inference.callbacks import DiagnosisCallback, EvaluationMetricsCallback, VisualizeAlignmentCallback
+    from inference.callbacks import StatisticsCallback, EvaluationMetricsCallback, VisualizeAlignmentCallback
     from training.data import PhonemeTimingDataset
 
     backend, vocabulary, _ = load_inference_model(model, scope=scope)
@@ -216,15 +216,14 @@ def _run_online_evaluation(
             unit="frame",
             vocab=vocabulary,
             save_path=save_path,
-            plot=plot,
             ber_tols=ber_tols,
             token_topk=token_topk,
             pair_topk=pair_topk,
             determinacy_power=determinacy_power,
             determinacy_width=determinacy_width,
         ),
-        DiagnosisCallback(
-            save_path=output_dir / "diagnosis.json",
+        StatisticsCallback(
+            save_dir=output_dir / "statistics",
             determinacy_power=determinacy_power,
             determinacy_width=determinacy_width,
             identifiers=item_paths,
@@ -286,7 +285,6 @@ def _run_offline_evaluation(
         unit="ms",
         vocab=paired.vocab,
         save_path=save_path,
-        plot=plot,
         ber_tols=ber_tols,
         token_topk=token_topk,
         pair_topk=pair_topk,
