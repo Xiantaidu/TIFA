@@ -34,13 +34,12 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         duration = batch["duration"]  # [B] seconds
         paths = batch["paths"]  # [B, N_grid, W_max]
         groups = batch["groups"]  # [B, N_grid, W_max]
-        word_idx = batch["word_idx"]  # [B, N_grid, W_max]
         segments = batch["segments"]  # [B, N_grid]
         widths = batch["widths"]  # [B, S_max]
 
         # Non-tensor items
         phonemes = batch["phonemes"]  # list[dict[(int,int), list[str]]]
-        words = batch["words"]  # list[list[str]]
+        lexicon = batch["lexicon"]  # list[list[dict[str, list[list[str]]]]]
 
         S_max = widths.shape[1]
 
@@ -128,11 +127,11 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
             best_alts[multi_idx] = mean_scores.argmax(dim=-1)  # [B_m, S_max]
 
         # ---- Phase D: Decode with best tokens ----
-        tokens_raw, groups_raw, word_idx_raw = extract_tokens(
-            paths, groups, word_idx, segments=segments, choices=best_alts,
+        tokens_raw, groups_raw = extract_tokens(
+            paths, groups, segments=segments, choices=best_alts,
         )  # [B, N_grid] each
-        tokens_best, groups_best, word_idx_best = compact_sequences(
-            tokens_raw, groups_raw, word_idx_raw,
+        tokens_best, groups_best = compact_sequences(
+            tokens_raw, groups_raw,
         )  # [B, N_max']
 
         ctx_dec = self.backend.infer(waveform, duration, tokens_best)
@@ -149,7 +148,6 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
             spans_i = spans[i, :N_i]
             tokens_i = tokens_best[i, :N_i]
             groups_i = groups_best[i, :N_i]
-            word_idx_i = word_idx_best[i, :N_i]
             sim_i = sim[i, :T_i, :N_i]
 
             phs: list[str] = []
@@ -163,10 +161,9 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
                 "spans": spans_i,
                 "tokens": tokens_i,
                 "groups": groups_i,
-                "word_idx": word_idx_i,
                 "similarity": sim_i,
                 "phonemes": phs,
-                "words": words[i],
+                "lexicon": lexicon[i],
             })
 
         return results

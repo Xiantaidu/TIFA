@@ -11,6 +11,7 @@ from lightning_utilities.core.rank_zero import rank_zero_only
 from torch import nn
 
 from lib import logging
+from lib.levenshtein import levenshtein_distance
 from lib.plot import (
     alignment_to_figure,
     cross_similarity_to_figure,
@@ -34,7 +35,7 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
     """Writes 2-tier TextGrid files from forced alignment results.
 
     Tiers:
-    - words: intervals from decoded spans, labels from lexicon
+    - words: intervals from decoded spans, labels from G2P output
     - phones: intervals from decoded spans, labels from G2P output
     """
 
@@ -57,10 +58,10 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
     ) -> None:
         for result in outputs:
             identifier = result["identifier"]
-            word_idx = result["word_idx"].tolist()  # [int, ...] 1-based
+            groups = result["groups"].tolist()  # [int, ...] 1-based G2PText index
             spans = result["spans"].tolist()  # [[onset, offset], ...]
             phonemes = result["phonemes"]  # [str, ...]
-            words = result["words"]  # list[str]
+            lexicon = result["lexicon"]  # list[dict[str, list[list[str]]]]
 
             N = len(spans)
             if N == 0:
@@ -69,26 +70,33 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
             total_duration = result["duration"]
             tg = textgrid.TextGrid()
 
-            # Words tier: group phoneme spans by consecutive word index.
+            # Words tier: group phoneme spans by consecutive G2PText
+            # index, then pick the closest G2PWord label by minimum
+            # Levenshtein distance across all alternative paths.
             words_tier = textgrid.IntervalTier("words", 0, total_duration)
             i = 0
             while i < N:
-                widx = word_idx[i] - 1  # 0-based index into words
+                g = groups[i]  # 1-based G2PText index
                 j = i + 1
-                while j < N and word_idx[j] - 1 == widx:
+                while j < N and groups[j] == g:
                     j += 1
                 onset = spans[i][0]
                 offset = spans[j - 1][1]
                 if offset > onset:
-                    if widx >= len(words):  # defensive, shouldn't happen
-                        logging.error(
-                            f"Word index {widx} out of bounds for '{identifier}' with {len(words)} words, "
-                            f"thus writing empty mark to TextGrid. Please report this issue."
+                    ph_subseq = phonemes[i:j]
+                    # Find best-matching G2PWord label
+                    candidates = lexicon[g - 1]  # 0-based
+                    if candidates:
+                        best_label = min(
+                            candidates,
+                            key=lambda label: min(
+                                levenshtein_distance(ph_subseq, path)
+                                for path in candidates[label]
+                            ),
                         )
-                        word_text = ""
                     else:
-                        word_text = words[widx]
-                    words_tier.add(onset, offset, word_text)
+                        best_label = ""
+                    words_tier.add(onset, offset, best_label)
                 else:
                     logging.warning(
                         f"Skipping word interval [{onset}, {offset}] for "
