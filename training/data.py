@@ -755,7 +755,7 @@ class DynamicBatchSampler(torch.utils.data.distributed.DistributedSampler):
         else:
             batches += [[]] * remainder
 
-        if self.shuffle_batches:
+        if self.shuffle_batches and self.epoch != 0:
             perm = self.permutation(len(batches))
             batches = [batches[i] for i in perm]
         elif self.sort_by_len:
