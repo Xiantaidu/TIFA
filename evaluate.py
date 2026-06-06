@@ -202,6 +202,7 @@ def _run_online_evaluation(
         prefix=prefix,
         max_concat_size=concat_size,
         concat_deterministic=concat_deterministic,
+        concat_dynamic_size=False,
         augmentation_config=None,
         return_waveform=True,
     )

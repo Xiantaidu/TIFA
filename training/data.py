@@ -80,6 +80,7 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
             augmentation_return_dirty: bool = False,
             max_concat_size: int | None = None,
             max_concat_frames: int | None = None,
+            concat_dynamic_size: bool = True,
             concat_deterministic: bool = False,
             return_waveform: bool = False,
     ):
@@ -103,6 +104,7 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
         self.mel_spectrogram = None
         self.max_concat_size = max_concat_size
         self.max_concat_frames = max_concat_frames
+        self.concat_dynamic_size = concat_dynamic_size
         self.concat_deterministic = concat_deterministic
         self.return_waveform = return_waveform
         self._n_original = len(self.info["lengths"])
@@ -194,14 +196,19 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
         indices = list(range(self._n_original))
         rng.shuffle(indices)
 
+        if self.concat_dynamic_size and self.max_concat_size is not None:
+            target_size = rng.randint(1, self.max_concat_size)
+        else:
+            target_size = self.max_concat_size
+
         groups = []
         current = []
         current_frames = 0
         for idx in indices:
             frames = self._single_num_frames(idx)
             exceed_size = (
-                    self.max_concat_size is not None
-                    and len(current) >= self.max_concat_size
+                    target_size is not None
+                    and len(current) >= target_size
             )
             exceed_frames = (
                     self.max_concat_frames is not None
@@ -211,6 +218,8 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
                 groups.append(current)
                 current = []
                 current_frames = 0
+                if self.concat_dynamic_size and self.max_concat_size is not None:
+                    target_size = rng.randint(1, self.max_concat_size)
             current.append(idx)
             current_frames += frames
         if current:
