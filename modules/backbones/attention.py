@@ -83,7 +83,7 @@ class CrossAttention(nn.Module):
             self.k_norm = RMSNorm(qk_attn_dim)
         self.q_linear = nn.Linear(dim, qk_attn_dim, bias=True)
         self.k_linear = nn.Linear(cross_dim, qk_attn_dim, bias=True)
-        self.v_linear = nn.Linear(cross_dim, attn_dim, bias=True)
+
         self.out_linear = nn.Linear(attn_dim, dim, bias=True)
 
         self.dropout_attn = nn.Dropout(dropout_attn) if dropout_attn > 0. else nn.Identity()
@@ -97,7 +97,7 @@ class CrossAttention(nn.Module):
         """
         q = self.q_linear(x)
         k = self.k_linear(y)
-        v = self.v_linear(y)
+
 
         if self.qk_norm:
             q = self.q_norm(q)
@@ -106,7 +106,7 @@ class CrossAttention(nn.Module):
 
         q = rearrange(q, "b t (h c) -> b h t c", h=self.num_heads)
         k = rearrange(k, "b s (h c) -> b h s c", h=self.num_heads)
-        v = rearrange(v, "b s (h c) -> b h s c", h=self.num_heads)
+
 
         attn_logits = torch.matmul(q, k.transpose(-2, -1)) * self.scale
 
@@ -116,7 +116,7 @@ class CrossAttention(nn.Module):
         attn_weights = F.softmax(attn_logits, dim=-1)
         attn_weights = self.dropout_attn(attn_weights)
 
-        out = torch.matmul(attn_weights, v)
+        out = torch.matmul(attn_weights, k)
 
         out = rearrange(out, "b h t c -> b t (h c)")
         out = self.out_linear(out)
