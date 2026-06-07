@@ -13,7 +13,7 @@ from modules.commons.common_layers import TemporalMask
 from modules.decoding import decode_alignment_spaced
 from modules.forced_alignment import ForcedAlignmentSSLModel
 from modules.functional import interleave_spaces
-from modules.losses import HMMForwardLossWithEmissions, SpectrogramReconstructionLoss
+from modules.losses import CTCLossWithoutBlank, HMMForwardLossWithEmissions, SpectrogramReconstructionLoss
 from training.data import (
     BaseDataset,
     TextOnlyDataset,
@@ -22,6 +22,7 @@ from training.iterative_ranking import RankingModule, SegmentRewards, rank_rewar
 from training.pl_module_base import BaseLightningModule, LossValue
 
 # Loss names shared between register_losses_and_metrics and forward_model.
+_CTC = "ctc_loss"
 _HMM_FORWARD = "hmm_forward_loss"
 _RECONSTRUCTION = "reconstruction_loss"
 
@@ -47,6 +48,10 @@ class ForcedAlignmentSSLModule(BaseLightningModule, RankingModule):
         loss_cfg: LossConfig = self.training_config.loss
 
         self.register_loss(
+            _CTC, CTCLossWithoutBlank(),
+            weight=loss_cfg.ctc.weight,
+        )
+        self.register_loss(
             _HMM_FORWARD, HMMForwardLossWithEmissions(
                 mode=loss_cfg.hmm_forward.mode,
             ),
@@ -55,6 +60,7 @@ class ForcedAlignmentSSLModule(BaseLightningModule, RankingModule):
         self.register_loss(
             _RECONSTRUCTION, SpectrogramReconstructionLoss(
                 loss_type=loss_cfg.reconstruction.loss_type,
+                unmasked_weight=loss_cfg.reconstruction.unmasked_weight,
             ),
             weight=loss_cfg.reconstruction.weight,
         )
@@ -62,6 +68,7 @@ class ForcedAlignmentSSLModule(BaseLightningModule, RankingModule):
     def post_init(self) -> None:
         self.spec_mask = TemporalMask(
             channels=self.model_config.in_dim,
+            mask_p=0,
             seed=42
         )
 
@@ -148,7 +155,7 @@ class ForcedAlignmentSSLModule(BaseLightningModule, RankingModule):
         token_lens = 2 * N + 1
 
         if infer:
-            _, _, attn_logits, _ = self.model(
+            _, attn_logits, _ = self.model(
                 spectrogram, tokens, t_mask, n_mask, reconstruct=False,
             )
             # Mean all heads across all CA layers -> [B, T, N_interleaved]
@@ -163,8 +170,8 @@ class ForcedAlignmentSSLModule(BaseLightningModule, RankingModule):
             attn_weights = emission.softmax(dim=-1)
 
             # Masked forward for reconstruction visualization
-            masked_spec = self.spec_mask(spectrogram, mask=t_mask)
-            _, _, _, recon_spec = self.model(
+            masked_spec, _ = self.spec_mask(spectrogram, mask=t_mask)
+            _, _, recon_spec = self.model(
                 masked_spec, tokens, t_mask, n_mask, f0=f0, reconstruct=True,
             )
 
@@ -178,18 +185,26 @@ class ForcedAlignmentSSLModule(BaseLightningModule, RankingModule):
             }
 
         # Apply temporal masking (self-supervised corruption)
-        masked_spec = self.spec_mask(spectrogram, mask=t_mask)
+        masked_spec, corrupted = self.spec_mask(spectrogram, mask=t_mask)
 
         # Model forward
-        _, _, attn_logits, x_recon = self.model(
+        frame_logits, attn_logits, x_recon = self.model(
             masked_spec, tokens, t_mask, n_mask, f0=f0, reconstruct=True,
         )
 
-        # Gradient accumulation counts (frame-based for both losses)
+        # Gradient accumulation counts (frame-based for all losses)
         batch_count = int(T.sum().item())
         group_count = self._group_count(batch_idx, "lengths")
 
-        # HMM loss from cross-attention attn_logits
+        # CTC loss from frame logits
+        ctc_loss_val = self.losses[_CTC](
+            frame_logits, targets=tokens, frame_lens=T, token_lens=token_lens,
+        )
+        ctc_loss = LossValue(
+            mean=ctc_loss_val, batch_count=batch_count, group_count=group_count,
+        )
+
+        # HMM loss from cross-attention logits
         hmm_loss_val = self.losses[_HMM_FORWARD](
             attn_logits, frame_lens=T, token_lens=token_lens,
         )
@@ -200,12 +215,14 @@ class ForcedAlignmentSSLModule(BaseLightningModule, RankingModule):
         # Reconstruction loss against clean spectrogram
         recon_loss_val = self.losses[_RECONSTRUCTION](
             x_recon=x_recon, target=spectrogram, t_mask=t_mask,
+            corrupted_mask=corrupted,
         )
         recon_loss = LossValue(
             mean=recon_loss_val, batch_count=batch_count, group_count=group_count,
         )
 
         return {
+            _CTC: ctc_loss,
             _HMM_FORWARD: hmm_loss,
             _RECONSTRUCTION: recon_loss,
         }

@@ -5,125 +5,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-
-
-
-
-
-def ctc_loss_without_blank(
-        logits: torch.Tensor,
-        targets: torch.Tensor,
-        frame_lens: torch.Tensor,
-        token_lens: torch.Tensor,
-) -> torch.Tensor:
-    """CTC loss with the blank symbol disabled.
-
-    The model does not predict a blank class, so a dummy blank column is
-    appended and set to -inf, forcing every frame to align to a real token.
-
-    Args:
-        logits: [B, T_max, V] frame-to-vocab scores (no blank class)
-        targets: [B, S_max] int64 target token indices (padded)
-        frame_lens: [B] int64 number of valid frames per sample
-        token_lens: [B] int64 number of valid tokens per sample
-    Returns:
-        Scalar loss.
-    """
-    B, T_max, V = logits.shape
-
-    # append blank column (set to -inf, effectively disabled)
-    blank_col = torch.full((B, T_max, 1), -1e9, device=logits.device, dtype=logits.dtype)
-    logits = torch.cat([logits, blank_col], dim=-1)  # [B, T_max, V+1]
-
-    log_probs = F.log_softmax(logits, dim=-1)
-
-    loss = F.ctc_loss(
-        log_probs.transpose(0, 1),  # [T_max, B, V+1]
-        targets,
-        input_lengths=frame_lens,
-        target_lengths=token_lens,
-        blank=V,  # global blank index
-        reduction='mean',
-        zero_infinity=True,
-    )
-    return loss
-
-
-class CTCLossWithoutBlank(nn.Module):
-    """CTC loss with disabled blank for models that do not predict blank.
-
-    Accepts a single logits tensor [B, ..., T, V] or a list of such tensors.
-    Middle dims are flattened as separate instances (separate mode)
-    or averaged before loss computation (mean mode).
-
-    Inputs:
-        logits: [B, ..., T, V] or list of such tensors
-        targets: [B, S_max] int64 target token indices (padded)
-        frame_lens: [B] int64 number of valid frames per sample
-        token_lens: [B] int64 number of valid tokens per sample
-    Returns:
-        Scalar loss.
-    """
-
-    def __init__(self, mode: str = "separate"):
-        super().__init__()
-        if mode not in ("separate", "mean"):
-            raise ValueError(f"Unknown mode: {mode}")
-        self.mode = mode
-
-    def forward(
-            self,
-            logits: torch.Tensor | list[torch.Tensor],
-            targets: torch.Tensor,
-            frame_lens: torch.Tensor,
-            token_lens: torch.Tensor,
-    ) -> torch.Tensor:
-        if isinstance(logits, torch.Tensor):
-            logits = [logits]
-
-        if self.mode == "mean":
-            # Flatten middle dims of all logits, then average over all of them
-            # so every CA head contributes equally regardless of layer.
-            all_flat = []
-            for e in logits:
-                middle_ndim = e.dim() - 3
-                if middle_ndim > 0:
-                    all_flat.append(e.flatten(1, middle_ndim))  # [B, H*, T, V]
-                else:
-                    all_flat.append(e.unsqueeze(1))  # [B, 1, T, V]
-            combined = torch.cat(all_flat, dim=1)  # [B, total_heads, T, V]
-            logit = combined.mean(dim=1)  # [B, T, V]
-            return ctc_loss_without_blank(logit, targets, frame_lens, token_lens)
-
-        # separate mode: flatten all heads from all layers into one batch,
-        # so CTC reduction='mean' weights every head equally.
-        all_flat = []
-        all_targets = []
-        all_frame_lens = []
-        all_token_lens = []
-        for e in logits:
-            middle_ndim = e.dim() - 3
-            if middle_ndim > 0:
-                repeat = math.prod(e.shape[1:1 + middle_ndim])
-                all_flat.append(e.flatten(0, middle_ndim))  # [B*, T, V]
-                all_targets.append(targets.repeat_interleave(repeat, dim=0))
-                all_frame_lens.append(frame_lens.repeat_interleave(repeat))
-                all_token_lens.append(token_lens.repeat_interleave(repeat))
-            else:
-                all_flat.append(e)
-                all_targets.append(targets)
-                all_frame_lens.append(frame_lens)
-                all_token_lens.append(token_lens)
-        if not all_flat:
-            return torch.zeros(1, requires_grad=True)
-        return ctc_loss_without_blank(
-            torch.cat(all_flat, dim=0),  # [total_B*, T, V]
-            torch.cat(all_targets, dim=0),
-            torch.cat(all_frame_lens, dim=0),
-            torch.cat(all_token_lens, dim=0),
-        )
-
-
 def hmm_forward_loss_with_emission(
         emission: torch.Tensor,
         frame_lens: torch.Tensor,
@@ -230,4 +111,42 @@ class HMMForwardLossWithEmissions(nn.Module):
             torch.cat(all_flat, dim=0),  # [total_B*, T, N]
             torch.cat(all_frame_lens, dim=0),
             torch.cat(all_token_lens, dim=0),
+        )
+
+
+class CTCLossWithoutBlank(nn.Module):
+    """CTC loss with disabled blank for models that do not predict blank.
+
+    Inputs:
+        logits: [B, T_max, V] frame-to-vocab scores (no blank class)
+        targets: [B, S_max] int64 target token indices (padded)
+        frame_lens: [B] int64 number of valid frames per sample
+        token_lens: [B] int64 number of valid tokens per sample
+    Returns:
+        Scalar loss.
+    """
+
+    def forward(
+            self,
+            logits: torch.Tensor,
+            targets: torch.Tensor,
+            frame_lens: torch.Tensor,
+            token_lens: torch.Tensor,
+    ) -> torch.Tensor:
+        B, T_max, V = logits.shape
+
+        # append blank column (set to -inf, effectively disabled)
+        blank_col = torch.full((B, T_max, 1), -1e9, device=logits.device, dtype=logits.dtype)
+        logits = torch.cat([logits, blank_col], dim=-1)  # [B, T_max, V+1]
+
+        log_probs = F.log_softmax(logits, dim=-1)
+
+        return F.ctc_loss(
+            log_probs.transpose(0, 1),  # [T_max, B, V+1]
+            targets,
+            input_lengths=frame_lens,
+            target_lengths=token_lens,
+            blank=V,  # global blank index
+            reduction='mean',
+            zero_infinity=True,
         )

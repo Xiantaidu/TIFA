@@ -13,7 +13,7 @@ binarizer:
 model:
   arch: ForcedAlignmentSSLModel
   embedding_dim: 256
-  max_vocab_size: 4096
+  max_vocab_size: 256
   backbone:
     cls: modules.backbones.ebf.EBFEncoderBackbone
     kwargs:
@@ -49,12 +49,15 @@ training:
     colored_noise:
       enabled: false
   loss:
+    ctc:
+      weight: 1.0
     hmm_forward:
       weight: 1.0
       mode: separate
     reconstruction:
-      weight: 1.0
+      weight: 10.0
       loss_type: L1
+      unmasked_weight: 1
   iterative_ranking:
     enabled: false
     rank_size: 4

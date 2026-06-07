@@ -3,7 +3,6 @@ from torch import Tensor, nn
 from lib.reflection import build_object_from_class_name
 from lib.config.schema import ModelConfig
 
-
 ARCHITECTURE_ERROR_MSG = (
     "Unable to initialize '{expected}' architecture with "
     "configuration for '{actual}'. "
@@ -57,18 +56,18 @@ class ForcedAlignmentModel(nn.Module):
         )
 
     def forward(
-        self,
-        spectrogram: Tensor,
-        tokens: Tensor,
-        t_mask: Tensor,
-        n_mask: Tensor,
+            self,
+            spectrogram: Tensor,
+            tokens: Tensor,
+            t_mask: Tensor,
+            n_mask: Tensor,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         token = self.token_embedding(tokens)
         x_out, token_out = self.backbone(spectrogram, token, t_mask, n_mask)
-        frame_features = x_out[..., :-self.max_vocab_size]      # [B, T, out_dim]
-        frame_logits = x_out[..., -self.max_vocab_size:]        # [B, T, max_vocab_size]
+        frame_features = x_out[..., :-self.max_vocab_size]  # [B, T, out_dim]
+        frame_logits = x_out[..., -self.max_vocab_size:]  # [B, T, max_vocab_size]
         token_features = token_out[..., :-self.max_vocab_size]  # [B, N, out_dim]
-        token_logits = token_out[..., -self.max_vocab_size:]    # [B, N, max_vocab_size]
+        token_logits = token_out[..., -self.max_vocab_size:]  # [B, N, max_vocab_size]
         return frame_features, frame_logits, token_features, token_logits
 
 
@@ -81,7 +80,7 @@ class ForcedAlignmentSSLModel(nn.Module):
 
     Forward signature:
         forward(spectrogram, tokens, t_mask, n_mask, f0=None, reconstruct=True)
-            -> (x_features, token_features, activations, x_recon)
+            -> (frame_logits, attn_logits, x_recon)
 
     where
         spectrogram:    [B, T, in_dim]          raw spectrogram frames
@@ -90,8 +89,7 @@ class ForcedAlignmentSSLModel(nn.Module):
         n_mask:         [B, N] bool             True = valid token
         f0:             [B, T] | None           pitch in Hz
         reconstruct:    bool                    enable decoder + f0 injection
-        x_features:     [B, T, embedding_dim]   frame features
-        token_features: [B, N, embedding_dim]   token features
+        frame_logits:   [B, T, V]               per-frame phoneme logits
         attn_logits:    list of [B, H, T, N]    CA logits (pre-softmax, one per layer)
         x_recon:        [B, T, in_dim] | None   reconstructed spectrogram
 
@@ -107,14 +105,16 @@ class ForcedAlignmentSSLModel(nn.Module):
             raise ValueError(
                 f"'{expected}' requires 'reconstructor' in the model configuration."
             )
+        V = config.max_vocab_size
+        self.max_vocab_size = V
         self.token_embedding = nn.Embedding(
-            config.max_vocab_size, config.embedding_dim, padding_idx=0,
+            V, config.embedding_dim, padding_idx=0,
         )
         self.backbone = build_object_from_class_name(
             config.backbone.cls, nn.Module,
             config.in_dim,              # x_in_dim
             config.embedding_dim,       # token_in_dim
-            config.embedding_dim,       # x_out_dim
+            config.embedding_dim + V,   # x_out_dim
             config.embedding_dim,       # token_out_dim
             **config.backbone.kwargs,
         )
@@ -127,26 +127,28 @@ class ForcedAlignmentSSLModel(nn.Module):
         )
 
     def forward(
-        self,
-        spectrogram: Tensor,
-        tokens: Tensor,
-        t_mask: Tensor,
-        n_mask: Tensor,
-        f0: Tensor | None = None,
-        reconstruct: bool = True,
+            self,
+            spectrogram: Tensor,
+            tokens: Tensor,
+            t_mask: Tensor,
+            n_mask: Tensor,
+            f0: Tensor | None = None,
+            reconstruct: bool = True,
     ) -> tuple[Tensor, Tensor, list[Tensor], Tensor | None]:
         if reconstruct and f0 is None:
             raise ValueError("f0 is required when reconstruct=True")
         token_emb = self.token_embedding(tokens)
-        x_features, token_features, attn_logits = self.backbone(
+        x_out, _, attn_logits = self.backbone(
             spectrogram, token_emb, t_mask, n_mask,
         )
+        frame_features = x_out[..., :-self.max_vocab_size]  # [B, T, embedding_dim]
+        frame_logits = x_out[..., -self.max_vocab_size:]  # [B, T, max_vocab_size]
         if reconstruct:
             f0_mel = (1 + f0 / 700).log()
             x_recon = self.reconstructor(
-                x_features + self.pitch_embedding(f0_mel[..., None]),
+                frame_features + self.pitch_embedding(f0_mel[..., None]),
                 mask=t_mask,
             )
         else:
             x_recon = None
-        return x_features, token_features, attn_logits, x_recon
+        return frame_logits, attn_logits, x_recon

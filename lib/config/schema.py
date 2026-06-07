@@ -378,12 +378,17 @@ class FrameIdentityLossConfig(LossInstanceConfig):
     pass
 
 
+class CTCLossConfig(LossInstanceConfig):
+    pass
+
+
 class HMMForwardLossConfig(LossInstanceConfig):
     mode: Literal["separate", "mean"] = Field("separate")
 
 
 class SpectrogramReconstructionLossConfig(LossInstanceConfig):
     loss_type: Literal["L1", "L2"] = Field("L1")
+    unmasked_weight: float = Field(0.01, gt=0.0)
 
 
 class LossConfig(ConfigBaseModel):
@@ -401,6 +406,10 @@ class LossConfig(ConfigBaseModel):
     })
     frame_identity: FrameIdentityLossConfig = Field(None, json_schema_extra={
         "scope": ConfigurationScope.FA,
+    })
+    ctc: CTCLossConfig = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.FA_SSL,
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA_SSL),
     })
     hmm_forward: HMMForwardLossConfig = Field(None, json_schema_extra={
         "scope": ConfigurationScope.FA_SSL,

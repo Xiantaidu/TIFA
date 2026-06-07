@@ -117,7 +117,8 @@ class TemporalMask(nn.Module):
         """
         :param x: [..., T, C]
         :param mask: optional bool [..., T], True = eligible for masking
-        :return: [..., T, C]
+        :return: (masked_x, corrupted_mask) where masked_x is [..., T, C]
+            and corrupted_mask is [..., T] bool (True = frame was replaced)
         """
         *B, T, C = x.shape
         x_flat = x.reshape(-1, T, C)
@@ -135,7 +136,7 @@ class TemporalMask(nn.Module):
         else:
             fill = torch.randn(B_flat, T, C, device=device)
         masked_x = x_flat * keep_mask.unsqueeze(-1) + fill * (~keep_mask).unsqueeze(-1)
-        return masked_x.reshape(*B, T, C)
+        return masked_x.reshape(*B, T, C), (~keep_mask).reshape(*B, T)
 
     def _chunk_keep_mask(self, B, T, device, mask):
         starts = self._rand(B, T, device=device) < self.mask_p
