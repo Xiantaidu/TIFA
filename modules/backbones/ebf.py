@@ -248,7 +248,7 @@ class EBFEncoderBackbone(nn.Module):
                 )
             )
             self.ca_pre_norms.append(RMSNorm(dim))
-            self.ca_layer_scales.append(LayerScale(dim) if use_ls else nn.Identity())
+            self.ca_layer_scales.append(LayerScale(dim,layer_scale_init_value=1) if use_ls else nn.Identity())
 
         # ============ Output Heads ============
         if self.use_out_norm:
