@@ -5,6 +5,51 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+
+
+
+
+
+def ctc_loss_without_blank(
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        frame_lens: torch.Tensor,
+        token_lens: torch.Tensor,
+) -> torch.Tensor:
+    """CTC loss with the blank symbol disabled.
+
+    The model does not predict a blank class, so a dummy blank column is
+    appended and set to -inf, forcing every frame to align to a real token.
+
+    Args:
+        logits: [B, T_max, V] frame-to-vocab scores (no blank class)
+        targets: [B, S_max] int64 target token indices (padded)
+        frame_lens: [B] int64 number of valid frames per sample
+        token_lens: [B] int64 number of valid tokens per sample
+    Returns:
+        Scalar loss.
+    """
+    B, T_max, V = logits.shape
+
+    # append blank column (set to -inf, effectively disabled)
+    blank_col = torch.full((B, T_max, 1), -1e9, device=logits.device, dtype=logits.dtype)
+    logits = torch.cat([logits, blank_col], dim=-1)  # [B, T_max, V+1]
+
+    log_probs = F.log_softmax(logits, dim=-1)
+
+    loss = F.ctc_loss(
+        log_probs.transpose(0, 1),  # [T_max, B, V+1]
+        targets,
+        input_lengths=frame_lens,
+        target_lengths=token_lens,
+        blank=V,  # global blank index
+        reduction='mean',
+        zero_infinity=True,
+    )
+    return loss
+
+
+
 def hmm_forward_loss_with_emission(
         emission: torch.Tensor,
         frame_lens: torch.Tensor,
