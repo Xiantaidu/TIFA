@@ -43,6 +43,13 @@ model:
       ffn_type: glu
 
 training:
+  loss:
+    hmm_forward:
+      weight: 1.0
+      mode: separate
+    reconstruction:
+      weight: 1.0
+      loss_type: L1
   iterative_ranking:
     enabled: true
     rank_size: 4

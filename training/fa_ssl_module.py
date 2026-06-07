@@ -3,8 +3,11 @@ import pathlib
 import torch
 from torch import nn, Tensor
 
-from lib.config.schema import RootConfig
+from lib.config.schema import RootConfig, LossConfig
 from lib.path_traversal import sample_paths_uniform
+from modules.commons.common_layers import TemporalMask
+from modules.forced_alignment import ForcedAlignmentSSLModel
+from modules.losses import HMMForwardLossWithEmissions, SpectrogramReconstructionLoss
 from training.data import (
     BaseDataset,
     TextOnlyDataset,
@@ -12,12 +15,17 @@ from training.data import (
 from training.iterative_ranking import RankingModule, SegmentRewards, rank_rewards
 from training.pl_module_base import BaseLightningModule, LossValue
 
+# Loss names shared between register_losses_and_metrics and forward_model.
+_HMM_FORWARD = "hmm_forward_loss"
+_RECONSTRUCTION = "reconstruction_loss"
+
 
 class ForcedAlignmentSSLModule(BaseLightningModule, RankingModule):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._best_paths: dict[int, dict[int, int]] | None = None
+        self.spec_mask = None
 
     @classmethod
     def resolve_data_dirs(cls, config: RootConfig) -> tuple[pathlib.Path, pathlib.Path | None]:
@@ -27,10 +35,28 @@ class ForcedAlignmentSSLModule(BaseLightningModule, RankingModule):
         )
 
     def build_model(self) -> nn.Module:
-        return nn.Linear(1, 1)
+        return ForcedAlignmentSSLModel(self.model_config)
 
     def register_losses_and_metrics(self) -> None:
-        self.register_loss("dummy", nn.MSELoss())
+        loss_cfg: LossConfig = self.training_config.loss
+
+        self.register_loss(
+            _HMM_FORWARD, HMMForwardLossWithEmissions(
+                mode=loss_cfg.hmm_forward.mode,
+            ),
+            weight=loss_cfg.hmm_forward.weight,
+        )
+        self.register_loss(
+            _RECONSTRUCTION, SpectrogramReconstructionLoss(
+                loss_type=loss_cfg.reconstruction.loss_type,
+            ),
+            weight=loss_cfg.reconstruction.weight,
+        )
+
+    def post_init(self) -> None:
+        self.spec_mask = TemporalMask(
+            channels=self.model_config.in_dim
+        )
 
     def build_train_dataset(self) -> BaseDataset:
         dl_cfg = self.training_config.dataloader

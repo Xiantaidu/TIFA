@@ -92,7 +92,7 @@ class ForcedAlignmentSSLModel(nn.Module):
         reconstruct:    bool                    enable decoder + f0 injection
         x_features:     [B, T, embedding_dim]   frame features
         token_features: [B, N, embedding_dim]   token features
-        activations:           list of [B, H, T, N]    CA weights (one per layer)
+        activations:    list of [B, H, T, N]    CA weights (one per layer)
         x_recon:        [B, T, in_dim] | None   reconstructed spectrogram
 
     Set ``reconstruct=False`` for inference (no f0, no decoder).

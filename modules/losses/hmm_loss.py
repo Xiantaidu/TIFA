@@ -1,19 +1,23 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from modules.functional import cross_cosine_similarity
-
 
 def hmm_forward_loss_with_emission(
-    emission: torch.Tensor,
-    frame_lens: torch.Tensor,
-    token_lens: torch.Tensor,
+        emission: torch.Tensor,
+        frame_lens: torch.Tensor,
+        token_lens: torch.Tensor,
 ) -> torch.Tensor:
     """CTC-based HMM forward loss from pre-computed emission matrix.
 
-    Disables blank (global -inf) and uses targets [0, 1, ..., N-1],
-    forcing monotonic left-to-right alignment through token states.
+    Args:
+        emission: [B, T_max, N_max] frame-to-token emission scores
+        frame_lens: [B] int64 number of valid frames per sample
+        token_lens: [B] int64 number of valid tokens per sample
+    Returns:
+        Scalar loss.
     """
     B, T_max, N_max = emission.shape
 
@@ -41,19 +45,70 @@ def hmm_forward_loss_with_emission(
     return loss
 
 
-class HMMForwardLoss(nn.Module):
+class HMMForwardLossWithEmissions(nn.Module):
     """HMM forward loss via CTC with disabled blank.
 
-    Computes cosine-similarity emission from frame and token features,
-    then runs forced-alignment CTC with targets [0, 1, ..., N-1].
+    Accepts a single emission [B, ..., T, N] or a list of such tensors.
+    Middle dims are flattened as separate instances (separate mode)
+    or averaged before loss computation (mean mode).
+
+    Inputs:
+        emissions: [B, ..., T, N] or list of such tensors
+        frame_lens: [B] int64 number of valid frames per sample
+        token_lens: [B] int64 number of valid tokens per sample
+    Returns:
+        Scalar loss.
     """
 
+    def __init__(self, mode: str = "separate"):
+        super().__init__()
+        if mode not in ("separate", "mean"):
+            raise ValueError(f"Unknown mode: {mode}")
+        self.mode = mode
+
     def forward(
-        self,
-        x_features: torch.Tensor,
-        token_features: torch.Tensor,
-        frame_lens: torch.Tensor,
-        token_lens: torch.Tensor,
+            self,
+            emissions: torch.Tensor | list[torch.Tensor],
+            frame_lens: torch.Tensor,
+            token_lens: torch.Tensor,
     ) -> torch.Tensor:
-        emission = cross_cosine_similarity(x_features, token_features)  # [B, T_max, N_max]
-        return hmm_forward_loss_with_emission(emission, frame_lens, token_lens)
+        if isinstance(emissions, torch.Tensor):
+            emissions = [emissions]
+
+        if self.mode == "mean":
+            # Flatten middle dims of all emissions, then average over all of them
+            # so every CA head contributes equally regardless of layer.
+            all_flat = []
+            for e in emissions:
+                middle_ndim = e.dim() - 3
+                if middle_ndim > 0:
+                    all_flat.append(e.flatten(1, middle_ndim))  # [B, H*, T, N]
+                else:
+                    all_flat.append(e.unsqueeze(1))  # [B, 1, T, N]
+            combined = torch.cat(all_flat, dim=1)  # [B, total_heads, T, N]
+            emission = combined.mean(dim=1)  # [B, T, N]
+            return hmm_forward_loss_with_emission(emission, frame_lens, token_lens)
+
+        # separate mode: flatten all heads from all layers into one batch,
+        # so CTC reduction='mean' weights every head equally.
+        all_flat = []
+        all_frame_lens = []
+        all_token_lens = []
+        for e in emissions:
+            middle_ndim = e.dim() - 3
+            if middle_ndim > 0:
+                repeat = math.prod(e.shape[1:1 + middle_ndim])
+                all_flat.append(e.flatten(0, middle_ndim))  # [B*, T, N]
+                all_frame_lens.append(frame_lens.repeat_interleave(repeat))
+                all_token_lens.append(token_lens.repeat_interleave(repeat))
+            else:
+                all_flat.append(e)
+                all_frame_lens.append(frame_lens)
+                all_token_lens.append(token_lens)
+        if not all_flat:
+            return torch.zeros(1, requires_grad=True)
+        return hmm_forward_loss_with_emission(
+            torch.cat(all_flat, dim=0),  # [total_B*, T, N]
+            torch.cat(all_frame_lens, dim=0),
+            torch.cat(all_token_lens, dim=0),
+        )
