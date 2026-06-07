@@ -61,7 +61,8 @@ class ForcedAlignmentSSLModule(BaseLightningModule, RankingModule):
 
     def post_init(self) -> None:
         self.spec_mask = TemporalMask(
-            channels=self.model_config.in_dim
+            channels=self.model_config.in_dim,
+            seed=42
         )
 
     def build_train_dataset(self) -> BaseDataset:
