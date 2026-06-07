@@ -9,7 +9,7 @@ from pydantic import Field, PrivateAttr, field_validator
 from .core import ConfigBaseModel
 from .ops import (
     ConfigOperationBase, ConfigOperationContext,
-    ref, this, ctx, if_, exists, coalesce, func
+    ref, this, ctx, if_, exists, coalesce
 )
 
 
@@ -80,18 +80,11 @@ class SpectrogramConfig(ConfigBaseModel):
 
 
 class F0Config(ConfigBaseModel):
-    enabled: bool = Field(False, json_schema_extra={
-        "dynamic_expr": (ctx("scope") & ConfigurationScope.FA_SSL) != 0
-    })
     method: Literal["parselmouth"] = Field("parselmouth")
     f0_min: float = Field(65, gt=0)
     f0_max: float = Field(1600, gt=0, json_schema_extra={
         "dynamic_check": DynamicCheck(
-            expr=if_(
-                ref("binarizer.features.f0.enabled"),
-                this() > ref("binarizer.features.f0.f0_min"),
-                True
-            ),
+            expr=this() > ref("binarizer.features.f0.f0_min"),
             message="f0_max must be greater than f0_min."
         )
     })
@@ -104,6 +97,7 @@ class BinarizerFeaturesConfig(ConfigBaseModel):
     win_size: int = Field(2048, gt=0)
     spectrogram: SpectrogramConfig = Field(...)
     f0: F0Config | None = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.FA_SSL,
         "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA_SSL),
     })
 
@@ -117,13 +111,6 @@ class BinarizerFeaturesConfig(ConfigBaseModel):
         if v.fmin >= v.fmax:
             raise ValueError("fmin must be less than fmax.")
         return v
-
-    def to_inference_config(self) -> "BinarizerFeaturesConfig":
-        """Return an InferenceConfig-compatible copy of this config, with any
-        training-only features disabled."""
-        copy = self.model_copy()
-        copy.f0 = None
-        return copy
 
 
 class BinarizerConfig(ConfigBaseModel):
@@ -568,7 +555,7 @@ class InferenceConfig(ConfigBaseModel):
         "dynamic_expr": ref("binarizer.g2p")
     })
     features: BinarizerFeaturesConfig = Field(None, json_schema_extra={
-        "dynamic_expr": func(lambda c: c.to_inference_config(), ref("binarizer.features"))
+        "dynamic_expr": ref("binarizer.features")
     })
 
 

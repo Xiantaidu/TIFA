@@ -38,3 +38,8 @@ binarizer:
   #        language: en
   #        kwargs:
   #          dict_path: "dictionaries/ds_cmudict-07b.txt"
+  vocabulary:
+    global_symbols: [AP, SP, EP, GS, sil, br, pau]
+    stop_symbols: [AP, SP, EP, GS, sil, br, pau]
+    merged_groups:
+      - [ja/um, zh/um]

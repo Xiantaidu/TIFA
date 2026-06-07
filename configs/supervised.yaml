@@ -5,11 +5,6 @@ bases:
 binarizer:
   phoneme_timing_data_dir: "data/phones"
   text_only_data_dir: "data/texts"
-  vocabulary:
-    global_symbols: [AP, SP, EP, GS, sil, br, pau]
-    stop_symbols: [AP, SP, EP, GS, sil, br, pau]
-    merged_groups:
-      - [ja/um, zh/um]
 
 model:
   arch: ForcedAlignmentModel

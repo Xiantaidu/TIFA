@@ -4,10 +4,6 @@ bases:
 
 binarizer:
   text_only_data_dir: "data/texts"
-  vocabulary:
-    global_symbols: [AP, SP, EP, GS, sil, br, pau, cl]
-    stop_symbols: [AP, SP, EP, GS, sil, br, pau, cl]
-    merged_groups: []
   features:
     f0:
       method: parselmouth

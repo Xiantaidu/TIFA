@@ -31,6 +31,7 @@ TEXTS_ITEM_ATTRIBUTES = [
 class TextMetadataItem(MetadataItem):
     text: str
     g2p_texts: list[G2PText] | None = None
+    phones: list[str] | None = None
 
 
 class TextOnlyBinarizer(BaseBinarizer):
@@ -39,10 +40,9 @@ class TextOnlyBinarizer(BaseBinarizer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.config.g2p is None:
-            raise RuntimeError(
-                "G2P pipeline is not configured but TextOnlyBinarizer requires it."
-            )
-        self.g2p = build_pipeline_from_config(self.config.g2p)
+            self.g2p = None
+        else:
+            self.g2p = build_pipeline_from_config(self.config.g2p)
 
     def resolve_data_dir(self) -> pathlib.Path:
         return self.config.text_only_data_dir_resolved
@@ -58,7 +58,28 @@ class TextOnlyBinarizer(BaseBinarizer):
             if waveform_fn is None:
                 continue
             language = row["language"]
+            estimated_duration = (
+                self.get_frame_count(waveform_fn) * self.timestep
+            )
+            if row.get("phones"):
+                raw_phones = row["phones"].split()
+                items.append(TextMetadataItem(
+                    name=name,
+                    language=language,
+                    waveform_fn=waveform_fn,
+                    estimated_duration=estimated_duration,
+                    raw_symbols=raw_phones,
+                    text="",
+                    g2p_texts=None,
+                    phones=raw_phones,
+                ))
+                continue
             text = row["text"]
+            if self.g2p is None:
+                raise RuntimeError(
+                    f"G2P is not configured but item '{name}' has no 'phones' column. "
+                    f"Either configure G2P or add a 'phones' column to the index.csv."
+                )
             try:
                 g2p_texts = self.g2p.convert(text, languages=[language])
             except Exception as e:
@@ -71,9 +92,6 @@ class TextOnlyBinarizer(BaseBinarizer):
                 for gw in gt.words:
                     for path in gw.phones:
                         symbols.extend(path)
-            estimated_duration = (
-                self.get_frame_count(waveform_fn) * self.timestep
-            )
             items.append(TextMetadataItem(
                 name=name,
                 language=language,
@@ -92,37 +110,45 @@ class TextOnlyBinarizer(BaseBinarizer):
         length = self.get_frame_count(item.waveform_fn)
 
         f0_cfg = self.config.features.f0
-        f0 = None
-        if f0_cfg is not None and f0_cfg.enabled:
-            waveform, sr = load_audio(item.waveform_fn)
-            if sr != self.config.features.audio_sample_rate:
-                waveform = librosa.resample(waveform, orig_sr=sr, target_sr=self.config.features.audio_sample_rate)
-            f0, _uv = get_pitch_parselmouth(
-                waveform, self.config.features.audio_sample_rate, length,
-                hop_size=self.config.features.hop_size,
-                f0_min=f0_cfg.f0_min, f0_max=f0_cfg.f0_max,
-            )
+        waveform, sr = load_audio(item.waveform_fn)
+        if sr != self.config.features.audio_sample_rate:
+            waveform = librosa.resample(waveform, orig_sr=sr, target_sr=self.config.features.audio_sample_rate)
+        f0, _ = get_pitch_parselmouth(
+            waveform, self.config.features.audio_sample_rate, length,
+            hop_size=self.config.features.hop_size,
+            f0_min=f0_cfg.f0_min, f0_max=f0_cfg.f0_max,
+            interp_uv=True
+        )
 
-        groups = item.g2p_texts
-        if groups is None:
-            raise RuntimeError(f"G2P not run for item '{item.name}'")
+        if item.phones is not None:
+            encoded_groups: list[list[list[int]]] = []
+            for ph in item.phones:
+                tid = self.vocabulary.encode(ph, item.language)
+                if tid is None:
+                    # Stop symbol, not in vocabulary -- skip
+                    continue
+                encoded_groups.append([[tid]])
+        else:
+            groups = item.g2p_texts
+            if groups is None:
+                raise RuntimeError(f"G2P not run for item '{item.name}'")
 
-        encoded_groups: list[list[list[int]]] = []
-        for gt in groups:
-            encoded_paths = []
-            for gw in gt.words:
-                for path in gw.phones:
-                    tok_ids = []
-                    for ph in path:
-                        tid = self.vocabulary.encode(ph, item.language)
-                        if tid is None:
-                            raise RuntimeError(
-                                f"Token '{ph}' not in vocabulary "
-                                f"for item '{item.name}'."
-                            )
-                        tok_ids.append(tid)
-                    encoded_paths.append(tok_ids)
-            encoded_groups.append(encoded_paths)
+            encoded_groups: list[list[list[int]]] = []
+            for gt in groups:
+                encoded_paths = []
+                for gw in gt.words:
+                    for path in gw.phones:
+                        tok_ids = []
+                        for ph in path:
+                            tid = self.vocabulary.encode(ph, item.language)
+                            if tid is None:
+                                raise RuntimeError(
+                                    f"Token '{ph}' not in vocabulary "
+                                    f"for item '{item.name}'."
+                                )
+                            tok_ids.append(tid)
+                        encoded_paths.append(tok_ids)
+                encoded_groups.append(encoded_paths)
 
         all_segments = segment_groups(encoded_groups)
 
