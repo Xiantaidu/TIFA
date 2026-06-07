@@ -92,7 +92,7 @@ class ForcedAlignmentSSLModel(nn.Module):
         reconstruct:    bool                    enable decoder + f0 injection
         x_features:     [B, T, embedding_dim]   frame features
         token_features: [B, N, embedding_dim]   token features
-        activations:    list of [B, H, T, N]    CA weights (one per layer)
+        attn_logits:    list of [B, H, T, N]    CA logits (pre-softmax, one per layer)
         x_recon:        [B, T, in_dim] | None   reconstructed spectrogram
 
     Set ``reconstruct=False`` for inference (no f0, no decoder).
@@ -138,7 +138,7 @@ class ForcedAlignmentSSLModel(nn.Module):
         if reconstruct and f0 is None:
             raise ValueError("f0 is required when reconstruct=True")
         token_emb = self.token_embedding(tokens)
-        x_features, token_features, activations = self.backbone(
+        x_features, token_features, attn_logits = self.backbone(
             spectrogram, token_emb, t_mask, n_mask,
         )
         if reconstruct:
@@ -149,4 +149,4 @@ class ForcedAlignmentSSLModel(nn.Module):
             )
         else:
             x_recon = None
-        return x_features, token_features, activations, x_recon
+        return x_features, token_features, attn_logits, x_recon

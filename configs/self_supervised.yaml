@@ -27,7 +27,7 @@ model:
       x_enc_num_layers: 4
       x_enc_c_kernel_size: 31
       x_enc_m_kernel_size: 31
-      num_ca_layers: 2
+      num_ca_layers: 1  # 2
       use_rope: true
       ffn_type: glu
   reconstructor:
@@ -43,6 +43,11 @@ model:
       ffn_type: glu
 
 training:
+  augmentation:
+    spectrogram_masking:
+      enabled: false
+    colored_noise:
+      enabled: false
   loss:
     hmm_forward:
       weight: 1.0
@@ -51,7 +56,7 @@ training:
       weight: 1.0
       loss_type: L1
   iterative_ranking:
-    enabled: true
+    enabled: false
     rank_size: 4
     gamma: 0.9
     update_every_n_epochs: 1

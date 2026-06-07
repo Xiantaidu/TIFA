@@ -7,7 +7,7 @@ from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
 from lib.config.schema import RootConfig, LossConfig, AugmentationConfig
-from lib.plot import alignment_to_figure, cross_similarity_to_figure, topk_bar_figure
+from lib.plot import alignment_to_figure, emission_to_figure, topk_bar_figure
 from modules.decoding import decode_alignment_flat
 from modules.forced_alignment import ForcedAlignmentModel
 from modules.functional import cross_cosine_similarity
@@ -426,7 +426,7 @@ class ForcedAlignmentModule(BaseLightningModule):
             logger: TensorBoardLogger = self.logger
 
             sim = sim_all[i, :T_i, :N_i]  # [T_i, N_i]
-            fig_sim = cross_similarity_to_figure(
+            fig_sim = emission_to_figure(
                 sim.float().detach().cpu().numpy().T,  # [N_i, T_i]
                 regions=regions[i, :T_i].detach().cpu().numpy(),
                 title=item_path,

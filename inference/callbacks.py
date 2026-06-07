@@ -14,7 +14,7 @@ from lib import logging
 from lib.levenshtein import levenshtein_distance
 from lib.plot import (
     alignment_to_figure,
-    cross_similarity_to_figure,
+    emission_to_figure,
     metric_histogram_figure,
     metric_scatter_figure,
     topk_bar_figure,
@@ -144,7 +144,7 @@ class SavePlotCallback(lightning.pytorch.callbacks.Callback):
             sim = result["similarity"]  # [T_i, N_i]
             identifier = result["identifier"]
             phonemes = result.get("phonemes")
-            fig = cross_similarity_to_figure(
+            fig = emission_to_figure(
                 sim.T.float().detach().cpu().numpy(),
                 regions=None,
                 title=identifier,
@@ -763,7 +763,7 @@ class VisualizeAlignmentCallback(lightning.pytorch.callbacks.Callback):
 
             # Similarity plot
             sim = similarity[i, :T_i, :N_i].float().detach().cpu().numpy()
-            fig_sim = cross_similarity_to_figure(
+            fig_sim = emission_to_figure(
                 sim.T,  # [N_i, T_i] as expected by plot function
                 regions=regions[i, :T_i].detach().cpu().numpy(),
                 title=item_path,

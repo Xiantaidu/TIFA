@@ -318,8 +318,7 @@ class AugmentationConfig(ConfigBaseModel):
     ) -> "AugmentationConfig":
         updates: dict[str, object] = {}
         for field_name in self.model_fields:
-            sub = getattr(self, field_name)
-            if sub is None:
+            if not hasattr(self, field_name) or (sub := getattr(self, field_name)) is None:
                 continue
             new_enabled = compute(field_name, sub.enabled)
             if new_enabled != sub.enabled:
@@ -358,23 +357,33 @@ class IterativeRankingConfig(ConfigBaseModel):
     update_every_n_epochs: int = Field(1, ge=1)
 
 
-class FrameAlignmentLossConfig(ConfigBaseModel):
-    weight: float = 1.0
+class LossInstanceConfig(ConfigBaseModel):
+    weight: float = Field(1.0)
+
+
+class FrameAlignmentLossConfig(LossInstanceConfig):
     temperature: float = 0.1
 
 
-class SpanContrastiveLossConfig(ConfigBaseModel):
-    weight: float = 1.0
+class SpanContrastiveLossConfig(LossInstanceConfig):
     temperature: float = 0.1
     bidirectional: bool = True
 
 
-class TokenIdentityLossConfig(ConfigBaseModel):
-    weight: float = 1.0
+class TokenIdentityLossConfig(LossInstanceConfig):
+    pass
 
 
-class FrameCrossEntropyLossConfig(ConfigBaseModel):
-    weight: float = 1.0
+class FrameIdentityLossConfig(LossInstanceConfig):
+    pass
+
+
+class HMMForwardLossConfig(LossInstanceConfig):
+    mode: Literal["separate", "mean"] = Field("separate")
+
+
+class SpectrogramReconstructionLossConfig(LossInstanceConfig):
+    loss_type: Literal["L1", "L2"] = Field("L1")
 
 
 class LossConfig(ConfigBaseModel):
@@ -390,8 +399,16 @@ class LossConfig(ConfigBaseModel):
         "scope": ConfigurationScope.FA,
         "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA),
     })
-    frame_identity: FrameCrossEntropyLossConfig = Field(None, json_schema_extra={
+    frame_identity: FrameIdentityLossConfig = Field(None, json_schema_extra={
         "scope": ConfigurationScope.FA,
+    })
+    hmm_forward: HMMForwardLossConfig = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.FA_SSL,
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA_SSL),
+    })
+    reconstruction: SpectrogramReconstructionLossConfig = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.FA_SSL,
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.FA_SSL),
     })
 
 

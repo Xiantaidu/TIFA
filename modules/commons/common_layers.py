@@ -58,7 +58,9 @@ class TemporalMask(nn.Module):
     parameter of shape ``[channels]`` (``fill_method="learnable"``) or
     fresh Gaussian noise per forward pass (``fill_method="randn"``).
 
-    This module is a no-op in eval mode (``m.eval()``).
+    In eval mode, randomness is deterministic via a seeded generator.
+    Call ``reset_random_generator()`` to re-seed.  The caller controls
+    whether the module is invoked (no automatic gate by training mode).
 
     :param channels: feature dimension C
     :param mask_type: ``"chunk"`` or ``"random"``
@@ -66,12 +68,14 @@ class TemporalMask(nn.Module):
     :param mask_len: span length for chunk masking
     :param mask_p: probability of starting a chunk mask, or masking rate
         for random masking
+    :param seed: optional seed for the deterministic eval-mode generator
     """
 
     def __init__(
             self, channels: int,
             mask_type: str = "chunk", fill_method: str = "learnable",
-            mask_len: int = 50, mask_p: float = 0.01
+            mask_len: int = 50, mask_p: float = 0.01,
+            seed: int | None = None,
     ):
         super().__init__()
         if mask_type not in ("chunk", "random"):
@@ -82,8 +86,25 @@ class TemporalMask(nn.Module):
         self.fill_method = fill_method
         self.mask_len = mask_len
         self.mask_p = mask_p
+        self._seed = seed
+        self._rng = torch.Generator()
+        if seed is not None:
+            self._rng.manual_seed(seed)
         if fill_method == "learnable":
             self.mask_fill = nn.Parameter(torch.randn(channels))
+
+    def reset_random_generator(self):
+        """Re-seed the eval-mode random generator with the original init seed."""
+        if self._seed is not None:
+            self._rng.manual_seed(self._seed)
+        else:
+            self._rng.seed()
+
+    def _rand(self, *shape, device):
+        """Random tensor; deterministic in eval mode."""
+        if self.training:
+            return torch.rand(*shape, device=device)
+        return torch.rand(*shape, device=device, generator=self._rng)
 
     def forward(self, x, mask=None):
         """
@@ -91,9 +112,6 @@ class TemporalMask(nn.Module):
         :param mask: optional bool [..., T], True = eligible for masking
         :return: [..., T, C]
         """
-        if not self.training:
-            return x
-
         *B, T, C = x.shape
         x_flat = x.reshape(-1, T, C)
         B_flat = x_flat.shape[0]
@@ -113,7 +131,7 @@ class TemporalMask(nn.Module):
         return masked_x.reshape(*B, T, C)
 
     def _chunk_keep_mask(self, B, T, device, mask):
-        starts = torch.rand(B, T, device=device) < self.mask_p
+        starts = self._rand(B, T, device=device) < self.mask_p
         if mask is not None:
             starts = starts & mask
         kernel = torch.ones(1, 1, self.mask_len, device=device)
@@ -122,7 +140,7 @@ class TemporalMask(nn.Module):
         return (spans == 0).bool().squeeze(1)
 
     def _random_keep_mask(self, B, T, device, mask):
-        rand = torch.rand(B, T, device=device)
+        rand = self._rand(B, T, device=device)
         if mask is not None:
             rand = rand.masked_fill(~mask, float('inf'))
         sorted_idx = torch.argsort(rand, dim=-1)

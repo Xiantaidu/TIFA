@@ -40,20 +40,30 @@ def vocab_distribution_to_figure(symbol_counts: dict[str, int]) -> "plt.Figure":
     return fig
 
 
-def cross_similarity_to_figure(sim, regions=None, title=None, token_labels=None) -> "plt.Figure":
-    """Plot cross cosine similarity matrix [N, T].
+def emission_to_figure(
+        emission,
+        regions=None,
+        title=None,
+        token_labels=None,
+        vmin: float = -1.0,
+        vmax: float = 1.0,
+        label: str = "cosine similarity",
+) -> "plt.Figure":
+    """Plot frame-token emission matrix [N, T].
 
-    sim: [N, T] float array, values in [-1, 1]
+    emission: [N, T] float array
     regions: [T] int array, 1-based region index (0=gap), optional GT overlay
     title: optional title string
     token_labels: optional list of N strings for y-axis tick labels
+    vmin, vmax: colormap range
+    label: colorbar label text
     """
-    N, T = sim.shape
+    N, T = emission.shape
     fig_width = max(12, min(T / 60, 20))
     fig_height = max(4, min(N / 4, 10))
     fig = plt.figure(figsize=(fig_width, fig_height))
-    plt.pcolormesh(sim, vmin=-1, vmax=1, cmap="RdBu_r", zorder=1)
-    plt.colorbar().set_label("cosine similarity", fontsize=10)
+    plt.pcolormesh(emission, vmin=vmin, vmax=vmax, cmap="RdBu_r", zorder=1)
+    plt.colorbar().set_label(label, fontsize=10)
 
     if regions is not None:
         # Split region boundaries into phone-phone and phone-gap
@@ -263,4 +273,36 @@ def metric_scatter_figure(x, y, xlabel, ylabel, title) -> "plt.Figure":
     ax.axvline(float(np.mean(x)), color="red", linestyle="--", linewidth=0.8, alpha=0.7)
     ax.legend()
     fig.tight_layout()
+    return fig
+
+
+def reconstruction_to_figure(
+        original: np.ndarray,
+        masked: np.ndarray,
+        reconstructed: np.ndarray,
+        title: str | None = None,
+) -> "plt.Figure":
+    """4-row concatenated spectrogram: original, masked, reconstructed, |diff|.
+
+    original:       [T, bins]
+    masked:         [T, bins]
+    reconstructed:  [T, bins]
+    """
+    vmin, vmax = -14, 4
+    diff = np.abs(original - reconstructed) + vmin
+    spec = np.concatenate([diff, reconstructed, masked, original], axis=-1)  # [T, 4*bins]
+    bins = original.shape[-1]
+    T = spec.shape[0]
+    fig = plt.figure(figsize=(max(12, min(T / 40, 24)), 16))
+    plt.pcolormesh(np.arange(T + 1), np.arange(spec.shape[1] + 1), spec.T,
+                   vmin=vmin, vmax=vmax, rasterized=True)
+    for i in range(1, 4):
+        plt.axhline(i * bins, color="white", linewidth=2)
+    labels = ["|Diff|", "Reconstructed", "Masked", "Original"]
+    centers = [bins // 2 + i * bins for i in range(4)]
+    plt.yticks(centers, labels, fontsize=10, rotation=90, va="center")
+    plt.xlabel("Frame", fontsize=12)
+    if title:
+        plt.title(title, fontsize=15)
+    plt.tight_layout()
     return fig
