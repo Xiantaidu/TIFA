@@ -65,6 +65,7 @@ class CrossAttention(nn.Module):
     def __init__(
             self, dim, cross_dim, num_heads, head_dim,
             qk_head_dim=None,
+            qk_norm=True,
             dropout_attn: float = 0.0,
             out_drop: float = 0.0
     ):
@@ -76,7 +77,10 @@ class CrossAttention(nn.Module):
         self.scale = head_dim ** -0.5
         attn_dim = head_dim * num_heads
         qk_attn_dim = qk_head_dim * num_heads
-
+        self.qk_norm = qk_norm
+        if qk_norm:
+            self.q_norm = RMSNorm(qk_attn_dim)
+            self.k_norm = RMSNorm(qk_attn_dim)
         self.q_linear = nn.Linear(dim, qk_attn_dim, bias=True)
         self.k_linear = nn.Linear(cross_dim, qk_attn_dim, bias=True)
         self.v_linear = nn.Linear(cross_dim, attn_dim, bias=True)
@@ -94,6 +98,11 @@ class CrossAttention(nn.Module):
         q = self.q_linear(x)
         k = self.k_linear(y)
         v = self.v_linear(y)
+
+        if self.qk_norm:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+
 
         q = rearrange(q, "b t (h c) -> b h t c", h=self.num_heads)
         k = rearrange(k, "b s (h c) -> b h s c", h=self.num_heads)
