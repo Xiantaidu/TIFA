@@ -87,24 +87,31 @@ class TemporalMask(nn.Module):
         self.mask_len = mask_len
         self.mask_p = mask_p
         self._seed = seed
-        self._rng = torch.Generator()
-        if seed is not None:
-            self._rng.manual_seed(seed)
+        self._rng = None
         if fill_method == "learnable":
             self.mask_fill = nn.Parameter(torch.randn(channels))
 
+    def _get_rng(self, device):
+        """Lazy-init the eval-mode generator on the correct device."""
+        if self._rng is None or self._rng.device != device:
+            self._rng = torch.Generator(device=device)
+            if self._seed is not None:
+                self._rng.manual_seed(self._seed)
+        return self._rng
+
     def reset_random_generator(self):
-        """Re-seed the eval-mode random generator with the original init seed."""
-        if self._seed is not None:
-            self._rng.manual_seed(self._seed)
-        else:
-            self._rng.seed()
+        """Reset the eval-mode random generator with the original init seed."""
+        if self._rng is not None:
+            if self._seed is not None:
+                self._rng.manual_seed(self._seed)
+            else:
+                self._rng.seed()
 
     def _rand(self, *shape, device):
         """Random tensor; deterministic in eval mode."""
         if self.training:
             return torch.rand(*shape, device=device)
-        return torch.rand(*shape, device=device, generator=self._rng)
+        return torch.rand(*shape, device=device, generator=self._get_rng(device))
 
     def forward(self, x, mask=None):
         """
