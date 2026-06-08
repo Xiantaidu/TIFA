@@ -3,6 +3,64 @@ import torchmetrics
 from torch import Tensor
 
 
+def compute_boundary_error_rate(
+    pred_spans: Tensor,
+    target_spans: Tensor,
+    tokens: Tensor,
+    tolerance: float,
+    mode: str,
+) -> tuple[Tensor, Tensor]:
+    """Per-sample boundary error counts (batched, stateless).
+
+    Args:
+        pred_spans: ``[..., N, 2]`` predicted onset/offset.
+        target_spans: ``[..., N, 2]`` ground-truth onset/offset.
+        tokens: ``[..., N]`` token IDs (0 = padding).
+        tolerance: maximum frame distance for a correct boundary.
+        mode: ``"onset"``, ``"offset"``, or ``"both"``.
+
+    Returns:
+        ``(incorrect, total)`` each shape ``[...]`` — raw counts per
+        sample.  Caller computes ``incorrect / total`` for the BER.
+    """
+    mask = tokens != 0
+    onset_err = (pred_spans[..., 0] - target_spans[..., 0]).abs()
+    offset_err = (pred_spans[..., 1] - target_spans[..., 1]).abs()
+
+    if mode == "onset":
+        incorrect = (onset_err > tolerance) & mask
+    elif mode == "offset":
+        incorrect = (offset_err > tolerance) & mask
+    else:  # both
+        incorrect = ((onset_err > tolerance) | (offset_err > tolerance)) & mask
+
+    return incorrect.sum(dim=-1), mask.sum(dim=-1)
+
+
+def compute_boundary_mae(
+    pred_spans: Tensor,
+    target_spans: Tensor,
+    tokens: Tensor,
+    mode: str,
+) -> tuple[Tensor, Tensor]:
+    """Per-sample boundary mean absolute error accumulators (batched, stateless).
+
+    Args:
+        pred_spans: ``[..., N, 2]`` predicted onset/offset.
+        target_spans: ``[..., N, 2]`` ground-truth onset/offset.
+        tokens: ``[..., N]`` token IDs (0 = padding).
+        mode: ``"onset"`` or ``"offset"``.
+
+    Returns:
+        ``(error_sum, count)`` each shape ``[...]`` — raw accumulators
+        per sample.  Caller computes ``error_sum / count`` for the MAE.
+    """
+    dim = 0 if mode == "onset" else 1
+    mask = tokens != 0
+    errors = (pred_spans[..., dim] - target_spans[..., dim]).abs()
+    return (errors * mask).sum(dim=-1), mask.sum(dim=-1)
+
+
 class BoundaryErrorRate(torchmetrics.Metric):
     """
     Ratio of incorrectly aligned tokens to total tokens, where a token is
@@ -43,21 +101,24 @@ class BoundaryErrorRate(torchmetrics.Metric):
             self.add_state("total", default=torch.zeros(vocab_size, dtype=torch.int64), dist_reduce_fx="sum")
 
     def update(self, pred_spans: Tensor, target_spans: Tensor, tokens: Tensor) -> None:
-        mask = tokens != 0
-        onset_err = (pred_spans[..., 0] - target_spans[..., 0]).abs().float()
-        offset_err = (pred_spans[..., 1] - target_spans[..., 1]).abs().float()
-
-        if self.mode == "onset":
-            incorrect = (onset_err > self.tolerance) & mask
-        elif self.mode == "offset":
-            incorrect = (offset_err > self.tolerance) & mask
-        else:  # both
-            incorrect = ((onset_err > self.tolerance) | (offset_err > self.tolerance)) & mask
-
         if self.k is None:
-            self.incorrect += incorrect.long().sum()
-            self.total += mask.long().sum()
+            incorrect, total = compute_boundary_error_rate(
+                pred_spans, target_spans, tokens, self.tolerance, self.mode,
+            )
+            self.incorrect += incorrect.sum()
+            self.total += total.sum()
         else:
+            mask = tokens != 0
+            onset_err = (pred_spans[..., 0] - target_spans[..., 0]).abs().float()
+            offset_err = (pred_spans[..., 1] - target_spans[..., 1]).abs().float()
+
+            if self.mode == "onset":
+                incorrect = (onset_err > self.tolerance) & mask
+            elif self.mode == "offset":
+                incorrect = (offset_err > self.tolerance) & mask
+            else:  # both
+                incorrect = ((onset_err > self.tolerance) | (offset_err > self.tolerance)) & mask
+
             valid_tokens = tokens[mask]
             self.incorrect.index_add_(0, valid_tokens, incorrect[mask].long())
             self.total.index_add_(0, valid_tokens, torch.ones_like(valid_tokens, dtype=torch.int64))
@@ -140,13 +201,15 @@ class BoundaryMAE(torchmetrics.Metric):
             self.add_state("count", default=torch.zeros(vocab_size, dtype=torch.int64), dist_reduce_fx="sum")
 
     def update(self, pred_spans: Tensor, target_spans: Tensor, tokens: Tensor) -> None:
-        mask = tokens != 0
-        errors = (pred_spans[..., self._dim] - target_spans[..., self._dim]).abs().float()
-
         if self.k is None:
-            self.error_sum += errors[mask].sum()
-            self.total += mask.long().sum()
+            error_sum, count = compute_boundary_mae(
+                pred_spans, target_spans, tokens, self.mode,
+            )
+            self.error_sum += error_sum.sum()
+            self.total += count.sum()
         else:
+            mask = tokens != 0
+            errors = (pred_spans[..., self._dim] - target_spans[..., self._dim]).abs().float()
             valid_tokens = tokens[mask]
             valid_errors = errors[mask]
             self.error_sum.index_add_(0, valid_tokens, valid_errors.float())

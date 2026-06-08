@@ -260,13 +260,12 @@ def _run_offline_evaluation(
     ber_tols: list[int],
     token_topk: list[int],
     pair_topk: list[int],
-    plot: bool,
     **kwargs,
 ):
     from lightning_utilities.core.rank_zero import rank_zero_info
 
     from inference.api import evaluate_offline
-    from inference.callbacks import EvaluationMetricsCallback
+    from inference.callbacks import EvaluationMetricsCallback, StatisticsCallback
     from inference.data import PairedDataset, TextGridDataset
 
     pred_ds = TextGridDataset(pred_dir, tier_name=tier_name, stop_symbols=stop_symbols)
@@ -281,6 +280,10 @@ def _run_offline_evaluation(
     output_dir.mkdir(parents=True, exist_ok=True)
     save_path = output_dir / "summary.json"
 
+    statistic_callback = StatisticsCallback(
+        save_dir=output_dir / "statistics",
+        unit_factor=1000.0,
+    )
     metric_callback = EvaluationMetricsCallback(
         unit="ms",
         vocab=paired.vocab,
@@ -290,7 +293,7 @@ def _run_offline_evaluation(
         pair_topk=pair_topk,
     )
 
-    evaluate_offline(dataset=paired, callbacks=[metric_callback])
+    evaluate_offline(dataset=paired, callbacks=[statistic_callback, metric_callback])
     logging.success("Offline evaluation completed.", callback=rank_zero_info)
 
 

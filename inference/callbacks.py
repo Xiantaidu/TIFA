@@ -27,8 +27,11 @@ from modules.metrics import (
     OverlapRatioCollection,
     PairConjunctionMAE,
     PathDeterminacy,
+    compute_boundary_mae,
+    compute_confidence,
+    compute_determinacy,
+    compute_overlap,
 )
-from modules.metrics.reference_free import compute_confidence, compute_determinacy
 
 
 class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
@@ -167,12 +170,14 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
             determinacy_power: float = 2.0,
             determinacy_width: int | None = 5,
             identifiers: list[str] | None = None,
+            unit_factor: float = 1.0,
     ):
         super().__init__()
         self.save_dir = pathlib.Path(save_dir)
         self.power = determinacy_power
         self.width = determinacy_width
         self._identifiers = identifiers
+        self._unit_factor = unit_factor
         self._records: list[dict] = []
         self._saved = False
 
@@ -184,50 +189,71 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
             batch: dict,
             *args, **kwargs,
     ) -> None:
-        if "similarity" not in outputs:
-            return
-
-        spans = outputs["spans"].float()  # [B, N_max, 2] frames
-        similarity = outputs["similarity"].float()  # [B, T_max, N_max]
+        spans_pred = outputs["spans"].float() * self._unit_factor  # [B, N_max, 2]
+        spans_gt = batch["spans"].float() * self._unit_factor       # [B, N_max, 2]
         tokens = batch["tokens"]  # [B, N_max]
-        indices = batch["indices"]  # [B]
 
-        B = indices.shape[0]
-        device = similarity.device
+        B = tokens.shape[0]
+
+        onset_error, onset_count = compute_boundary_mae(
+            spans_pred, spans_gt, tokens, "onset",
+        )  # [B] each
+        offset_error, offset_count = compute_boundary_mae(
+            spans_pred, spans_gt, tokens, "offset",
+        )  # [B] each
+        overlap_sum, pred_sum, gt_sum = compute_overlap(
+            spans_pred, spans_gt, tokens,
+        )  # [B] each
+
+        has_similarity = "similarity" in outputs
+        if has_similarity:
+            similarity = outputs["similarity"].float()  # [B, T_max, N_max]
+            device = similarity.device
+
+        has_indices = "indices" in batch
+        has_identifiers = "identifier" in batch
 
         for i in range(B):
             N_i = int((tokens[i] != 0).sum().item())
             if N_i == 0:
                 continue
 
-            sim_i = similarity[i, :, :N_i]
-            span_i = spans[i, :N_i]
-            T_sim = sim_i.shape[0]
-            if T_sim == 0:
-                continue
-            t_mask = torch.ones(T_sim, dtype=torch.bool, device=device)
-            n_mask = tokens[i, :N_i] != 0
+            record: dict[str, object] = {}
+            if has_indices:
+                data_idx = int(batch["indices"][i].item())
+                record["index"] = data_idx
+                record["identifier"] = self._identifiers[data_idx] if self._identifiers else str(data_idx)
+            elif has_identifiers:
+                record["identifier"] = batch["identifier"][i]
+            else:
+                record["identifier"] = str(i)
+            record["b_mae_onset"] = (onset_error[i] / onset_count[i].clamp(min=1)).item()
+            record["b_mae_offset"] = (offset_error[i] / offset_count[i].clamp(min=1)).item()
+            record["overlap_precision"] = (overlap_sum[i] / (pred_sum[i] + 1e-6)).item()
+            record["overlap_recall"] = (overlap_sum[i] / (gt_sum[i] + 1e-6)).item()
+            record["num_tokens"] = N_i
+            if "T" in batch:
+                record["num_frames"] = int(batch["T"][i].item())
 
-            confidence = compute_confidence(
-                span_i, sim_i, t_mask, n_mask,
-            ).item()
+            if has_similarity:
+                sim_i = similarity[i, :, :N_i]
+                span_i = spans_pred[i, :N_i]
+                T_sim = int(sim_i.shape[0])
+                if T_sim > 0:
+                    t_mask = torch.ones(T_sim, dtype=torch.bool, device=device)
+                    n_mask = tokens[i, :N_i] != 0
 
-            num, denom = compute_determinacy(
-                span_i, sim_i, t_mask, n_mask,
-                power=self.power,
-                width=self.width,
-            )
-            determinacy = (num / (denom + 1e-8)).item()
+                    record["confidence"] = compute_confidence(
+                        span_i, sim_i, t_mask, n_mask,
+                    ).item()
 
-            data_idx = int(indices[i].item())
-            record = {
-                "index": data_idx,
-                "identifier": self._identifiers[data_idx] if self._identifiers else str(data_idx),
-                "confidence": confidence,
-                "determinacy": determinacy,
-                "num_tokens": N_i,
-                "num_frames": int(batch["T"][i].item()),
-            }
+                    num, denom = compute_determinacy(
+                        span_i, sim_i, t_mask, n_mask,
+                        power=self.power,
+                        width=self.width,
+                    )
+                    record["determinacy"] = (num / (denom + 1e-8)).item()
+
             self._records.append(record)
 
     def on_predict_batch_end(
@@ -315,20 +341,43 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
                 for r in gathered:
                     records.extend(r)
 
+        if not records:
+            return
+
         if (
                 not torch.distributed.is_available()
                 or not torch.distributed.is_initialized()
                 or torch.distributed.get_rank() == 0
         ):
-            sorted_by_conf = sorted(records, key=lambda rc: rc["confidence"])
-            sorted_by_det = sorted(records, key=lambda rc: rc["determinacy"])
-            rank_conf = {rc["identifier"]: i for i, rc in enumerate(sorted_by_conf)}
-            rank_det = {rc["identifier"]: i for i, rc in enumerate(sorted_by_det)}
-            records.sort(key=lambda rc: (
-                min(rank_conf[rc["identifier"]], rank_det[rc["identifier"]]),
-                rank_conf[rc["identifier"]],
-                rank_det[rc["identifier"]],
-            ))
+            # Sort direction: ascending=True means low=bad, ascending=False means high=bad
+            _METRIC_DIRECTIONS: list[tuple[str, bool]] = [
+                ("b_mae_onset", False),
+                ("b_mae_offset", False),
+                ("overlap_precision", True),
+                ("overlap_recall", True),
+                ("confidence", True),
+                ("determinacy", True),
+            ]
+            available = [
+                (key, asc) for key, asc in _METRIC_DIRECTIONS
+                if key in records[0]
+            ]
+            ranks: dict[str, dict[str, int]] = {}
+            for key, ascending in available:
+                sorted_recs = sorted(
+                    records, key=lambda rc: rc[key], reverse=not ascending,
+                )
+                ranks[key] = {
+                    rc["identifier"]: i for i, rc in enumerate(sorted_recs)
+                }
+
+            def _sort_key(rc):
+                identifier = rc["identifier"]
+                r = tuple(ranks[key][identifier] for key, _ in available)
+                return (min(r),) + r
+
+            records.sort(key=_sort_key)
+
             self.save_dir.mkdir(parents=True, exist_ok=True)
             with open(self.save_dir / "diagnosis.json", "w", encoding="utf8") as f:
                 json.dump(records, f, indent=2, ensure_ascii=False)
@@ -337,22 +386,49 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
     def _save_stat_plots(self, records: list[dict]) -> None:
         if not records:
             return
-        m = {
-            "Determinacy": np.array([r["determinacy"] for r in records]),
-            "Confidence": np.array([r["confidence"] for r in records]),
-            "num_frames": np.array([r["num_frames"] for r in records], dtype=np.int32),
-        }
-        for key in ("Determinacy", "Confidence"):
-            fig = metric_histogram_figure(m[key], label=key)
-            fig.savefig(self.save_dir / f"{key.lower()}_histogram.jpg", bbox_inches="tight")
-            plt.close(fig)
-            fig = metric_scatter_figure(
-                m["num_frames"], m[key],
-                xlabel="Number of Frames", ylabel=key,
-                title=key,
+
+        has_num_frames = "num_frames" in records[0]
+        plot_keys: list[str] = []
+        for key in (
+            "b_mae_onset", "b_mae_offset",
+            "overlap_precision", "overlap_recall",
+            "confidence", "determinacy",
+        ):
+            if key in records[0]:
+                plot_keys.append(key)
+
+        m: dict[str, np.ndarray] = {}
+        for key in plot_keys:
+            m[key] = np.array([r[key] for r in records])
+        if has_num_frames:
+            m["num_frames"] = np.array(
+                [r["num_frames"] for r in records], dtype=np.int32,
             )
-            fig.savefig(self.save_dir / f"{key.lower()}_scatter.jpg", bbox_inches="tight")
+
+        _LOG_METRICS = {"b_mae_onset", "b_mae_offset"}
+
+        for key in plot_keys:
+            use_log = key in _LOG_METRICS
+            fig = metric_histogram_figure(
+                m[key], label=key, log_x=use_log, log_x_min=0.1,
+            )
+            safe_key = key.replace("/", "_")
+            fig.savefig(
+                self.save_dir / f"{safe_key}_histogram.jpg",
+                bbox_inches="tight",
+            )
             plt.close(fig)
+            if has_num_frames:
+                fig = metric_scatter_figure(
+                    m["num_frames"], m[key],
+                    xlabel="Number of Frames", ylabel=key,
+                    title=key, log_y=use_log, log_y_min=0.1,
+                )
+                fig.savefig(
+                    self.save_dir / f"{safe_key}_scatter.jpg",
+                    bbox_inches="tight",
+                )
+                plt.close(fig)
 
 
 class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):

@@ -3,6 +3,37 @@ import torchmetrics
 from torch import Tensor
 
 
+def compute_overlap(
+    pred_spans: Tensor,
+    target_spans: Tensor,
+    tokens: Tensor,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Per-sample overlap accumulators (batched, stateless).
+
+    Args:
+        pred_spans: ``[..., N, 2]`` predicted onset/offset.
+        target_spans: ``[..., N, 2]`` ground-truth onset/offset.
+        tokens: ``[..., N]`` token IDs (0 = padding).
+
+    Returns:
+        ``(overlap_sum, pred_sum, gt_sum)`` each shape ``[...]`` — raw
+        accumulators per sample.  Caller computes
+        ``overlap_sum / pred_sum`` (precision) and
+        ``overlap_sum / gt_sum`` (recall).
+    """
+    mask = tokens != 0
+    pred_len = (pred_spans[..., 1] - pred_spans[..., 0]).clamp(min=0)
+    gt_len = (target_spans[..., 1] - target_spans[..., 0]).clamp(min=0)
+    overlap_start = torch.maximum(pred_spans[..., 0], target_spans[..., 0])
+    overlap_end = torch.minimum(pred_spans[..., 1], target_spans[..., 1])
+    overlap_len = (overlap_end - overlap_start).clamp(min=0)
+
+    overlap_sum = (overlap_len * mask).sum(dim=-1)
+    pred_sum = (pred_len * mask).sum(dim=-1)
+    gt_sum = (gt_len * mask).sum(dim=-1)
+    return overlap_sum, pred_sum, gt_sum
+
+
 class OverlapRatioCollection(torchmetrics.Metric):
     """
     Overlap precision and recall for token-level forced-alignment spans.
@@ -55,20 +86,22 @@ class OverlapRatioCollection(torchmetrics.Metric):
         return self.template.format(name)
 
     def update(self, pred_spans: Tensor, target_spans: Tensor, tokens: Tensor) -> None:
-        mask = tokens != 0
-        pred_spans_f = pred_spans.float()
-        target_spans_f = target_spans.float()
-        pred_len = (pred_spans_f[..., 1] - pred_spans_f[..., 0]).clamp(min=0)
-        gt_len = (target_spans_f[..., 1] - target_spans_f[..., 0]).clamp(min=0)
-        overlap_start = torch.maximum(pred_spans_f[..., 0], target_spans_f[..., 0])
-        overlap_end = torch.minimum(pred_spans_f[..., 1], target_spans_f[..., 1])
-        overlap_len = (overlap_end - overlap_start).clamp(min=0)
-
         if self.k is None:
-            self.overlap_sum += overlap_len[mask].sum()
-            self.pred_sum += pred_len[mask].sum()
-            self.gt_sum += gt_len[mask].sum()
+            overlap_sum, pred_sum, gt_sum = compute_overlap(
+                pred_spans, target_spans, tokens,
+            )
+            self.overlap_sum += overlap_sum.sum()
+            self.pred_sum += pred_sum.sum()
+            self.gt_sum += gt_sum.sum()
         else:
+            mask = tokens != 0
+            pred_spans_f = pred_spans.float()
+            target_spans_f = target_spans.float()
+            pred_len = (pred_spans_f[..., 1] - pred_spans_f[..., 0]).clamp(min=0)
+            gt_len = (target_spans_f[..., 1] - target_spans_f[..., 0]).clamp(min=0)
+            overlap_start = torch.maximum(pred_spans_f[..., 0], target_spans_f[..., 0])
+            overlap_end = torch.minimum(pred_spans_f[..., 1], target_spans_f[..., 1])
+            overlap_len = (overlap_end - overlap_start).clamp(min=0)
             valid_tokens = tokens[mask]
             self.overlap_sum.index_add_(0, valid_tokens, overlap_len[mask].float())
             self.pred_sum.index_add_(0, valid_tokens, pred_len[mask].float())

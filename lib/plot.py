@@ -227,15 +227,29 @@ def topk_bar_figure(
     return fig
 
 
-def metric_histogram_figure(values, label) -> "plt.Figure":
+def metric_histogram_figure(values, label, log_x: bool = False, log_x_min: float | None = None) -> "plt.Figure":
     """Single histogram with mean/median and percentile lines.
 
     values: 1-D array of metric values
     label: axis label and title
-    color: bar fill color
+    log_x: if True, use logarithmic x-axis
+    log_x_min: if log_x and provided, floor for the lower bin bound
+        (values below this are still included in the first bin)
     """
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.hist(values, bins=80, alpha=0.75, edgecolor="white", linewidth=0.3)
+    if log_x:
+        positive = values[values > 0]
+        if len(positive) > 0:
+            lo = float(np.percentile(positive, 1))
+            if log_x_min is not None:
+                lo = max(lo, log_x_min)
+            hi = float(values.max())
+            bins = np.logspace(np.log10(lo), np.log10(hi), 80)
+        else:
+            bins = 80
+    else:
+        bins = 80
+    ax.hist(values, bins=bins, alpha=0.75, edgecolor="white", linewidth=0.3)
     ax.set_title(label, fontsize=15)
     ax.set_xlabel(label, fontsize=12)
     ax.set_ylabel("Count", fontsize=12)
@@ -252,17 +266,21 @@ def metric_histogram_figure(values, label) -> "plt.Figure":
     ax.axvline(p5, color="seagreen", linestyle="-.", linewidth=1, label=f"keep95% >= {p5:.4f}")
     ax.axvline(p10, color="green", linestyle="-.", linewidth=1, label=f"keep90% >= {p10:.4f}")
 
+    if log_x:
+        ax.set_xscale("log")
     ax.legend(fontsize=10)
     fig.tight_layout()
     return fig
 
 
-def metric_scatter_figure(x, y, xlabel, ylabel, title) -> "plt.Figure":
+def metric_scatter_figure(x, y, xlabel, ylabel, title, log_y: bool = False, log_y_min: float | None = None) -> "plt.Figure":
     """Scatter plot with mean reference lines on both axes.
 
     x, y: 1-D arrays of equal length
     xlabel, ylabel: axis labels
     title: plot title
+    log_y: if True, use logarithmic y-axis
+    log_y_min: if log_y and provided, floor for the y-axis lower bound
     """
     fig, ax = plt.subplots(figsize=(10, 8))
     ax.scatter(x, y, alpha=0.8, s=4, edgecolors="none")
@@ -271,6 +289,12 @@ def metric_scatter_figure(x, y, xlabel, ylabel, title) -> "plt.Figure":
     ax.set_title(title, fontsize=15)
     ax.axhline(float(np.mean(y)), color="red", linestyle="--", linewidth=0.8, alpha=0.7, label="mean")
     ax.axvline(float(np.mean(x)), color="red", linestyle="--", linewidth=0.8, alpha=0.7)
+    if log_y:
+        ax.set_yscale("log")
+        if log_y_min is not None:
+            positive = y[y > 0]
+            lo = max(float(np.percentile(positive, 1)) if len(positive) > 0 else log_y_min, log_y_min)
+            ax.set_ylim(bottom=lo)
     ax.legend()
     fig.tight_layout()
     return fig
