@@ -194,6 +194,7 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
         tokens = batch["tokens"]  # [B, N_max]
 
         B = tokens.shape[0]
+        device = tokens.device
 
         onset_error, onset_count = compute_boundary_mae(
             spans_pred, spans_gt, tokens, "onset",
@@ -208,7 +209,8 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
         has_similarity = "similarity" in outputs
         if has_similarity:
             similarity = outputs["similarity"].float()  # [B, T_max, N_max]
-            device = similarity.device
+        else:
+            similarity = None
 
         has_indices = "indices" in batch
         has_identifiers = "identifier" in batch
