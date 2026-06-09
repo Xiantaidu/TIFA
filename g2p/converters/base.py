@@ -21,8 +21,8 @@ class G2PText:
     """Three-tier G2P output for one text token.
 
     ``text`` is the original token from the tokenizer.
-    ``words`` holds one or more pronunciation-script words, each with
-    its own phoneme alternatives.
+    ``words`` holds one or more pronunciation-script as word-level alternatives,
+    each word alternative holding its own phoneme-level alternatives.
     *language* is set by the pipeline to the tag (e.g. ``"cmn"``) that
     caused this converter to be selected.  Converters with no language
     registration leave it ``None``.

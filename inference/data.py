@@ -44,6 +44,48 @@ class _TokenWithWord:
         return hash(self.token)
 
 
+def _deduplicate_paths(paths: list[list[_TokenWithWord]]) -> list[list[_TokenWithWord]]:
+    seen: set[tuple[int, ...]] = set()
+    result: list[list[_TokenWithWord]] = []
+    for path in paths:
+        key = tuple(tw.token for tw in path)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
+
+
+def _merge_segment_run(
+        segments: list[list[list[_TokenWithWord]]],
+) -> list[list[_TokenWithWord]]:
+    merged: list[list[_TokenWithWord]] = [[]]
+    for sub_paths in segments:
+        merged = [prefix + path for prefix in merged for path in sub_paths]
+    return _deduplicate_paths(merged)
+
+
+def _merge_ambiguous_runs(
+        segments: list[list[list[_TokenWithWord]]],
+) -> list[list[list[_TokenWithWord]]]:
+    result: list[list[list[_TokenWithWord]]] = []
+    run: list[list[list[_TokenWithWord]]] = []
+
+    for sub_paths in segments:
+        if len(sub_paths) > 1:
+            run.append(sub_paths)
+            continue
+        if run:
+            result.append(_merge_segment_run(run))
+            run = []
+        result.append(sub_paths)
+
+    if run:
+        result.append(_merge_segment_run(run))
+
+    return result
+
+
 class AudioTextDataset(torch.utils.data.Dataset):
     """Pairs audio files with text files for forced alignment inference.
 
@@ -61,6 +103,7 @@ class AudioTextDataset(torch.utils.data.Dataset):
         audio_sample_rate: int,
         language: str | set[str] | None = None,
         oov_handling: Literal["raise", "skip", "force"] = "skip",
+        path_grid_unit: Literal["levenshtein", "word"] = "levenshtein",
     ):
         self.g2p_config = g2p_config
         self.g2p_root = g2p_root
@@ -73,6 +116,7 @@ class AudioTextDataset(torch.utils.data.Dataset):
             language = list(language)
         self.language = language
         self.oov_handling = oov_handling
+        self.path_grid_unit = path_grid_unit
 
         self.items: list[tuple[pathlib.Path, str]] = [
             (audio_path, identifier)
@@ -159,7 +203,19 @@ class AudioTextDataset(torch.utils.data.Dataset):
         if not encoded_groups:
             return _skip(identifier, "No valid token sequence")
 
-        all_segments = segment_groups(encoded_groups)
+        if self.path_grid_unit == "levenshtein":
+            all_segments = segment_groups(encoded_groups)
+        elif self.path_grid_unit == "word":
+            word_segments = [_deduplicate_paths(group_paths) for group_paths in encoded_groups]
+            all_segments = [
+                sub_paths for sub_paths in _merge_ambiguous_runs(word_segments)
+                if any(len(path) > 0 for path in sub_paths)
+            ]
+        else:
+            raise ValueError(f"Unknown grid unit: {self.path_grid_unit}")
+
+        if not all_segments:
+            return _skip(identifier, "No valid token sequence")
 
         N = sum(
             max(len(sp) for sp in sub_paths)

@@ -81,6 +81,11 @@ def shared_options(func):
             help="How to handle OOV phonemes: raise (error), skip (discard sample), force (drop OOV paths).",
         ),
         click.option(
+            "--score-unit", default="levenshtein",
+            type=click.Choice(["levenshtein", "word"]), show_default=True,
+            help="Pronunciation unit used for MLM scoring.",
+        ),
+        click.option(
             "--stat", is_flag=True,
             help="Save statistic plots and diagnosis JSON to <output-dir>/statistics/.",
         ),
@@ -120,6 +125,7 @@ def _run_inference(
     precision: str,
     topk: int,
     oov_handling: str,
+    score_unit: str,
     stat: bool = False,
     plot: bool = False,
 ):
@@ -162,6 +168,7 @@ def _run_inference(
         audio_sample_rate=backend.sample_rate,
         language=g2p_languages if g2p_languages else None,
         oov_handling=oov_handling,
+        path_grid_unit=score_unit,
     )
 
     callbacks = [
