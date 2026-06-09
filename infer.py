@@ -82,7 +82,7 @@ def shared_options(func):
         ),
         click.option(
             "--score-unit", default="levenshtein",
-            type=click.Choice(["levenshtein", "word"]), show_default=True,
+            type=click.Choice(["levenshtein", "word", "none"]), show_default=True,
             help="Pronunciation unit used for MLM scoring.",
         ),
         click.option(

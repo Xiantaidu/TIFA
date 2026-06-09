@@ -65,24 +65,27 @@ def _merge_segment_run(
     return _deduplicate_paths(merged)
 
 
-def _merge_ambiguous_runs(
+def _merge_score_unit_runs(
         segments: list[list[list[_TokenWithWord]]],
 ) -> list[list[list[_TokenWithWord]]]:
     result: list[list[list[_TokenWithWord]]] = []
     run: list[list[list[_TokenWithWord]]] = []
+    run_ambiguous = False
 
-    for sub_paths in segments:
-        if len(sub_paths) > 1:
-            run.append(sub_paths)
-            continue
+    def flush() -> None:
+        nonlocal run
         if run:
             result.append(_merge_segment_run(run))
             run = []
-        result.append(sub_paths)
 
-    if run:
-        result.append(_merge_segment_run(run))
+    for sub_paths in segments:
+        ambiguous = len(sub_paths) > 1
+        if run and ambiguous != run_ambiguous:
+            flush()
+        run.append(sub_paths)
+        run_ambiguous = ambiguous
 
+    flush()
     return result
 
 
@@ -103,7 +106,7 @@ class AudioTextDataset(torch.utils.data.Dataset):
         audio_sample_rate: int,
         language: str | set[str] | None = None,
         oov_handling: Literal["raise", "skip", "force"] = "skip",
-        path_grid_unit: Literal["levenshtein", "word"] = "levenshtein",
+        path_grid_unit: Literal["levenshtein", "word", "none"] = "levenshtein",
     ):
         self.g2p_config = g2p_config
         self.g2p_root = g2p_root
@@ -205,10 +208,14 @@ class AudioTextDataset(torch.utils.data.Dataset):
 
         if self.path_grid_unit == "levenshtein":
             all_segments = segment_groups(encoded_groups)
+        elif self.path_grid_unit == "none":
+            all_segments = [[[
+                tw for group_paths in encoded_groups for tw in group_paths[0]
+            ]]]
         elif self.path_grid_unit == "word":
             word_segments = [_deduplicate_paths(group_paths) for group_paths in encoded_groups]
             all_segments = [
-                sub_paths for sub_paths in _merge_ambiguous_runs(word_segments)
+                sub_paths for sub_paths in _merge_score_unit_runs(word_segments)
                 if any(len(path) > 0 for path in sub_paths)
             ]
         else:
