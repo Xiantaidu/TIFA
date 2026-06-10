@@ -65,6 +65,10 @@ def _merge_segment_run(
     return _deduplicate_paths(merged)
 
 
+def _is_equal_length(sub_paths: list[list[_TokenWithWord]]) -> bool:
+    return len({len(p) for p in sub_paths}) <= 1
+
+
 def _merge_score_unit_runs(
         segments: list[list[list[_TokenWithWord]]],
 ) -> list[list[list[_TokenWithWord]]]:
@@ -74,9 +78,21 @@ def _merge_score_unit_runs(
 
     def flush() -> None:
         nonlocal run
-        if run:
+        if not run:
+            return
+        if run_ambiguous:
+            first_unequal = next(
+                (i for i, sp in enumerate(run) if not _is_equal_length(sp)),
+                None,
+            )
+            if first_unequal is None:
+                result.extend(run)
+            else:
+                result.extend(run[:first_unequal])
+                result.append(_merge_segment_run(run[first_unequal:]))
+        else:
             result.append(_merge_segment_run(run))
-            run = []
+        run = []
 
     for sub_paths in segments:
         ambiguous = len(sub_paths) > 1
