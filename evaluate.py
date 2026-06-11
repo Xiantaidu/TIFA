@@ -115,6 +115,17 @@ def shared_metric_options(func=None, *, unit="ms"):
             help="Neighborhood half-width in tokens for Determinacy metric."
                  "  set to negative for unlimited (all tokens).",
         ),
+        click.option(
+            "--monotonicity-power", default=2.0, show_default=True,
+            type=float,
+            help="Activation power for Monotonicity metric.",
+        ),
+        click.option(
+            "--monotonicity-width", default=-1, show_default=True,
+            type=int,
+            help="Neighborhood half-width in tokens for Monotonicity metric."
+                 "  set to negative for unlimited (global monotonicity).",
+        ),
     ]
 
     def decorator(f):
@@ -173,9 +184,13 @@ def _run_online_evaluation(
     plot: bool,
     determinacy_power: float = 2.0,
     determinacy_width: int = 5,
+    monotonicity_power: float = 2.0,
+    monotonicity_width: int = -1,
 ):
     if determinacy_width < 0:
         determinacy_width = None
+    if monotonicity_width < 0:
+        monotonicity_width = None
 
     from lightning_utilities.core.rank_zero import rank_zero_info
 
@@ -221,11 +236,15 @@ def _run_online_evaluation(
             pair_topk=pair_topk,
             determinacy_power=determinacy_power,
             determinacy_width=determinacy_width,
+            monotonicity_power=monotonicity_power,
+            monotonicity_width=monotonicity_width,
         ),
         StatisticsCallback(
             save_dir=output_dir / "statistics",
             determinacy_power=determinacy_power,
             determinacy_width=determinacy_width,
+            monotonicity_power=monotonicity_power,
+            monotonicity_width=monotonicity_width,
             identifiers=item_paths,
         ),
     ]

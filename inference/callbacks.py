@@ -24,12 +24,14 @@ from modules.metrics import (
     BoundaryErrorRate,
     BoundaryMAE,
     Confidence,
+    Determinacy,
+    Monotonicity,
     OverlapRatioCollection,
     PairConjunctionMAE,
-    PathDeterminacy,
     compute_boundary_mae,
     compute_confidence,
     compute_determinacy,
+    compute_monotonicity,
     compute_overlap,
 )
 
@@ -169,6 +171,8 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
             save_dir: pathlib.Path,
             determinacy_power: float = 2.0,
             determinacy_width: int | None = 5,
+            monotonicity_power: float = 2.0,
+            monotonicity_width: int | None = None,
             identifiers: list[str] | None = None,
             unit_factor: float = 1.0,
     ):
@@ -176,6 +180,8 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
         self.save_dir = pathlib.Path(save_dir)
         self.power = determinacy_power
         self.width = determinacy_width
+        self.monotonicity_power = monotonicity_power
+        self.monotonicity_width = monotonicity_width
         self._identifiers = identifiers
         self._unit_factor = unit_factor
         self._records: list[dict] = []
@@ -256,6 +262,12 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
                     )
                     record["determinacy"] = (num / (denom + 1e-8)).item()
 
+                    record["monotonicity"] = compute_monotonicity(
+                        span_i, sim_i, t_mask, n_mask,
+                        power=self.monotonicity_power,
+                        width=self.monotonicity_width,
+                    ).item()
+
             self._records.append(record)
 
     def on_predict_batch_end(
@@ -304,10 +316,20 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
             )
             determinacy = (num / (denom + 1e-8)).item()
 
+            monotonicity = compute_monotonicity(
+                spans_frames,
+                similarity[:T_i, :N_i],
+                t_mask,
+                n_mask,
+                power=self.monotonicity_power,
+                width=self.monotonicity_width,
+            ).item()
+
             self._records.append({
                 "identifier": result["identifier"],
                 "confidence": confidence,
                 "determinacy": determinacy,
+                "monotonicity": monotonicity,
                 "num_frames": T_i,
                 "num_tokens": N_i,
             })
@@ -359,6 +381,7 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
                 ("overlap_recall", True),
                 ("confidence", True),
                 ("determinacy", True),
+                ("monotonicity", True),
             ]
             available = [
                 (key, asc) for key, asc in _METRIC_DIRECTIONS
@@ -394,7 +417,7 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
         for key in (
             "b_mae_onset", "b_mae_offset",
             "overlap_precision", "overlap_recall",
-            "confidence", "determinacy",
+            "confidence", "determinacy", "monotonicity",
         ):
             if key in records[0]:
                 plot_keys.append(key)
@@ -453,6 +476,8 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
             pair_topk: list[int] | None = None,
             determinacy_power: float = 2.0,
             determinacy_width: int | None = 5,
+            monotonicity_power: float = 2.0,
+            monotonicity_width: int | None = None,
     ):
         super().__init__()
         if unit == "frame":
@@ -470,6 +495,8 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
         self._similarity_seen = False
         self.determinacy_power = determinacy_power
         self.determinacy_width = determinacy_width
+        self.monotonicity_power = monotonicity_power
+        self.monotonicity_width = monotonicity_width
         self._results: dict | None = None
 
         metrics: dict[str, nn.Module] = {}
@@ -498,8 +525,11 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
                 vocab_size=self._vocab.vocab_size, k=k,
             )
         self.confidence = Confidence()
-        self.determinacy = PathDeterminacy(
+        self.determinacy = Determinacy(
             power=determinacy_power, width=determinacy_width,
+        )
+        self.monotonicity = Monotonicity(
+            power=monotonicity_power, width=monotonicity_width,
         )
         self.metrics = nn.ModuleDict(metrics)
 
@@ -512,6 +542,7 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
         self.metrics.to(trainer.strategy.root_device)
         self.confidence.to(trainer.strategy.root_device)
         self.determinacy.to(trainer.strategy.root_device)
+        self.monotonicity.to(trainer.strategy.root_device)
 
     def on_test_batch_end(
             self,
@@ -539,6 +570,12 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
                 n_mask,
             )
             self.determinacy.update(
+                outputs["spans"],
+                outputs["similarity"],
+                t_mask,
+                n_mask,
+            )
+            self.monotonicity.update(
                 outputs["spans"],
                 outputs["similarity"],
                 t_mask,
@@ -714,6 +751,15 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
             metrics_list.append({
                 "name": "Determinacy",
                 "variants": det_variants,
+            })
+
+            mono_variants = [{
+                "arguments": {"power": self.monotonicity_power, "width": self.monotonicity_width},
+                "value": float(self.monotonicity.compute().item()),
+            }]
+            metrics_list.append({
+                "name": "Monotonicity",
+                "variants": mono_variants,
             })
 
         return {"metrics": metrics_list}

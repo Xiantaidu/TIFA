@@ -19,9 +19,10 @@ from modules.metrics import (
     BoundaryErrorRate,
     BoundaryMAE,
     Confidence,
+    Determinacy,
+    Monotonicity,
     PairConjunctionMAE,
     OverlapRatioCollection,
-    PathDeterminacy,
     PhonemeErrorRate,
 )
 from training.data import (
@@ -48,6 +49,7 @@ _OVERLAP = "Overlap"
 _CONJ_MAE = "Conj-MAE"
 _CONFIDENCE = "Confidence"
 _DETERMINACY = "Determinacy"
+_MONOTONICITY = "Monotonicity"
 _PHONEME_ERROR_RATE = "PER"
 
 
@@ -172,7 +174,14 @@ class ForcedAlignmentModule(BaseLightningModule):
         det_width = self.training_config.validation.metrics_determinacy_width
         self.register_metric(
             f"{_DETERMINACY}{postfix}",
-            PathDeterminacy(power=det_power, width=det_width),
+            Determinacy(power=det_power, width=det_width),
+        )
+        # Monotonicity
+        mono_power = self.training_config.validation.metrics_monotonicity_power
+        mono_width = self.training_config.validation.metrics_monotonicity_width
+        self.register_metric(
+            f"{_MONOTONICITY}{postfix}",
+            Monotonicity(power=mono_power, width=mono_width),
         )
 
     def _update_fa_metrics(
@@ -317,6 +326,9 @@ class ForcedAlignmentModule(BaseLightningModule):
             self.metrics[_DETERMINACY].update(
                 pred_spans, similarity, t_mask_fa, n_mask_fa,
             )
+            self.metrics[_MONOTONICITY].update(
+                pred_spans, similarity, t_mask_fa, n_mask_fa,
+            )
 
             if self.use_parallel_dirty_metrics and "spectrogram_dirty" in main_sample:
                 xf_d, _, tf_d, _ = self.model(
@@ -331,6 +343,9 @@ class ForcedAlignmentModule(BaseLightningModule):
                     pred_spans_dirty, sim_dirty, t_mask_fa, n_mask_fa,
                 )
                 self.metrics[f"{_DETERMINACY}_dirty"].update(
+                    pred_spans_dirty, sim_dirty, t_mask_fa, n_mask_fa,
+                )
+                self.metrics[f"{_MONOTONICITY}_dirty"].update(
                     pred_spans_dirty, sim_dirty, t_mask_fa, n_mask_fa,
                 )
 

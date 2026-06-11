@@ -8,8 +8,10 @@ from .conjunction import PairConjunctionMAE
 from .overlap import OverlapRatioCollection, compute_overlap
 from .reference_free import (
     Confidence,
-    PathDeterminacy,
+    Determinacy,
+    Monotonicity,
     compute_confidence,
     compute_determinacy,
+    compute_monotonicity,
 )
 from .token import PhonemeErrorRate

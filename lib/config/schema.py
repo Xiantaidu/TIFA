@@ -539,6 +539,8 @@ class ValidationConfig(ConfigBaseModel):
     metrics_conjunction_k_values: list[int] = Field([5, 20])
     metrics_determinacy_power: float = Field(2.0, ge=0)
     metrics_determinacy_width: int | None = Field(5, ge=0)
+    metrics_monotonicity_power: float = Field(2.0, ge=0)
+    metrics_monotonicity_width: int | None = Field(None, ge=0)
 
 
 class FinetuningConfig(ConfigBaseModel):
