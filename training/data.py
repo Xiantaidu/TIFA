@@ -110,6 +110,7 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
         self._n_original = len(self.info["lengths"])
         self._group_indices: list[list[int]] | None = None
         self._group_epoch: int = 0
+        self._chain_epoch: int = -1
         self._setup()
         if self.max_concat_size is not None or self.max_concat_frames is not None:
             self._form_groups(0)
@@ -121,11 +122,15 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
             if self._group_epoch != current_epoch:
                 self._form_groups(current_epoch)
                 self._group_epoch = current_epoch
+            if self._should_rebuild_chains(current_epoch):
+                self._build_chains(current_epoch)
             samples = [self._get_single_item(i) for i in self._group_indices[index]]
             result = self.concat_samples(samples)
             result["_idx"] = torch.tensor(index, dtype=torch.long)
             result["_augmentation"] = {}
             return result
+        if self._should_rebuild_chains(self.epoch.value):
+            self._build_chains(self.epoch.value)
         return self._get_single_item(index)
 
     def __len__(self):
@@ -139,7 +144,7 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
             self._form_groups(epoch)
             self._group_epoch = epoch
         if self.augmentation_config is not None and not self.augmentation_deterministic:
-            self._build_chains(numpy.random.default_rng())
+            self._build_chains(epoch)
 
     def num_frames(self, index: int) -> int:
         if self._group_indices is not None:
@@ -194,8 +199,7 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
             return
 
         if self.augmentation_deterministic:
-            seed = generate_seed(sorted(self.info.keys()))
-            self._build_chains(numpy.random.default_rng(seed))
+            self._build_chains(0)
 
     def _form_groups(self, epoch: int) -> None:
         seed = 42 if self.concat_deterministic else 42 + epoch
@@ -234,7 +238,12 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
 
         self._group_indices = groups
 
-    def _build_chains(self, generator: numpy.random.Generator):
+    def _build_chains(self, epoch: int) -> None:
+        if self.augmentation_deterministic:
+            seed = generate_seed(sorted(self.info.keys()))
+            generator = numpy.random.default_rng(seed)
+        else:
+            generator = numpy.random.default_rng()
         self.augmentation_chains.clear()
         for index in range(self._n_original):
             self.augmentation_chains[index] = build_augmentation_chain(
@@ -242,6 +251,14 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
                 mel_spectrogram=self.mel_spectrogram,
                 generator=generator,
             )
+        self._chain_epoch = epoch
+
+    def _should_rebuild_chains(self, epoch: int) -> bool:
+        return (
+            self.augmentation_config is not None
+            and not self.augmentation_deterministic
+            and self._chain_epoch != epoch
+        )
 
     def _get_single_item(self, index):
         sample = self.data[index]
