@@ -195,18 +195,14 @@ def _run_online_evaluation(
     from lightning_utilities.core.rank_zero import rank_zero_info
 
     from inference.api import (
-        load_config_for_inference,
         load_inference_model,
         run_inference,
     )
     from inference.callbacks import StatisticsCallback, EvaluationMetricsCallback, VisualizeAlignmentCallback
     from training.data import PhonemeTimingDataset
 
-    backend, vocabulary, _ = load_inference_model(model, scope=scope)
+    backend, vocabulary, inference_config = load_inference_model(model, scope=scope)
 
-    _, inference_config = load_config_for_inference(
-        model.parent / "config.yaml", scope=scope,
-    )
     _check_file_and_config(
         dataset / "feature.yaml", inference_config.features.model_dump()
     )

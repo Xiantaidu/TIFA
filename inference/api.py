@@ -82,8 +82,8 @@ def load_inference_model(
     checkpoint_path: str | pathlib.Path,
     scope: int = 0,
     topk: int = 10,
-) -> tuple[InferenceBackend, Vocabulary, G2PPipelineConfig | None]:
-    """Load an InferenceBackend, vocabulary, and G2P configuration.
+) -> tuple[InferenceBackend, Vocabulary, InferenceConfig]:
+    """Load an InferenceBackend, vocabulary, and inference configuration.
 
     Args:
         checkpoint_path: Path to the .ckpt file.
@@ -91,7 +91,7 @@ def load_inference_model(
         topk: Number of top cosine-similarity frames per token for scoring.
 
     Returns:
-        (backend, vocabulary, g2p_config) — g2p_config may be None.
+        (backend, vocabulary, inference_config)
     """
     checkpoint_path = pathlib.Path(checkpoint_path)
     config_path = checkpoint_path.parent / "config.yaml"
@@ -99,8 +99,6 @@ def load_inference_model(
     model_config, inference_config = load_config_for_inference(
         config_path, scope=scope,
     )
-
-    g2p_config = inference_config.g2p
 
     # Build backend
     arch = model_config.arch
@@ -130,7 +128,7 @@ def load_inference_model(
         f"Loaded model from '{checkpoint_path}'.", callback=rank_zero_info,
     )
 
-    return backend, vocabulary, g2p_config
+    return backend, vocabulary, inference_config
 
 
 def run_inference(

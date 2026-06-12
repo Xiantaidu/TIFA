@@ -144,12 +144,13 @@ def _run_inference(
         output_dir = path if path.is_dir() else path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    backend, vocabulary, g2p_config = load_inference_model(
+    backend, vocabulary, inference_config = load_inference_model(
         model,
         scope=scope,
         topk=topk,
     )
 
+    g2p_config = inference_config.g2p
     if g2p is not None:
         g2p_config = load_g2p_config(g2p, scope=scope)
         g2p_root = g2p.parent if g2p.resolve().is_relative_to(model.parent.resolve()) else ""
