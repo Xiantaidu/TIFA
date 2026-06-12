@@ -81,14 +81,12 @@ _ARCH_BACKEND_MAP: dict[str, type[InferenceBackend]] = {
 def load_inference_model(
     checkpoint_path: str | pathlib.Path,
     scope: int = 0,
-    topk: int = 10,
 ) -> tuple[InferenceBackend, Vocabulary, InferenceConfig]:
     """Load an InferenceBackend, vocabulary, and inference configuration.
 
     Args:
         checkpoint_path: Path to the .ckpt file.
         scope: ConfigurationScope value.
-        topk: Number of top cosine-similarity frames per token for scoring.
 
     Returns:
         (backend, vocabulary, inference_config)
@@ -117,7 +115,7 @@ def load_inference_model(
         )
     vocabulary = Vocabulary.from_file(vocab_path)
 
-    backend = backend_cls(model_config, inference_config, topk=topk)
+    backend = backend_cls(model_config, inference_config)
 
     # Load state dict
     state_dict = load_state_dict_for_inference(checkpoint_path, ema=True)

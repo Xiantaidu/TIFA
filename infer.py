@@ -123,7 +123,6 @@ def _run_inference(
     batch_size: int,
     num_workers: int,
     precision: str,
-    topk: int,
     oov_handling: str,
     score_unit: str,
     stat: bool = False,
@@ -147,7 +146,6 @@ def _run_inference(
     backend, vocabulary, inference_config = load_inference_model(
         model,
         scope=scope,
-        topk=topk,
     )
 
     g2p_config = inference_config.g2p
@@ -208,10 +206,6 @@ def main():
     type=click.Path(exists=True, dir_okay=True, file_okay=True, path_type=pathlib.Path),
 )
 @shared_options
-@click.option(
-    "--topk", default=10, type=int, show_default=True,
-    help="Number of top cosine-similarity frames per token for scoring.",
-)
 def supervised(**kwargs):
     """Supervised forced alignment inference."""
     _run_inference(ConfigurationScope.FA, **kwargs)

@@ -82,14 +82,8 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
             max_concat_frames: int | None = None,
             concat_dynamic_size: bool = True,
             concat_deterministic: bool = False,
-            return_waveform: bool = False,
     ):
         super().__init__()
-        if return_waveform and augmentation_config is not None:
-            raise ValueError(
-                "return_waveform is incompatible with augmentations: "
-                "spectrogram-domain transforms cannot be reversed to waveform."
-            )
         self.info = {
             k: v
             for k, v in numpy.load(data_dir / f"{prefix}.info.npz").items()
@@ -106,7 +100,6 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
         self.max_concat_frames = max_concat_frames
         self.concat_dynamic_size = concat_dynamic_size
         self.concat_deterministic = concat_deterministic
-        self.return_waveform = return_waveform
         self._n_original = len(self.info["lengths"])
         self._group_indices: list[list[int]] | None = None
         self._group_epoch: int = 0
@@ -302,11 +295,6 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
                 ).view(-1)
             sample["f0"] = f0_val
 
-        if self.return_waveform:
-            sample["waveform"] = torch.from_numpy(waveform).float()
-            sample["duration"] = torch.tensor(
-                waveform.shape[0] / self.sample_rate, dtype=torch.float32,
-            )
         return {
             "_idx": torch.tensor(index, dtype=torch.long),
             "_augmentation": augmentation,
@@ -520,9 +508,6 @@ class PhonemeTimingDataset(BaseDataset):
             result["spectrogram_dirty"] = torch.cat([s["spectrogram_dirty"] for s in processed], dim=0)
         if "f0" in processed[0]:
             result["f0"] = torch.cat([s["f0"] for s in processed], dim=0)
-        if "waveform" in processed[0]:
-            result["waveform"] = torch.cat([s["waveform"] for s in processed], dim=0)
-            result["duration"] = torch.stack([s["duration"] for s in processed]).sum()
         return result
 
 
@@ -598,9 +583,6 @@ class TextOnlyDataset(BaseDataset):
         }
         if "f0" in processed[0]:
             result["f0"] = torch.cat([s["f0"] for s in processed], dim=0)
-        if "waveform" in processed[0]:
-            result["waveform"] = torch.cat([s["waveform"] for s in processed], dim=0)
-            result["duration"] = torch.stack([s["duration"] for s in processed]).sum()
         return result
 
 

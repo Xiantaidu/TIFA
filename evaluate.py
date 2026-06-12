@@ -215,7 +215,6 @@ def _run_online_evaluation(
         concat_deterministic=concat_deterministic,
         concat_dynamic_size=False,
         augmentation_config=None,
-        return_waveform=True,
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
