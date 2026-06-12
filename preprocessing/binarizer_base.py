@@ -170,10 +170,14 @@ class BaseBinarizer(abc.ABC):
         return metadata_list
 
     def build_vocabulary(self, metadata_list: list[MetadataItem]):
+        prebuilt = None
+        if self.config.vocabulary.prebuilt_vocab_file is not None:
+            prebuilt = Vocabulary.from_file(self.config.vocabulary.prebuilt_vocab_file)
         vocab_builder = VocabularyBuilder(
             global_symbols=self.config.vocabulary.global_symbols,
             stop_symbols=self.config.vocabulary.stop_symbols,
             merged_groups=self.config.vocabulary.merged_groups,
+            prebuilt_vocab=prebuilt,
         )
         for item in metadata_list:
             vocab_builder.add(item.raw_symbols, default_language=item.language)

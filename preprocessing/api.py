@@ -29,10 +29,14 @@ def load_config_for_binarization(
 
 
 def build_shared_vocab(vocab_config, metadata_list) -> tuple[Vocabulary, Mapping, VocabularyBuilder]:
+    prebuilt = None
+    if vocab_config.prebuilt_vocab_file is not None:
+        prebuilt = Vocabulary.from_file(vocab_config.prebuilt_vocab_file)
     builder = VocabularyBuilder(
         global_symbols=vocab_config.global_symbols,
         stop_symbols=vocab_config.stop_symbols,
         merged_groups=vocab_config.merged_groups,
+        prebuilt_vocab=prebuilt,
     )
     for item in metadata_list:
         builder.add(item.raw_symbols, default_language=item.language)

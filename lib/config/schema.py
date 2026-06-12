@@ -67,6 +67,7 @@ class RequiredOnGivenScope(DynamicCheck):
 
 
 class VocabularyConfig(ConfigBaseModel):
+    prebuilt_vocab_file: str | None = Field(default=None)
     global_symbols: list[str] = Field(default_factory=list)
     stop_symbols: list[str] = Field(default_factory=list)
     merged_groups: list[list[str]] = Field(default_factory=list)
@@ -123,7 +124,7 @@ class BinarizerConfig(ConfigBaseModel):
     })
     g2p: G2PPipelineConfig | None = Field(None)
     vocabulary: VocabularyConfig = Field(default_factory=VocabularyConfig)
-    validation_count: int = Field(20, gt=0)
+    validation_count: int = Field(20)#, gt=0)
     num_workers: int = Field(0, ge=0)
     features: BinarizerFeaturesConfig = Field(...)
 

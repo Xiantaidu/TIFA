@@ -25,11 +25,15 @@ class VocabularyBuilder:
             global_symbols: Iterable[str] = (),
             stop_symbols: Iterable[str] = (),
             merged_groups: Iterable[Iterable[str]] | None = None,
+            prebuilt_vocab: "Vocabulary | None" = None,
     ):
         self.global_symbols = frozenset(global_symbols)
         self.stop_symbols = frozenset(stop_symbols)
         self.merged_groups = [list(g) for g in (merged_groups or ())]
+        self.prebuilt_vocab = prebuilt_vocab
         self._symbol_counts: dict[str, int] = {}
+        if prebuilt_vocab is not None:
+            self._symbol_counts.update({s: 0 for s in prebuilt_vocab.symbol_to_id})
 
     def add(self, symbols: Iterable[str], default_language: str) -> None:
         for s in symbols:
@@ -45,6 +49,11 @@ class VocabularyBuilder:
         return MappingProxyType(self._symbol_counts)
 
     def build(self) -> "Vocabulary":
+        if self.prebuilt_vocab is not None:
+            return self._build_from_prebuilt()
+        return self._build_from_scratch()
+
+    def _build_from_scratch(self) -> "Vocabulary":
         observed = set(self._symbol_counts.keys())
         for i, members in enumerate(self.merged_groups):
             members = [str(s) for s in members]
@@ -79,6 +88,54 @@ class VocabularyBuilder:
 
         return Vocabulary(symbol_to_id=symbol_to_id)
 
+    def _build_from_prebuilt(self) -> "Vocabulary":
+        symbol_to_id = self.prebuilt_vocab.symbol_to_id
+        observed = set(self._symbol_counts.keys())
+
+        # Validate merged groups: stop symbols are still forbidden
+        for i, members in enumerate(self.merged_groups):
+            members = [str(s) for s in members]
+            for s in members:
+                if s in self.stop_symbols:
+                    raise ValueError(
+                        f"Stop symbol '{s}' cannot be a member of merged group {i}.")
+
+        # Collect all symbols involved: new observations plus all merged
+        # group members (including pre-built ones, to connect components).
+        new_symbols = {s for s in observed if s not in symbol_to_id}
+        all_symbols = new_symbols.copy()
+        for members in self.merged_groups:
+            for s in members:
+                s = str(s)
+                if s not in self.stop_symbols:
+                    all_symbols.add(s)
+
+        if not all_symbols:
+            return Vocabulary(symbol_to_id=symbol_to_id)
+
+        groups = _disjoint_sets(
+            all_symbols,
+            ([str(s) for s in members if str(s) not in self.stop_symbols]
+             for members in self.merged_groups),
+        )
+        groups.sort(key=lambda g: g[0])
+
+        prebuilt_ids = list(symbol_to_id.values())
+        next_id = max(prebuilt_ids) + 1 if prebuilt_ids else NUM_RESERVED_TOKENS
+
+        for group in groups:
+            prebuilt_in_group = [symbol_to_id[s] for s in group if s in symbol_to_id]
+            if prebuilt_in_group:
+                target = min(prebuilt_in_group)
+            else:
+                target = next_id
+                next_id += 1
+            for s in group:
+                if s not in symbol_to_id:
+                    symbol_to_id[s] = target
+
+        return Vocabulary(symbol_to_id=symbol_to_id)
+
 
 class Vocabulary:
     def __init__(
@@ -93,6 +150,10 @@ class Vocabulary:
         self._id_to_symbols: dict[int, tuple[str, ...]] = {
             idx: tuple(syms) for idx, syms in id_to_symbols.items()
         }
+
+    @property
+    def symbol_to_id(self) -> dict[str, int]:
+        return dict(self._symbol_to_id)
 
     @property
     def vocab_size(self) -> int:
