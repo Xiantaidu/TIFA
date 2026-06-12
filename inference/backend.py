@@ -1,6 +1,7 @@
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Literal
 
 import torch
 import torch.nn.functional as F
@@ -34,7 +35,7 @@ class ScoreResult:
 @dataclass
 class AlignResult:
     """Output of forced alignment decoding."""
-    spans: Tensor  # [B, N, 2] seconds
+    spans: Tensor  # [B, N, 2] in the requested unit (seconds or frames)
     similarity: Tensor  # [B, T, N] cross cosine similarity
 
 
@@ -102,6 +103,7 @@ class InferenceBackend(ABC):
             *,
             tokens: Tensor,
             groups: Tensor | None = None,
+            unit: Literal["frame", "second"] = "second",
     ) -> AlignResult:
         """Produce forced alignment for a token sequence.
 
@@ -109,9 +111,11 @@ class InferenceBackend(ABC):
             spec: SpectrogramContext.
             tokens: ``[B, N]`` int64 phoneme token IDs, 0-padded.
             groups: ``[B, N]`` int64 group IDs or None (each token = own group).
+            unit: ``"second"`` returns spans in seconds (default);
+                ``"frame"`` returns spans as frame indices.
 
         Returns:
-            AlignResult with spans in seconds and similarity matrix.
+            AlignResult with spans in the requested unit and similarity matrix.
         """
 
 
@@ -271,6 +275,7 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
             *,
             tokens: Tensor,
             groups: Tensor | None = None,
+            unit: Literal["frame", "second"] = "second",
     ) -> AlignResult:
         n_mask = tokens != 0
         frame_features, _, token_features, _ = self.model(
@@ -282,8 +287,10 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
         spans = decode_alignment_flat(
             similarity, frame_lengths, token_lengths, groups=groups,
         )
+        if unit == "second":
+            spans = spans.float() * self.timestep
         return AlignResult(
-            spans=spans.float() * self.timestep,
+            spans=spans,
             similarity=similarity,
         )
 
@@ -332,5 +339,5 @@ class ForcedAlignmentSSLInferenceModel(nn.Module, InferenceBackend):
     def score(self, spec, paths, groups, segments, widths):
         raise NotImplementedError("SSL inference not yet implemented")
 
-    def align(self, spec, tokens, groups=None):
+    def align(self, spec, tokens, groups=None, unit: Literal["frame", "second"] = "second"):
         raise NotImplementedError("SSL inference not yet implemented")

@@ -198,7 +198,7 @@ def _run_online_evaluation(
         load_inference_model,
         run_inference,
     )
-    from inference.callbacks import StatisticsCallback, EvaluationMetricsCallback, VisualizeAlignmentCallback
+    from inference.callbacks import StatisticsCallback, EvaluationMetricsCallback, SavePlotCallback
     from training.data import PhonemeTimingDataset
 
     backend, vocabulary, inference_config = load_inference_model(model, scope=scope)
@@ -245,9 +245,9 @@ def _run_online_evaluation(
     ]
     if plot:
         callbacks.append(
-            VisualizeAlignmentCallback(
+            SavePlotCallback(
+                output_dir=output_dir / "plots",
                 vocab=vocabulary,
-                save_dir=output_dir / "plots",
                 identifiers=item_paths,
             )
         )

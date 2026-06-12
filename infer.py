@@ -174,6 +174,7 @@ def _run_inference(
         SaveTextGridCallback(
             output_dir=output_dir,
             language=language,
+            timestep=backend.timestep,
         ),
     ]
 

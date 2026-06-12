@@ -35,7 +35,7 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         scored = self.backend.score(spec, paths=paths, groups=groups, segments=segments, widths=widths)
 
         # ---- Align ----
-        result = self.backend.align(spec, tokens=scored.tokens, groups=scored.groups)
+        result = self.backend.align(spec, tokens=scored.tokens, groups=scored.groups, unit="frame")
 
         # ---- Assemble per-item results ----
         results = []
@@ -54,13 +54,14 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
 
             results.append({
                 "identifier": identifier,
-                "duration": T_i * self.backend.timestep,
+                "duration": T_i,
                 "spans": spans_i,
                 "tokens": tokens_i,
                 "groups": groups_i,
                 "similarity": sim_i,
                 "phonemes": phs,
                 "lexicon": lexicon[i],
+                "spectrogram": spec.features[i, :T_i],
             })
 
         return results
@@ -79,10 +80,8 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
 
         mask = torch.arange(T, device=device).unsqueeze(0) < batch["T"].unsqueeze(1)
         spec = SpectrogramContext(features=spectrogram, mask=mask)
-        result = self.backend.align(spec, tokens=tokens)
-
-        spans_pred = result.spans / self.backend.timestep  # seconds to frames
-        return {"spans": spans_pred, "similarity": result.similarity}
+        result = self.backend.align(spec, tokens=tokens, unit="frame")
+        return {"spans": result.spans, "similarity": result.similarity}
 
 
 class OfflineEvaluationModule(pl.LightningModule):

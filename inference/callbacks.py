@@ -42,16 +42,21 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
     Tiers:
     - words: intervals from decoded spans, labels from G2P output
     - phones: intervals from decoded spans, labels from G2P output
+
+    Expects spans and duration in frames; converts to seconds via
+    ``timestep``.
     """
 
     def __init__(
             self,
             output_dir: str | pathlib.Path,
             language: str | None = None,
+            timestep: float = 1.0,
     ):
         super().__init__()
         self.output_dir = pathlib.Path(output_dir)
         self.language = language
+        self.timestep = timestep
 
     def on_predict_batch_end(
             self,
@@ -61,19 +66,19 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
             batch: dict[str, Any],
             *args, **kwargs,
     ) -> None:
+        timestep = self.timestep
         for result in outputs:
             identifier = result["identifier"]
             groups = result["groups"].tolist()  # [int, ...] 1-based G2PText index
-            spans = result["spans"].tolist()  # [[onset, offset], ...]
+            spans = (result["spans"].float() * timestep).tolist()  # frames -> seconds
             phonemes = result["phonemes"]  # [str, ...]
             lexicon = result["lexicon"]  # list[dict[str, list[list[str]]]]
-
             N = len(spans)
             if N == 0:
                 continue
 
             # Step 1: round to 3 decimals
-            total_duration = round(result["duration"], 3)
+            total_duration = round(result["duration"] * timestep, 3)
             for s in spans:
                 s[0] = round(s[0], 3)
                 s[1] = round(s[1], 3)
@@ -161,11 +166,26 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
 
 
 class SavePlotCallback(lightning.pytorch.callbacks.Callback):
-    """Saves per-sample cross-similarity plots during inference."""
+    """Saves per-sample similarity and alignment plots.
 
-    def __init__(self, output_dir: pathlib.Path):
+    In predict mode: similarity + pred-only alignment plots, using
+    phoneme labels from G2P output.
+
+    In test mode: similarity + alignment with GT overlay, using
+    vocab-decoded token labels.
+    """
+
+    def __init__(
+            self,
+            output_dir: pathlib.Path,
+            vocab: "Vocabulary" = None,
+            identifiers: list = None,
+    ):
         super().__init__()
         self.output_dir = pathlib.Path(output_dir)
+        self.vocab = vocab
+        self._num_digits = len(str(len(identifiers))) if identifiers else 0
+        self._identifiers = identifiers
 
     def on_predict_batch_end(
             self,
@@ -179,16 +199,93 @@ class SavePlotCallback(lightning.pytorch.callbacks.Callback):
             sim = result["similarity"]  # [T_i, N_i]
             identifier = result["identifier"]
             phonemes = result.get("phonemes")
-            fig = emission_to_figure(
+            N_i = sim.shape[1]
+
+            # Similarity plot
+            fig_sim = emission_to_figure(
                 sim.T.float().detach().cpu().numpy(),
                 regions=None,
                 title=identifier,
                 token_labels=phonemes,
             )
-            output_path = self.output_dir / f"{identifier}_sim.jpg"
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            fig.savefig(output_path)
-            plt.close(fig)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            fig_sim.savefig(self.output_dir / f"{identifier}_sim.jpg")
+            plt.close(fig_sim)
+
+            # Alignment plot (pred-only, no GT)
+            spec = result.get("spectrogram")
+            spans = result["spans"]  # [N_i, 2] in frames
+            T_i = sim.shape[0]
+            if spec is not None and T_i > 0 and N_i > 0:
+                fig_align = alignment_to_figure(
+                    spec.detach().cpu().numpy(),
+                    token_labels=phonemes[:N_i] if phonemes else None,
+                    pred_spans=spans.detach().cpu().numpy(),
+                    title=identifier,
+                )
+                fig_align.savefig(self.output_dir / f"{identifier}_align.jpg")
+                plt.close(fig_align)
+
+    def on_test_batch_end(
+            self,
+            trainer: lightning.pytorch.Trainer,
+            pl_module: lightning.pytorch.LightningModule,
+            outputs: dict,
+            batch: dict,
+            *args, **kwargs,
+    ) -> None:
+        spectrogram = batch["spectrogram"]
+        similarity = outputs["similarity"]
+        regions = batch["regions"]
+        tokens = batch["tokens"]
+        spans_gt = batch["spans"]
+        spans_pred = outputs["spans"]
+        indices = batch["indices"]
+        T_all = batch["T"]
+        N_all = batch["N"]
+
+        B = indices.shape[0]
+        for i in range(B):
+            T_i = int(T_all[i].item())
+            N_i = int(N_all[i].item())
+            if T_i == 0 or N_i == 0:
+                continue
+
+            data_idx = int(indices[i].item())
+            token_ids = tokens[i, :N_i].tolist()
+            token_labels = [
+                self.vocab.decode(int(tid), stringfy=True) or str(tid)
+                for tid in token_ids
+            ]
+
+            item_path = self._identifiers[data_idx]
+            name = str(data_idx).zfill(self._num_digits)
+
+            # Similarity plot
+            sim = similarity[i, :T_i, :N_i].float().detach().cpu().numpy()
+            fig_sim = emission_to_figure(
+                sim.T,
+                regions=regions[i, :T_i].detach().cpu().numpy(),
+                title=item_path,
+                token_labels=token_labels,
+            )
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            fig_sim.savefig(self.output_dir / f"{name}_sim.jpg")
+            plt.close(fig_sim)
+
+            # Alignment plot
+            spec = spectrogram[i, :T_i].detach().cpu().numpy()
+            ps = spans_pred[i, :N_i].detach().cpu().numpy()
+            gs = spans_gt[i, :N_i].detach().cpu().numpy()
+            fig_align = alignment_to_figure(
+                spec,
+                token_labels=token_labels,
+                pred_spans=ps,
+                gt_spans=gs,
+                title=item_path,
+            )
+            fig_align.savefig(self.output_dir / f"{name}_align.jpg")
+            plt.close(fig_align)
 
 
 class StatisticsCallback(lightning.pytorch.callbacks.Callback):
@@ -226,7 +323,7 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
             *args, **kwargs,
     ) -> None:
         spans_pred = outputs["spans"].float() * self._unit_factor  # [B, N_max, 2]
-        spans_gt = batch["spans"].float() * self._unit_factor       # [B, N_max, 2]
+        spans_gt = batch["spans"].float() * self._unit_factor  # [B, N_max, 2]
         tokens = batch["tokens"]  # [B, N_max]
 
         B = tokens.shape[0]
@@ -308,13 +405,11 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
             batch: dict,
             *args, **kwargs,
     ) -> None:
-        timestep = pl_module.backend.timestep
-
         for result in outputs:
             if "similarity" not in result:
                 continue
 
-            spans_sec = result["spans"].float()  # [N_i, 2] seconds
+            spans_frames = result["spans"].float()  # [N_i, 2] in frames
             similarity = result["similarity"].float()  # [T_i, N_i]
             tokens = result["tokens"]  # [N_i]
             N_i = tokens.shape[0]
@@ -323,7 +418,6 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
             if T_i == 0 or N_i == 0:
                 continue
 
-            spans_frames = spans_sec[:N_i] / timestep
             device = similarity.device
 
             t_mask = torch.ones(T_i, dtype=torch.bool, device=device)
@@ -445,9 +539,9 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
         has_num_frames = "num_frames" in records[0]
         plot_keys: list[str] = []
         for key in (
-            "b_mae_onset", "b_mae_offset",
-            "overlap_precision", "overlap_recall",
-            "confidence", "determinacy", "monotonicity",
+                "b_mae_onset", "b_mae_offset",
+                "overlap_precision", "overlap_recall",
+                "confidence", "determinacy", "monotonicity",
         ):
             if key in records[0]:
                 plot_keys.append(key)
@@ -868,75 +962,3 @@ class EvaluationMetricsCallback(lightning.pytorch.callbacks.Callback):
         fig = topk_bar_figure(labels, values, key)
         fig.savefig(save_dir / f"{safe_key}.jpg")
         plt.close(fig)
-
-
-class VisualizeAlignmentCallback(lightning.pytorch.callbacks.Callback):
-    """Saves per-sample similarity and alignment plots during evaluation."""
-
-    def __init__(self, vocab: Vocabulary, save_dir: pathlib.Path, identifiers: list):
-        super().__init__()
-        self.vocab = vocab
-        self.save_dir = pathlib.Path(save_dir)
-        self._num_digits = len(str(len(identifiers)))
-        self._identifiers = identifiers
-
-    def on_test_batch_end(
-            self,
-            trainer: lightning.pytorch.Trainer,
-            pl_module: lightning.pytorch.LightningModule,
-            outputs: dict,
-            batch: dict,
-            *args, **kwargs,
-    ) -> None:
-        spectrogram = batch["spectrogram"]
-        similarity = outputs["similarity"]
-        regions = batch["regions"]
-        tokens = batch["tokens"]
-        spans_gt = batch["spans"]
-        spans_pred = outputs["spans"]
-        indices = batch["indices"]
-        T_all = batch["T"]
-        N_all = batch["N"]
-
-        B = indices.shape[0]
-        for i in range(B):
-            T_i = int(T_all[i].item())
-            N_i = int(N_all[i].item())
-            if T_i == 0 or N_i == 0:
-                continue
-
-            data_idx = int(indices[i].item())
-            token_ids = tokens[i, :N_i].tolist()
-            token_labels = [
-                self.vocab.decode(int(tid), stringfy=True) or str(tid)
-                for tid in token_ids
-            ]
-
-            item_path = self._identifiers[data_idx]
-            name = str(data_idx).zfill(self._num_digits)
-
-            # Similarity plot
-            sim = similarity[i, :T_i, :N_i].float().detach().cpu().numpy()
-            fig_sim = emission_to_figure(
-                sim.T,  # [N_i, T_i] as expected by plot function
-                regions=regions[i, :T_i].detach().cpu().numpy(),
-                title=item_path,
-                token_labels=token_labels,
-            )
-            self.save_dir.mkdir(parents=True, exist_ok=True)
-            fig_sim.savefig(self.save_dir / f"{name}_sim.jpg")
-            plt.close(fig_sim)
-
-            # Alignment plot
-            spec = spectrogram[i, :T_i].detach().cpu().numpy()
-            ps = spans_pred[i, :N_i].detach().cpu().numpy()
-            gs = spans_gt[i, :N_i].detach().cpu().numpy()
-            fig_align = alignment_to_figure(
-                spec,
-                token_labels=token_labels,
-                pred_spans=ps,
-                gt_spans=gs,
-                title=item_path,
-            )
-            fig_align.savefig(self.save_dir / f"{name}_align.jpg")
-            plt.close(fig_align)
