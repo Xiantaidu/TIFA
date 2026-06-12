@@ -72,57 +72,76 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
             if N == 0:
                 continue
 
-            total_duration = result["duration"]
-            tg = textgrid.TextGrid()
+            # Step 1: round to 3 decimals
+            total_duration = round(result["duration"], 3)
+            for s in spans:
+                s[0] = round(s[0], 3)
+                s[1] = round(s[1], 3)
 
-            # Words tier: group phoneme spans by consecutive G2PText
-            # index, then pick the closest G2PWord label by minimum
-            # Levenshtein distance across all alternative paths.
-            words_tier = textgrid.IntervalTier("words", 0, total_duration)
+            # Step 2: fix zero-width spans
+            for i in range(N):
+                onset, offset = spans[i]
+                if onset >= offset:
+                    logging.warning(
+                        f"Encountered zero-width span [{onset}, {offset}] for "
+                        f"'{identifier}': maxTime <= minTime, "
+                        f"assigning 0.001 width.",
+                        callback=trainer.progress_bar_callback.print,
+                    )
+                    if i + 1 < N:
+                        spans[i][1] = onset + 0.001
+                        if spans[i + 1][0] < spans[i][1]:
+                            spans[i + 1][0] = spans[i][1]
+                    else:
+                        spans[i][1] = onset + 0.001
+                        if spans[i][1] > total_duration:
+                            total_duration = spans[i][1]
+
+            # Step 3: prebuild phone intervals
+            phone_intervals = [
+                (spans[n][0], spans[n][1], phonemes[n])
+                for n in range(N)
+            ]
+
+            # Step 4: prebuild word intervals
+            # Group phoneme spans by consecutive G2PText index, then
+            # pick the closest G2PWord label by minimum Levenshtein
+            # distance across all alternative paths.
+            word_intervals = []
             i = 0
             while i < N:
                 g = groups[i]  # 1-based G2PText index
                 j = i + 1
                 while j < N and groups[j] == g:
                     j += 1
-                onset = spans[i][0]
-                offset = spans[j - 1][1]
-                if offset > onset:
-                    ph_subseq = phonemes[i:j]
-                    # Find best-matching G2PWord label
-                    candidates = lexicon[g - 1]  # 0-based
-                    if candidates:
-                        best_label = min(
-                            candidates,
-                            key=lambda label: min(
-                                levenshtein_distance(ph_subseq, path)
-                                for path in candidates[label]
-                            ),
-                        )
-                    else:
-                        best_label = ""
-                    words_tier.add(onset, offset, best_label)
-                else:
-                    logging.warning(
-                        f"Skipping word interval [{onset}, {offset}] for "
-                        f"'{identifier}': maxTime <= minTime.",
-                        callback=trainer.progress_bar_callback.print,
+                onset = phone_intervals[i][0]
+                offset = phone_intervals[j - 1][1]
+                ph_subseq = phonemes[i:j]
+                # Find best-matching G2PWord label
+                candidates = lexicon[g - 1]  # 0-based
+                if candidates:
+                    best_label = min(
+                        candidates,
+                        key=lambda lb: min(
+                            levenshtein_distance(ph_subseq, path)
+                            for path in candidates[lb]
+                        ),
                     )
+                else:
+                    best_label = ""
+                word_intervals.append((onset, offset, best_label))
                 i = j
+
+            # Step 5: construct TextGrid from prebuilt data
+            tg = textgrid.TextGrid()
+            words_tier = textgrid.IntervalTier("words", 0, total_duration)
+            for onset, offset, label in word_intervals:
+                words_tier.add(onset, offset, label)
             tg.append(words_tier)
 
-            # Phones tier
             phones_tier = textgrid.IntervalTier("phones", 0, total_duration)
-            for n in range(N):
-                onset, offset = spans[n]
-                if offset > onset:
-                    phones_tier.add(onset, offset, phonemes[n])
-                else:
-                    logging.warning(
-                        f"Skipping phone interval [{onset}, {offset}] for "
-                        f"'{identifier}': maxTime <= minTime.",
-                        callback=trainer.progress_bar_callback.print,
-                    )
+            for onset, offset, label in phone_intervals:
+                phones_tier.add(onset, offset, label)
             tg.append(phones_tier)
 
             output_path = self.output_dir / f"{identifier}.TextGrid"
@@ -398,8 +417,8 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
 
             def _sort_key(rc):
                 identifier = rc["identifier"]
-                r = tuple(ranks[key][identifier] for key, _ in available)
-                return (min(r),) + r
+                _r = tuple(ranks[key][identifier] for key, _ in available)
+                return (min(_r),) + _r
 
             records.sort(key=_sort_key)
 
