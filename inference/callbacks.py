@@ -1,5 +1,6 @@
 import json
 import pathlib
+import re
 from typing import Any
 
 import lightning.pytorch.callbacks
@@ -34,6 +35,47 @@ from modules.metrics import (
     compute_monotonicity,
     compute_overlap,
 )
+
+
+class _CompactDict(dict):
+    """Dict that serializes as a compact single-line JSON object."""
+
+
+class _CompactEncoder(json.JSONEncoder):
+    """Encoder that serializes ``_CompactDict`` without indentation."""
+
+    _SENTINEL = "<<compact>>"
+
+    def encode(self, o):
+        o = self._mark_compact(o)
+        result = super().encode(o)
+        esc = re.escape(self._SENTINEL)
+        pattern = re.compile(rf'"{esc}(.*?){esc}"', re.DOTALL)
+
+        def _replace(m):
+            inner = m.group(1)
+            inner = inner.replace('\\"', '"')
+            return inner
+
+        return pattern.sub(_replace, result)
+
+    @classmethod
+    def _mark_compact(cls, o):
+        s = cls._SENTINEL
+        if isinstance(o, _CompactDict):
+            return s + json.dumps(dict(o), ensure_ascii=False) + s
+        if isinstance(o, dict):
+            return {k: cls._mark_compact(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [cls._mark_compact(item) for item in o]
+        return o
+
+
+def _extract_chosen_phonemes(phoneme_map, alts):
+    phs = []
+    for seg, alt in enumerate(alts.tolist()):
+        phs.extend(phoneme_map.get((seg, alt), []))
+    return phs
 
 
 class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
@@ -71,14 +113,14 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
             identifier = result["identifier"]
             groups = result["groups"].tolist()  # [int, ...] 1-based G2PText index
             spans = (result["spans"].float() * timestep).tolist()  # frames -> seconds
-            phonemes = result["phonemes"]  # [str, ...]
+            phonemes = _extract_chosen_phonemes(result["phonemes"], result["alts"])
             lexicon = result["lexicon"]  # list[dict[str, list[list[str]]]]
             N = len(spans)
             if N == 0:
                 continue
 
             # Step 1: round to 3 decimals
-            total_duration = round(result["duration"] * timestep, 3)
+            total_duration = round(result["spectrogram"].shape[0] * timestep, 3)
             for s in spans:
                 s[0] = round(s[0], 3)
                 s[1] = round(s[1], 3)
@@ -198,7 +240,7 @@ class SavePlotCallback(lightning.pytorch.callbacks.Callback):
         for result in outputs:
             sim = result["similarity"]  # [T_i, N_i]
             identifier = result["identifier"]
-            phonemes = result.get("phonemes")
+            phonemes = _extract_chosen_phonemes(result["phonemes"], result["alts"])
             N_i = sim.shape[1]
 
             # Similarity plot
@@ -288,6 +330,20 @@ class SavePlotCallback(lightning.pytorch.callbacks.Callback):
             plt.close(fig_align)
 
 
+def _gather_records(records):
+    if not (torch.distributed.is_available() and torch.distributed.is_initialized()):
+        return records
+    world_size = torch.distributed.get_world_size()
+    if world_size <= 1:
+        return records
+    gathered = [None] * world_size
+    torch.distributed.all_gather_object(gathered, records)
+    merged = []
+    for r in gathered:
+        merged.extend(r)
+    return merged
+
+
 class StatisticsCallback(lightning.pytorch.callbacks.Callback):
     """Accumulates per-sample determinacy/confidence scores, saves JSON and
     statistic plots (histograms + scatter).
@@ -311,7 +367,8 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
         self.monotonicity_width = monotonicity_width
         self._identifiers = identifiers
         self._unit_factor = unit_factor
-        self._records: list[dict] = []
+        self._metric_records: list[dict] = []
+        self._score_records: list[dict] = []
         self._saved = False
 
     def on_test_batch_end(
@@ -395,7 +452,7 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
                         width=self.monotonicity_width,
                     ).item()
 
-            self._records.append(record)
+            self._metric_records.append(record)
 
     def on_predict_batch_end(
             self,
@@ -449,7 +506,7 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
                 width=self.monotonicity_width,
             ).item()
 
-            self._records.append({
+            self._metric_records.append({
                 "identifier": result["identifier"],
                 "confidence": confidence,
                 "determinacy": determinacy,
@@ -457,6 +514,32 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
                 "num_frames": T_i,
                 "num_tokens": N_i,
             })
+
+            if "scores" in result:
+                segs = []
+                alts_list = result["alts"].tolist()
+                phoneme_map = result["phonemes"]
+                widths_list = result["widths"].tolist()
+                scores_tensor = result["scores"]
+                for s in range(len(widths_list)):
+                    w = widths_list[s]
+                    if w <= 1:
+                        continue
+                    seg = {"index": s, "width": w, "chosen": alts_list[s]}
+                    alts_out = []
+                    for a in range(w):
+                        alt = _CompactDict({
+                            "index": a,
+                            "phonemes": phoneme_map.get((s, a), []),
+                            "score": float(scores_tensor[s, a].item()),
+                        })
+                        alts_out.append(alt)
+                    seg["alternatives"] = alts_out
+                    segs.append(seg)
+                self._score_records.append({
+                    "identifier": result["identifier"],
+                    "segments": segs,
+                })
 
     def on_test_end(
             self,
@@ -479,15 +562,7 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
             return
         self._saved = True
 
-        records = self._records
-        if torch.distributed.is_available() and torch.distributed.is_initialized():
-            world_size = torch.distributed.get_world_size()
-            if world_size > 1:
-                gathered = [None] * world_size
-                torch.distributed.all_gather_object(gathered, records)
-                records = []
-                for r in gathered:
-                    records.extend(r)
+        records = _gather_records(self._metric_records)
 
         if not records:
             return
@@ -531,6 +606,13 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
             with open(self.save_dir / "diagnosis.json", "w", encoding="utf8") as f:
                 json.dump(records, f, indent=2, ensure_ascii=False)
             self._save_stat_plots(records)
+
+            score_records = _gather_records(self._score_records)
+            if score_records:
+                with open(self.save_dir / "scores.json", "w", encoding="utf8") as f:
+                    f.write(_CompactEncoder(
+                        indent=2, ensure_ascii=False,
+                    ).encode(score_records))
 
     def _save_stat_plots(self, records: list[dict]) -> None:
         if not records:

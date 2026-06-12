@@ -25,6 +25,7 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         groups = batch["groups"]  # [B, N_grid, W_max]
         segments = batch["segments"]  # [B, N_grid]
         widths = batch["widths"]  # [B, S_max]
+
         phonemes = batch["phonemes"]  # list[dict[(int,int), list[str]]]
         lexicon = batch["lexicon"]  # list[list[dict[str, list[list[str]]]]]
 
@@ -42,26 +43,29 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         for i, identifier in enumerate(batch["identifier"]):
             N_i = int((scored.tokens[i] != 0).sum().item())
             T_i = int(spec.mask[i].sum().item())
-            spans_i = result.spans[i, :N_i]
+            S_i = int(segments[i].max().item())
+
+            spec_i = spec.features[i, :T_i]
+            widths_i = widths[i, :S_i]
             tokens_i = scored.tokens[i, :N_i]
             groups_i = scored.groups[i, :N_i]
+            alts_i = scored.alts[i, :S_i]
+            scores_i = scored.scores[i, :S_i]
+            spans_i = result.spans[i, :N_i]
             sim_i = result.similarity[i, :T_i, :N_i]
-
-            phs: list[str] = []
-            pm = phonemes[i]
-            for seg, alt in enumerate(scored.alts[i].tolist()):
-                phs.extend(pm.get((seg, alt), []))
 
             results.append({
                 "identifier": identifier,
-                "duration": T_i,
-                "spans": spans_i,
+                "spectrogram": spec_i,
+                "widths": widths_i,
                 "tokens": tokens_i,
                 "groups": groups_i,
+                "alts": alts_i,
+                "scores": scores_i,
+                "spans": spans_i,
                 "similarity": sim_i,
-                "phonemes": phs,
+                "phonemes": phonemes[i],
                 "lexicon": lexicon[i],
-                "spectrogram": spec.features[i, :T_i],
             })
 
         return results
