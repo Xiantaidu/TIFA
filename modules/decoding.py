@@ -83,8 +83,8 @@ def _extract_spans(states: np.ndarray, T: int, N: int) -> np.ndarray:
             spans[i, 0] = first
             spans[i, 1] = last + 1
         else:
-            spans[i, 0] = T - 1
-            spans[i, 1] = T - 1
+            spans[i, 0] = T
+            spans[i, 1] = T
     return spans
 
 

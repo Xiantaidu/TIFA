@@ -79,29 +79,35 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
                 s[1] = round(s[1], 3)
 
             # Step 2: fix zero-width spans
+            eps = 0.001
             for i in range(N):
                 onset, offset = spans[i]
                 if onset >= offset:
                     logging.warning(
-                        f"Encountered zero-width span [{onset}, {offset}] for "
-                        f"'{identifier}': maxTime <= minTime, "
-                        f"assigning 0.001 width.",
+                        f"Zero-width span [{onset}, {offset}] for "
+                        f"'{identifier}': assigning {eps} width.",
                         callback=trainer.progress_bar_callback.print,
                     )
                     if i + 1 < N:
-                        spans[i][1] = onset + 0.001
+                        spans[i][1] = onset + eps
                         if spans[i + 1][0] < spans[i][1]:
                             spans[i + 1][0] = spans[i][1]
                     else:
-                        spans[i][1] = onset + 0.001
+                        spans[i][1] = onset + eps
                         if spans[i][1] > total_duration:
                             total_duration = spans[i][1]
 
             # Step 3: prebuild phone intervals
-            phone_intervals = [
-                (spans[n][0], spans[n][1], phonemes[n])
-                for n in range(N)
-            ]
+            phone_intervals = []
+            for n in range(N):
+                onset, offset = spans[n]
+                if phone_intervals and onset < phone_intervals[-1][1]:
+                    onset = phone_intervals[-1][1]
+                if offset <= onset:
+                    offset = onset + eps
+                phone_intervals.append((onset, offset, phonemes[n]))
+            if phone_intervals[-1][1] > total_duration:
+                total_duration = phone_intervals[-1][1]
 
             # Step 4: prebuild word intervals
             # Group phoneme spans by consecutive G2PText index, then
@@ -110,12 +116,17 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
             word_intervals = []
             i = 0
             while i < N:
-                g = groups[i]  # 1-based G2PText index
+                g = groups[i]
                 j = i + 1
                 while j < N and groups[j] == g:
                     j += 1
                 onset = phone_intervals[i][0]
                 offset = phone_intervals[j - 1][1]
+                # Ensure non-overlapping, non-zero-word
+                if word_intervals and onset < word_intervals[-1][1]:
+                    onset = word_intervals[-1][1]
+                if offset <= onset:
+                    offset = onset + eps
                 ph_subseq = phonemes[i:j]
                 # Find best-matching G2PWord label
                 candidates = lexicon[g - 1]  # 0-based
