@@ -168,24 +168,24 @@ def _check_vocabulary(checkpoint_dir: pathlib.Path, dataset_dir: pathlib.Path):
 
 
 def _run_online_evaluation(
-    scope: int,
-    dataset: pathlib.Path,
-    model: pathlib.Path,
-    prefix: str,
-    output_dir: pathlib.Path,
-    batch_size: int,
-    concat_size: int,
-    concat_deterministic: bool,
-    num_workers: int,
-    precision: str,
-    ber_tols: list[int],
-    token_topk: list[int],
-    pair_topk: list[int],
-    plot: bool,
-    determinacy_power: float = 2.0,
-    determinacy_width: int = 5,
-    monotonicity_power: float = 2.0,
-    monotonicity_width: int = -1,
+        scope: int,
+        dataset: pathlib.Path,
+        model: pathlib.Path,
+        prefix: str,
+        output_dir: pathlib.Path,
+        batch_size: int,
+        concat_size: int,
+        concat_deterministic: bool,
+        num_workers: int,
+        precision: str,
+        ber_tols: list[int],
+        token_topk: list[int],
+        pair_topk: list[int],
+        plot: bool,
+        determinacy_power: float = 2.0,
+        determinacy_width: int = 5,
+        monotonicity_power: float = 2.0,
+        monotonicity_width: int = -1,
 ):
     if determinacy_width < 0:
         determinacy_width = None
@@ -265,16 +265,16 @@ def _run_online_evaluation(
 
 
 def _run_offline_evaluation(
-    pred_dir: pathlib.Path,
-    gt_dir: pathlib.Path,
-    tier_name: str,
-    stop_symbols: set[str],
-    mismatch_handling: str,
-    output_dir: pathlib.Path,
-    ber_tols: list[int],
-    token_topk: list[int],
-    pair_topk: list[int],
-    **kwargs,
+        pred_dir: pathlib.Path,
+        gt_dir: pathlib.Path,
+        tier_name: str,
+        stop_symbols: set[str],
+        mismatch_handling: str,
+        output_dir: pathlib.Path,
+        ber_tols: list[int],
+        token_topk: list[int],
+        pair_topk: list[int],
+        **kwargs,
 ):
     from lightning_utilities.core.rank_zero import rank_zero_info
 

@@ -59,13 +59,13 @@ def shared_options(func):
 
 
 def _run_training(
-    config: pathlib.Path, override: list[str],
-    exp_name: str, work_dir: pathlib.Path,
-    log_dir: pathlib.Path,
-    restart: bool,
-    resume_from: pathlib.Path,
-    scope: int,
-    pl_module_cls,
+        config: pathlib.Path, override: list[str],
+        exp_name: str, work_dir: pathlib.Path,
+        log_dir: pathlib.Path,
+        restart: bool,
+        resume_from: pathlib.Path,
+        scope: int,
+        pl_module_cls,
 ):
     from lightning_utilities.core.rank_zero import rank_zero_info
     from training.api import (
@@ -111,11 +111,11 @@ def main():
 @main.default_command(help="Train a supervised forced-alignment model.")
 @shared_options
 def supervised(
-    config, override,
-    exp_name, work_dir,
-    log_dir,
-    restart,
-    resume_from,
+        config, override,
+        exp_name, work_dir,
+        log_dir,
+        restart,
+        resume_from,
 ):
     from training.fa_module import ForcedAlignmentModule
     _run_training(
@@ -131,11 +131,11 @@ def supervised(
 @main.command(name="ssl", help="Train a self-supervised model.")
 @shared_options
 def ssl(
-    config, override,
-    exp_name, work_dir,
-    log_dir,
-    restart,
-    resume_from,
+        config, override,
+        exp_name, work_dir,
+        log_dir,
+        restart,
+        resume_from,
 ):
     from training.fa_ssl_module import ForcedAlignmentSSLModule
     _run_training(

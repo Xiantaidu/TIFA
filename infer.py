@@ -112,21 +112,21 @@ def shared_options(func):
 
 
 def _run_inference(
-    scope: int,
-    path: pathlib.Path,
-    model: pathlib.Path,
-    input_formats: set[str],
-    output_dir: pathlib.Path | None,
-    language: str | None,
-    extended_language: set[str] | None,
-    g2p: pathlib.Path | None,
-    batch_size: int,
-    num_workers: int,
-    precision: str,
-    oov_handling: str,
-    score_unit: str,
-    stat: bool = False,
-    plot: bool = False,
+        scope: int,
+        path: pathlib.Path,
+        model: pathlib.Path,
+        input_formats: set[str],
+        output_dir: pathlib.Path | None,
+        language: str | None,
+        extended_language: set[str] | None,
+        g2p: pathlib.Path | None,
+        batch_size: int,
+        num_workers: int,
+        precision: str,
+        oov_handling: str,
+        score_unit: str,
+        stat: bool = False,
+        plot: bool = False,
 ):
     from lightning_utilities.core.rank_zero import rank_zero_info
 

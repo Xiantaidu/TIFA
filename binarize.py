@@ -36,9 +36,9 @@ def shared_options(func):
 
 
 def _run_binarization(
-    config: pathlib.Path, override: list[str],
-    vocab_only: bool, eval_mode: bool,
-    scope: int,
+        config: pathlib.Path, override: list[str],
+        vocab_only: bool, eval_mode: bool,
+        scope: int,
 ):
     from preprocessing.api import (
         load_config_for_binarization, build_vocab_from_datasets, binarize_datasets
