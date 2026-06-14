@@ -514,6 +514,7 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
 
             self._metric_records.append({
                 "identifier": result["identifier"],
+                "agreement": result["agreement"],
                 "confidence": confidence,
                 "determinacy": determinacy,
                 "monotonicity": monotonicity,
@@ -585,6 +586,7 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
                 ("b_mae_offset", False),
                 ("overlap_precision", True),
                 ("overlap_recall", True),
+                ("agreement", True),
                 ("confidence", True),
                 ("determinacy", True),
                 ("monotonicity", True),
@@ -629,7 +631,7 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
         for key in (
                 "b_mae_onset", "b_mae_offset",
                 "overlap_precision", "overlap_recall",
-                "confidence", "determinacy", "monotonicity",
+                "agreement", "confidence", "determinacy", "monotonicity",
         ):
             if key in records[0]:
                 plot_keys.append(key)

@@ -37,6 +37,7 @@ class AlignResult:
     """Output of forced alignment decoding."""
     spans: Tensor  # [B, N, 2] in the requested unit (seconds or frames)
     similarity: Tensor  # [B, T, N] cross cosine similarity
+    agreement: Tensor  # [B] per-sample mean probability of input tokens, range [0, 1]
 
 
 class InferenceBackend(ABC):
@@ -278,7 +279,7 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
             unit: Literal["frame", "second"] = "second",
     ) -> AlignResult:
         n_mask = tokens != 0
-        frame_features, _, token_features, _ = self.model(
+        frame_features, _, token_features, token_logits = self.model(
             spec.features, tokens, spec.mask, n_mask,
         )
         similarity = cross_cosine_similarity(frame_features, token_features)
@@ -289,9 +290,13 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
         )
         if unit == "second":
             spans = spans.float() * self.timestep
+        probs = F.softmax(token_logits.float(), dim=-1)
+        token_prob = probs.gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
+        agreement = (token_prob * n_mask.float()).sum(dim=-1) / n_mask.sum(dim=-1).clamp(min=1)
         return AlignResult(
             spans=spans,
             similarity=similarity,
+            agreement=agreement,
         )
 
 

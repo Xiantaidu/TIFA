@@ -53,6 +53,7 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
             scores_i = scored.scores[i, :S_i]
             spans_i = result.spans[i, :N_i]
             sim_i = result.similarity[i, :T_i, :N_i]
+            agreement_i = result.agreement[i].item()
 
             results.append({
                 "identifier": identifier,
@@ -64,6 +65,7 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
                 "scores": scores_i,
                 "spans": spans_i,
                 "similarity": sim_i,
+                "agreement": agreement_i,
                 "phonemes": phonemes[i],
                 "lexicon": lexicon[i],
             })
