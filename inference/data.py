@@ -206,10 +206,10 @@ class AudioTextDataset(torch.utils.data.Dataset):
                         oov_count += 1
                         continue
                     group_paths.append([
-                        _TokenWithWord(tid, gt_idx + 1, ph)
+                        _TokenWithWord(tid, gt_idx + 1, f"{gt.language}/{ph}")
                         for tid, ph in zip(tok_ids, path)
                     ])
-                    gw_paths.setdefault(gw.word, []).append(path)
+                    gw_paths.setdefault(gw.word, []).append([f"{gt.language}/{ph}" for ph in path])
 
             if oov_count > 0:
                 warning = f"Dropped {oov_count} OOV pronunciation(s)"

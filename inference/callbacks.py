@@ -114,6 +114,12 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
             groups = result["groups"].tolist()  # [int, ...] 1-based G2PText index
             spans = (result["spans"].float() * timestep).tolist()  # frames -> seconds
             phonemes = _extract_chosen_phonemes(result["phonemes"], result["alts"])
+            if self.language:
+                prefix = f"{self.language}/"
+                phonemes = [
+                    ph[len(prefix):] if ph.startswith(prefix) else ph
+                    for ph in phonemes
+                ]
             lexicon = result["lexicon"]  # list[dict[str, list[list[str]]]]
             N = len(spans)
             if N == 0:
