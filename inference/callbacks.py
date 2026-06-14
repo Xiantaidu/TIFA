@@ -542,10 +542,11 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
                         alts_out.append(alt)
                     seg["alternatives"] = alts_out
                     segs.append(seg)
-                self._score_records.append({
-                    "identifier": result["identifier"],
-                    "segments": segs,
-                })
+                if segs:
+                    self._score_records.append({
+                        "identifier": result["identifier"],
+                        "segments": segs,
+                    })
 
     def on_test_end(
             self,
@@ -614,11 +615,10 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
             self._save_stat_plots(records)
 
             score_records = _gather_records(self._score_records)
-            if score_records:
-                with open(self.save_dir / "scores.json", "w", encoding="utf8") as f:
-                    f.write(_CompactEncoder(
-                        indent=2, ensure_ascii=False,
-                    ).encode(score_records))
+            with open(self.save_dir / "scores.json", "w", encoding="utf8") as f:
+                f.write(_CompactEncoder(
+                    indent=2, ensure_ascii=False,
+                ).encode(score_records))
 
     def _save_stat_plots(self, records: list[dict]) -> None:
         if not records:
