@@ -76,9 +76,15 @@ def shared_options(func):
             help="Custom G2P pipeline config YAML (overrides inference.g2p from config).",
         ),
         click.option(
-            "--oov-handling", default="skip",
-            type=click.Choice(["raise", "skip", "force"]), show_default=True,
-            help="How to handle OOV phonemes: raise (error), skip (discard sample), force (drop OOV paths).",
+            "--oov-handling", default="discard",
+            type=click.Choice(["raise", "discard", "force"]), show_default=True,
+            help="How to handle OOV phonemes: raise (error), discard (drop sample), force (drop OOV paths).",
+        ),
+        click.option(
+            "--skip-handling", default="omit",
+            type=click.Choice(["discard", "omit", "preserve"]), show_default=True,
+            help="How to handle skipped states (zero-width spans): "
+                 "discard (drop sample),  omit (exclude intervals), preserve (assign 1ms).",
         ),
         click.option(
             "--score-unit", default="levenshtein",
@@ -124,6 +130,7 @@ def _run_inference(
         num_workers: int,
         precision: str,
         oov_handling: str,
+        skip_handling: str,
         score_unit: str,
         stat: bool = False,
         plot: bool = False,
@@ -175,6 +182,7 @@ def _run_inference(
             output_dir=output_dir,
             language=language,
             timestep=backend.timestep,
+            skip_handling=skip_handling,
         ),
     ]
 

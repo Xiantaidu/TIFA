@@ -121,7 +121,7 @@ class AudioTextDataset(torch.utils.data.Dataset):
         vocabulary: Vocabulary,
         audio_sample_rate: int,
         language: str | set[str] | None = None,
-        oov_handling: Literal["raise", "skip", "force"] = "skip",
+        oov_handling: Literal["raise", "discard", "force"] = "discard",
         path_grid_unit: Literal["levenshtein", "word", "none"] = "levenshtein",
     ):
         self.g2p_config = g2p_config
@@ -200,7 +200,7 @@ class AudioTextDataset(torch.utils.data.Dataset):
                         oov_phs = [ph for tid, ph in zip(tok_ids, path) if tid is None]
                         if self.oov_handling == "raise":
                             return {"skip": True, "error": f"Unknown phonemes {oov_phs} in text for '{identifier}'"}
-                        if self.oov_handling == "skip":
+                        if self.oov_handling == "discard":
                             return _skip(identifier, f"Unknown phoneme {oov_phs} in text")
                         # forced: drop this path
                         oov_count += 1

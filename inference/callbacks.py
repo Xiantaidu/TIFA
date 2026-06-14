@@ -94,11 +94,13 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
             output_dir: str | pathlib.Path,
             language: str | None = None,
             timestep: float = 1.0,
+            skip_handling: str = "omit",
     ):
         super().__init__()
         self.output_dir = pathlib.Path(output_dir)
         self.language = language
         self.timestep = timestep
+        self.skip_handling = skip_handling
 
     def on_predict_batch_end(
             self,
@@ -131,16 +133,34 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
                 s[0] = round(s[0], 3)
                 s[1] = round(s[1], 3)
 
-            # Step 2: fix zero-width spans
+            # Step 2: identify and warn on zero-width spans
             eps = 0.001
-            for i in range(N):
+            zero_idx = [i for i in range(N) if spans[i][0] >= spans[i][1]]
+            for i in zero_idx:
                 onset, offset = spans[i]
-                if onset >= offset:
-                    logging.warning(
-                        f"Zero-width span [{onset}, {offset}] for "
-                        f"'{identifier}': assigning {eps} width.",
-                        callback=trainer.progress_bar_callback.print,
-                    )
+                logging.warning(
+                    f"Skipped state encountered in '{identifier}', idx {i}: {phonemes[i]} [{onset}, {offset}]",
+                    callback=trainer.progress_bar_callback.print,
+                )
+
+            # Step 3: handle zero-width spans based on mode
+            if self.skip_handling == "discard":
+                if zero_idx:
+                    continue
+
+            elif self.skip_handling == "omit":
+                if zero_idx:
+                    keep = [i for i in range(N) if i not in zero_idx]
+                    if not keep:
+                        continue
+                    spans = [spans[i] for i in keep]
+                    phonemes = [phonemes[i] for i in keep]
+                    groups = [groups[i] for i in keep]
+                    N = len(spans)
+
+            else:  # preserve
+                for i in zero_idx:
+                    onset = spans[i][0]
                     if i + 1 < N:
                         spans[i][1] = onset + eps
                         if spans[i + 1][0] < spans[i][1]:
@@ -150,7 +170,7 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
                         if spans[i][1] > total_duration:
                             total_duration = spans[i][1]
 
-            # Step 3: prebuild phone intervals
+            # Step 4: prebuild phone intervals
             phone_intervals = []
             for n in range(N):
                 onset, offset = spans[n]
@@ -162,7 +182,7 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
             if phone_intervals[-1][1] > total_duration:
                 total_duration = phone_intervals[-1][1]
 
-            # Step 4: prebuild word intervals
+            # Step 5: prebuild word intervals
             # Group phoneme spans by consecutive G2PText index, then
             # pick the closest G2PWord label by minimum Levenshtein
             # distance across all alternative paths.
@@ -196,7 +216,7 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
                 word_intervals.append((onset, offset, best_label))
                 i = j
 
-            # Step 5: construct TextGrid from prebuilt data
+            # Step 6: construct TextGrid from prebuilt data
             tg = textgrid.TextGrid()
             words_tier = textgrid.IntervalTier("words", 0, total_duration)
             for onset, offset, label in word_intervals:
