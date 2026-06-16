@@ -1,5 +1,5 @@
 binarizer:
-  validation_count: 100
+  validation_count: 1000
   num_workers: 2
   features:
     audio_sample_rate: 48000
@@ -63,29 +63,22 @@ training:
       kernel_path_glob: "data/reverb/**/*.wav"
 
   loss: {}
-#  optimizer:
-#    cls: torch.optim.AdamW
-#    kwargs:
-#      lr: 0.0005
-#      betas: [0.9, 0.98]
-#      weight_decay: 0
-#  lr_scheduler:
-#    cls: lib.lr_scheduler.scheduler.WarmupLR
-#    kwargs:
-#      warmup_steps: 2500
-#      min_lr: 0.00005
-#    unit: "step"
   optimizer:
     cls: torch.optim.AdamW
     kwargs:
       lr: 0.0002
-      betas: [ 0.9, 0.98 ]
+      betas: [0.9, 0.98]
       weight_decay: 0
   lr_scheduler:
-    cls: torch.optim.lr_scheduler.StepLR
+    cls: lib.lr_scheduler.scheduler.WarmupDecayingCosineAnnealingWarmRestarts
     kwargs:
-      step_size: 10000
-      gamma: 0.8
+      warmup_steps: 2000
+      max_lr: 0.0005
+      min_lr: 0.00001
+      cycle_steps: 8000
+      peak_decay: 0.8  # irrelevant with a single cycle
+      cycle_mult: 1.0
+      cycle_boundary: trough
     unit: "step"
   trainer:
     unit: "step"

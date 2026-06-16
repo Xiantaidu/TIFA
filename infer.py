@@ -84,7 +84,7 @@ def shared_options(func):
             "--skip-handling", default="omit",
             type=click.Choice(["discard", "omit", "preserve"]), show_default=True,
             help="How to handle skipped states (zero-width spans): "
-                 "discard (drop sample),  omit (exclude intervals), preserve (assign 1ms).",
+                 "discard (drop sample), omit (exclude intervals), preserve (assign 1ms).",
         ),
         click.option(
             "--score-unit", default="levenshtein",
