@@ -114,6 +114,26 @@ class BinarizerFeaturesConfig(ConfigBaseModel):
         return v
 
 
+class ValidationSplitConfig(ConfigBaseModel):
+    subdir: str | None = Field(None)
+    count: Union[
+        Annotated[int, Field(lt=0)],
+        Annotated[int, Field(gt=0)],
+    ] = Field(
+        100,
+        json_schema_extra={
+            "dynamic_check": DynamicCheck(
+                expr=if_(this() < 0, exists(ref("binarizer.split.subdir")), True),
+                message=(
+                    "A negative count would select the entire dataset "
+                    "for validation and leave the training set empty."
+                ),
+            )
+        },
+    )
+    seed: int | None = Field(42)
+
+
 class BinarizerConfig(ConfigBaseModel):
     phoneme_timing_data_dir: str = Field(None, json_schema_extra={
         "scope": ConfigurationScope.FA,
@@ -124,7 +144,7 @@ class BinarizerConfig(ConfigBaseModel):
     })
     g2p: G2PPipelineConfig | None = Field(None)
     vocabulary: VocabularyConfig = Field(default_factory=VocabularyConfig)
-    validation_count: int = Field(20)#, gt=0)
+    split: ValidationSplitConfig = Field(default_factory=ValidationSplitConfig)
     num_workers: int = Field(0, ge=0)
     features: BinarizerFeaturesConfig = Field(...)
 

@@ -1,5 +1,8 @@
 binarizer:
-  validation_count: 1000
+  split:
+    subdir: null
+    count: 1000
+    seed: null
   num_workers: 2
   features:
     audio_sample_rate: 48000
