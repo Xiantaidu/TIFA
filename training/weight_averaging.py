@@ -1,6 +1,7 @@
 import collections
 
 import torch
+import torch.distributed as distributed
 from torch import nn
 
 
@@ -69,20 +70,32 @@ class ExponentialMovingAverage:
             new_param = (1.0 - self.decay) * param.data + self.decay * self.shadow[name].to(param.device)
             self.shadow[name] = new_param.clone()
 
+    @torch.no_grad()
+    def synchronize(self):
+        """Move EMA state to the model device and synchronize it from rank zero."""
+        use_distributed = distributed.is_available() and distributed.is_initialized()
+        for name in sorted(self.shadow):
+            shadow = self.shadow[name].to(self.referenced[name].device)
+            if use_distributed:
+                distributed.broadcast(shadow, src=0)
+            self.shadow[name] = shadow
+
+    @torch.no_grad()
     def apply(self):
         """
         Backup the original parameters and replace them with the shadow parameters.
         """
         for name, param in self.referenced.items():
-            self.backup[name] = param.data
-            param.data = self.shadow[name].to(param.device)
+            self.backup[name] = param.detach().clone()
+            param.copy_(self.shadow[name])
 
+    @torch.no_grad()
     def restore(self):
         """
         Restore the original parameters from the backup.
         """
         for name, param in self.referenced.items():
-            param.data = self.backup[name].to(param.device)
+            param.copy_(self.backup[name])
         self.backup.clear()
 
     def state_dict(self) -> dict[str, torch.Tensor]:

@@ -270,6 +270,11 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         if self.aux_data_dir is not None:
             self.aux_dataset = self.build_aux_dataset()
 
+    def on_fit_start(self) -> None:
+        if self.use_ema:
+            # DDP has synchronized the model, but does not manage EMA shadows.
+            self.ema.synchronize()
+
     def train_dataloader(self):
         dataloader_config = self.training_config.dataloader
         self.train_sampler = DynamicBatchSampler(
