@@ -165,13 +165,53 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
             return "Concatenation of " + ", ".join(str(org_idx) for org_idx in self._group_indices[index])
         return sum(int(v) for v in values)
 
-    @abc.abstractmethod
     def concat_samples(self, samples: list[dict]) -> dict:
-        """Merge individual sample dicts into one concatenated sample.
+        """Prepare and merge individual samples into one concatenated sample.
 
-        Each dict is the output of _get_single_item. samples is non-empty.
-        When len(samples) == 1 the result should be the sample unchanged.
+        Common acoustic fields are owned here. Subclasses only merge their
+        dataset-specific alignment or path fields.
         """
+        if not samples:
+            raise ValueError("Cannot concatenate an empty sample list.")
+
+        processed = [self._prepare_item(sample) for sample in samples]
+        if len(processed) == 1:
+            return processed[0]
+
+        result = self._concat_common_samples(processed)
+        specific = self._concat_specific_samples(processed)
+        overlapping = result.keys() & specific.keys()
+        if overlapping:
+            raise ValueError(f"Dataset-specific concatenation returned common fields: " f"{sorted(overlapping)}")
+        result.update(specific)
+        return result
+
+    def _concat_common_samples(self, samples: list[dict]) -> dict:
+        result = {}
+        for key in ("spectrogram", "spectrogram_dirty", "f0"):
+            present = [key in sample for sample in samples]
+            if not any(present):
+                if key == "spectrogram":
+                    raise KeyError("Every sample must contain 'spectrogram'.")
+                continue
+            if not all(present):
+                raise ValueError(f"Common field '{key}' is missing from some samples.")
+            for sample in samples:
+                if sample[key].shape[0] != int(sample["T"].item()):
+                    raise ValueError(f"Common field '{key}' does not match sample frame length.")
+            result[key] = torch.cat([sample[key] for sample in samples], dim=0)
+
+        result["T"] = torch.stack([sample["T"] for sample in samples]).sum()
+        result["N"] = torch.stack([sample["N"] for sample in samples]).sum()
+        return result
+
+    @abc.abstractmethod
+    def _prepare_item(self, sample: dict) -> dict:
+        """Add derived fields required before concatenation."""
+
+    @abc.abstractmethod
+    def _concat_specific_samples(self, samples: list[dict]) -> dict:
+        """Merge dataset-specific fields from two or more prepared samples."""
 
     def _setup(self):
         feature_raw = load_raw_config(self.data_dir / "feature.yaml")
@@ -467,27 +507,21 @@ class PhonemeTimingDataset(BaseDataset):
                 sample["token_targets"] = sample["tokens"].clone()
         return sample
 
-    def concat_samples(self, samples: list[dict]) -> dict:
-        if len(samples) == 1:
-            return self._prepare_item(samples[0])
-
-        processed = [self._prepare_item(s) for s in samples]
-
-        specs = [s["spectrogram"] for s in processed]
+    def _concat_specific_samples(self, samples: list[dict]) -> dict:
         T_cumsum = [0]
-        for sp in specs[:-1]:
-            T_cumsum.append(T_cumsum[-1] + sp.shape[0])
-        N_vals = [int(s["N"].item()) for s in processed]
+        for sample in samples[:-1]:
+            T_cumsum.append(T_cumsum[-1] + int(sample["T"].item()))
+        N_vals = [int(sample["N"].item()) for sample in samples]
         N_cumsum = [0]
         for nv in N_vals[:-1]:
             N_cumsum.append(N_cumsum[-1] + nv)
 
         shifted_spans = []
-        for s, t_off in zip(processed, T_cumsum):
+        for s, t_off in zip(samples, T_cumsum):
             shifted_spans.append(s["spans"] + t_off if t_off > 0 else s["spans"])
 
         shifted_regions = []
-        for s, n_off in zip(processed, N_cumsum):
+        for s, n_off in zip(samples, N_cumsum):
             r = s["regions"]
             if n_off > 0:
                 r = r.clone()
@@ -496,18 +530,11 @@ class PhonemeTimingDataset(BaseDataset):
             shifted_regions.append(r)
 
         result = {
-            "spectrogram": torch.cat(specs, dim=0),
-            "tokens": torch.cat([s["tokens"] for s in processed]),
+            "tokens": torch.cat([s["tokens"] for s in samples]),
             "spans": torch.cat(shifted_spans),
             "regions": torch.cat(shifted_regions),
-            "frame_targets": torch.cat([s["frame_targets"] for s in processed]),
-            "T": torch.stack([s["T"] for s in processed]).sum(),
-            "N": torch.tensor(sum(N_vals)),
+            "frame_targets": torch.cat([s["frame_targets"] for s in samples]),
         }
-        if "spectrogram_dirty" in processed[0]:
-            result["spectrogram_dirty"] = torch.cat([s["spectrogram_dirty"] for s in processed], dim=0)
-        if "f0" in processed[0]:
-            result["f0"] = torch.cat([s["f0"] for s in processed], dim=0)
         return result
 
 
@@ -533,22 +560,14 @@ class TextOnlyDataset(BaseDataset):
         sample["N"] = torch.tensor(sample["paths"].shape[0], dtype=torch.long)
         return sample
 
-    def concat_samples(self, samples: list[dict]) -> dict:
-        if len(samples) == 1:
-            return self._prepare_item(samples[0])
-
-        processed = [self._prepare_item(s) for s in samples]
-
-        specs = [s["spectrogram"] for s in processed]
-        merged_spec = torch.cat(specs, dim=0)
-
-        S_vals = [int(s["segments"].max().item()) for s in processed]
+    def _concat_specific_samples(self, samples: list[dict]) -> dict:
+        S_vals = [int(s["segments"].max().item()) for s in samples]
         S_cumsum = [0]
         for sv in S_vals[:-1]:
             S_cumsum.append(S_cumsum[-1] + sv)
 
         segs = []
-        for s, offset in zip(processed, S_cumsum):
+        for s, offset in zip(samples, S_cumsum):
             seg = s["segments"]
             if offset > 0:
                 seg = seg.clone()
@@ -557,11 +576,11 @@ class TextOnlyDataset(BaseDataset):
             segs.append(seg)
         merged_segments = torch.cat(segs)
 
-        merged_widths = torch.cat([s["widths"] for s in processed])
+        merged_widths = torch.cat([s["widths"] for s in samples])
 
-        max_width = max(s["paths"].shape[1] for s in processed)
+        max_width = max(s["paths"].shape[1] for s in samples)
         padded = []
-        for s in processed:
+        for s in samples:
             pw = s["paths"].shape[1]
             if pw < max_width:
                 p = torch.nn.functional.pad(s["paths"], (0, max_width - pw))
@@ -570,20 +589,11 @@ class TextOnlyDataset(BaseDataset):
             padded.append(p)
         merged_paths = torch.cat(padded, dim=0)
 
-        T_vals = [s["T"].item() for s in processed]
-        N_vals = [s["N"].item() for s in processed]
-
-        result = {
-            "spectrogram": merged_spec,
+        return {
             "paths": merged_paths,
             "segments": merged_segments,
             "widths": merged_widths,
-            "T": torch.tensor(sum(T_vals)),
-            "N": torch.tensor(sum(N_vals)),
         }
-        if "f0" in processed[0]:
-            result["f0"] = torch.cat([s["f0"] for s in processed], dim=0)
-        return result
 
 
 class DynamicBatchSampler(torch.utils.data.distributed.DistributedSampler):

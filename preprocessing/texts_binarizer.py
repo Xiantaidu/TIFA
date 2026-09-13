@@ -109,16 +109,25 @@ class TextOnlyBinarizer(BaseBinarizer):
 
         length = self.get_frame_count(item.waveform_fn)
 
-        f0_cfg = self.config.features.f0
-        waveform, sr = load_audio(item.waveform_fn)
-        if sr != self.config.features.audio_sample_rate:
-            waveform = librosa.resample(waveform, orig_sr=sr, target_sr=self.config.features.audio_sample_rate)
-        f0, _ = get_pitch_parselmouth(
-            waveform, self.config.features.audio_sample_rate, length,
-            hop_size=self.config.features.hop_size,
-            f0_min=f0_cfg.f0_min, f0_max=f0_cfg.f0_max,
-            interp_uv=True
-        )
+        f0 = None
+        f0_cfg = getattr(self.config.features, "f0", None)
+        if f0_cfg is not None:
+            waveform, sr = load_audio(item.waveform_fn)
+            if sr != self.config.features.audio_sample_rate:
+                waveform = librosa.resample(
+                    waveform,
+                    orig_sr=sr,
+                    target_sr=self.config.features.audio_sample_rate,
+                )
+            f0, _ = get_pitch_parselmouth(
+                waveform,
+                self.config.features.audio_sample_rate,
+                length,
+                hop_size=self.config.features.hop_size,
+                f0_min=f0_cfg.f0_min,
+                f0_max=f0_cfg.f0_max,
+                interp_uv=True,
+            )
 
         if item.phones is not None:
             encoded_groups: list[list[list[int]]] = []

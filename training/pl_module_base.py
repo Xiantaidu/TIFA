@@ -267,7 +267,7 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
             raise ValueError("This module only supports the 'fit' stage.")
         self.train_dataset = self.build_train_dataset()
         self.valid_dataset = self.build_valid_dataset()
-        if self.aux_dataset is not None:
+        if self.aux_data_dir is not None:
             self.aux_dataset = self.build_aux_dataset()
 
     def train_dataloader(self):
