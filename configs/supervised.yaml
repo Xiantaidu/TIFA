@@ -25,7 +25,7 @@ model:
 
 training:
   dataloader:
-    aux_multiplier: 1.0
+    aux_ratio: 1.0
     aux_warmup_epochs: 10
   augmentation:
     sequence_edit:

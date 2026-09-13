@@ -2,6 +2,7 @@ import abc
 import math
 import pathlib
 import random
+from collections.abc import Callable
 
 import librosa
 import numpy
@@ -24,6 +25,8 @@ from .augmentation import (
 
 __all__ = [
     "collate_nd",
+    "concat_phoneme_timing_fields",
+    "plan_concat_groups",
     "BaseDataset",
     "PhonemeTimingDataset",
     "TextOnlyDataset",
@@ -63,6 +66,88 @@ def collate_nd(values, pad_value=0, max_len=None, ndim=1):
     return res
 
 
+def concat_phoneme_timing_fields(samples: list[dict]) -> dict:
+    """Concatenate prepared phoneme-timing fields with shifted coordinates."""
+    if not samples:
+        raise ValueError("Cannot concatenate an empty phoneme-timing group.")
+
+    frame_offsets = []
+    token_offsets = []
+    frame_cursor = 0
+    token_cursor = 0
+    for sample in samples:
+        frame_offsets.append(frame_cursor)
+        token_offsets.append(token_cursor)
+        frame_cursor += int(sample["T"].item())
+        token_cursor += int(sample["N"].item())
+
+    shifted_spans = []
+    shifted_regions = []
+    for sample, frame_offset, token_offset in zip(
+        samples,
+        frame_offsets,
+        token_offsets,
+    ):
+        spans = sample["spans"]
+        shifted_spans.append(spans + frame_offset if frame_offset > 0 else spans)
+
+        regions = sample["regions"]
+        if token_offset > 0:
+            regions = regions.clone()
+            active = regions > 0
+            regions[active] += token_offset
+        shifted_regions.append(regions)
+
+    return {
+        "tokens": torch.cat([sample["tokens"] for sample in samples]),
+        "spans": torch.cat(shifted_spans),
+        "regions": torch.cat(shifted_regions),
+        "frame_targets": torch.cat([sample["frame_targets"] for sample in samples]),
+    }
+
+
+def plan_concat_groups(
+    indices: list[int],
+    num_frames: Callable[[int], int],
+    *,
+    max_concat_size: int | None,
+    max_concat_frames: int | None,
+    dynamic_size: bool = False,
+    rng: random.Random | None = None,
+) -> list[list[int]]:
+    """Partition ordered indices into concat groups under size and frame limits."""
+    if not indices:
+        return []
+    if max_concat_size is None and max_concat_frames is None:
+        return [[index] for index in indices]
+    if dynamic_size and max_concat_size is not None and rng is None:
+        raise ValueError("Dynamic concat grouping requires a random generator.")
+
+    def next_target_size() -> int | None:
+        if dynamic_size and max_concat_size is not None:
+            return rng.randint(1, max_concat_size)
+        return max_concat_size
+
+    target_size = next_target_size()
+    groups = []
+    current = []
+    current_frames = 0
+    for index in indices:
+        frames = num_frames(index)
+        exceed_size = target_size is not None and len(current) >= target_size
+        exceed_frames = max_concat_frames is not None and current_frames + frames > max_concat_frames
+        if current and (exceed_size or exceed_frames):
+            groups.append(current)
+            current = []
+            current_frames = 0
+            target_size = next_target_size()
+        current.append(index)
+        current_frames += frames
+    if current:
+        groups.append(current)
+    return groups
+
+
 class BaseDataset(torch.utils.data.Dataset, abc.ABC):
     __non_zero_paddings__ = {
         "spectrogram": math.log(1e-5),
@@ -71,17 +156,18 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
     __multi_dims__: dict[str, int] = {}
 
     def __init__(
-            self,
-            data_dir: pathlib.Path,
-            prefix: str,
-            *,
-            augmentation_config: AugmentationConfig = None,
-            augmentation_deterministic: bool = False,
-            augmentation_return_dirty: bool = False,
-            max_concat_size: int | None = None,
-            max_concat_frames: int | None = None,
-            concat_dynamic_size: bool = True,
-            concat_deterministic: bool = False,
+        self,
+        data_dir: pathlib.Path,
+        prefix: str,
+        *,
+        augmentation_config: AugmentationConfig = None,
+        augmentation_deterministic: bool = False,
+        augmentation_return_dirty: bool = False,
+        augmentation_seed: int | None = None,
+        max_concat_size: int | None = None,
+        max_concat_frames: int | None = None,
+        concat_dynamic_size: bool = True,
+        concat_deterministic: bool = False,
     ):
         super().__init__()
         self.info = {
@@ -94,6 +180,7 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
         self.augmentation_config = augmentation_config
         self.augmentation_deterministic = augmentation_deterministic
         self.augmentation_return_dirty = augmentation_return_dirty
+        self.augmentation_seed = augmentation_seed
         self.augmentation_chains: dict[int, ComposedAugmentation] = {}
         self.mel_spectrogram = None
         self.max_concat_size = max_concat_size
@@ -239,42 +326,21 @@ class BaseDataset(torch.utils.data.Dataset, abc.ABC):
         rng = random.Random(seed)
         indices = list(range(self._n_original))
         rng.shuffle(indices)
-
-        if self.concat_dynamic_size and self.max_concat_size is not None:
-            target_size = rng.randint(1, self.max_concat_size)
-        else:
-            target_size = self.max_concat_size
-
-        groups = []
-        current = []
-        current_frames = 0
-        for idx in indices:
-            frames = self._single_num_frames(idx)
-            exceed_size = (
-                    target_size is not None
-                    and len(current) >= target_size
-            )
-            exceed_frames = (
-                    self.max_concat_frames is not None
-                    and current_frames + frames > self.max_concat_frames
-            )
-            if current and (exceed_size or exceed_frames):
-                groups.append(current)
-                current = []
-                current_frames = 0
-                if self.concat_dynamic_size and self.max_concat_size is not None:
-                    target_size = rng.randint(1, self.max_concat_size)
-            current.append(idx)
-            current_frames += frames
-        if current:
-            groups.append(current)
-
-        self._group_indices = groups
+        self._group_indices = plan_concat_groups(
+            indices,
+            self._single_num_frames,
+            max_concat_size=self.max_concat_size,
+            max_concat_frames=self.max_concat_frames,
+            dynamic_size=self.concat_dynamic_size,
+            rng=rng,
+        )
 
     def _build_chains(self, epoch: int) -> None:
         if self.augmentation_deterministic:
             seed = generate_seed(sorted(self.info.keys()))
             generator = numpy.random.default_rng(seed)
+        elif self.augmentation_seed is not None:
+            generator = numpy.random.default_rng(self.augmentation_seed + epoch)
         else:
             generator = numpy.random.default_rng()
         self.augmentation_chains.clear()
@@ -508,34 +574,7 @@ class PhonemeTimingDataset(BaseDataset):
         return sample
 
     def _concat_specific_samples(self, samples: list[dict]) -> dict:
-        T_cumsum = [0]
-        for sample in samples[:-1]:
-            T_cumsum.append(T_cumsum[-1] + int(sample["T"].item()))
-        N_vals = [int(sample["N"].item()) for sample in samples]
-        N_cumsum = [0]
-        for nv in N_vals[:-1]:
-            N_cumsum.append(N_cumsum[-1] + nv)
-
-        shifted_spans = []
-        for s, t_off in zip(samples, T_cumsum):
-            shifted_spans.append(s["spans"] + t_off if t_off > 0 else s["spans"])
-
-        shifted_regions = []
-        for s, n_off in zip(samples, N_cumsum):
-            r = s["regions"]
-            if n_off > 0:
-                r = r.clone()
-                mask = r > 0
-                r[mask] += n_off
-            shifted_regions.append(r)
-
-        result = {
-            "tokens": torch.cat([s["tokens"] for s in samples]),
-            "spans": torch.cat(shifted_spans),
-            "regions": torch.cat(shifted_regions),
-            "frame_targets": torch.cat([s["frame_targets"] for s in samples]),
-        }
-        return result
+        return concat_phoneme_timing_fields(samples)
 
 
 class TextOnlyDataset(BaseDataset):
@@ -730,7 +769,7 @@ class DynamicBatchSampler(torch.utils.data.distributed.DistributedSampler):
                     raise RuntimeError(
                         f"Cannot form {self.target_num_batches} batches from "
                         f"{total_items} items: aux dataset too small. "
-                        f"Reduce aux_multiplier or add more data."
+                        f"Reduce aux_ratio or add more data."
                     )
                 effective_max_batch_size = max(1, effective_max_batch_size // 2)
                 batches = _greedy_pack()
@@ -791,30 +830,48 @@ class ZippedDataLoader:
     """
     Wraps a main DataLoader, optionally zipped with an aux DataLoader.
     Batches are always wrapped as ``{"main": ..., "size": ...}``.
-    When aux is present, ``"aux"`` key is included.
-    Epoch length is defined by the main DataLoader.
+    When aux is active, ``"aux"`` is included and ``"size"`` is the combined
+    main-plus-aux item count. ``num_batches`` keeps the epoch length fixed when
+    the main sampler switches to its smaller active-phase budget.
     """
 
     def __init__(
-            self,
-            main_dataloader: torch.utils.data.DataLoader,
-            aux_dataloader: torch.utils.data.DataLoader | None = None,
-            aux_sampler: DynamicBatchSampler | None = None,
+        self,
+        main_dataloader: torch.utils.data.DataLoader,
+        aux_dataloader: torch.utils.data.DataLoader | None = None,
+        aux_sampler: DynamicBatchSampler | None = None,
+        aux_warmup_epochs: int = 0,
+        num_batches: int | None = None,
     ):
+        if aux_dataloader is not None and aux_sampler is None:
+            raise ValueError("aux_sampler is required when aux_dataloader is provided.")
         self.main_dl = main_dataloader
         self.aux_dl = aux_dataloader
         self.aux_sampler = aux_sampler
+        self.aux_warmup_epochs = aux_warmup_epochs
+        self.num_batches = num_batches
+        if self.num_batches is not None and self.num_batches <= 0:
+            raise ValueError("num_batches must be positive.")
 
     def __iter__(self):
+        num_batches = len(self.main_dl) if self.num_batches is None else self.num_batches
+        if num_batches <= 0:
+            raise RuntimeError("Main dataloader must produce at least one batch.")
         main_iter = iter(self.main_dl)
-
-        if self.aux_dl is not None:
-            n_batches = len(self.main_dl)
-            self.aux_sampler.target_num_batches = n_batches
+        aux_active = self.aux_dl is not None and self.aux_sampler.epoch >= self.aux_warmup_epochs
+        if aux_active:
+            self.aux_sampler.target_num_batches = num_batches
             self.aux_sampler.formed = None
             aux_iter = iter(self.aux_dl)
 
-            for main_batch in main_iter:
+        for batch_index in range(num_batches):
+            try:
+                main_batch = next(main_iter)
+            except StopIteration as exc:
+                raise RuntimeError(
+                    f"Main dataloader produced {batch_index} batches; " f"expected {num_batches}."
+                ) from exc
+            if aux_active:
                 try:
                     aux_batch = next(aux_iter)
                 except StopIteration:
@@ -824,14 +881,13 @@ class ZippedDataLoader:
                 yield {
                     "main": main_batch,
                     "aux": aux_batch,
-                    "size": main_batch["size"],
+                    "size": main_batch["size"] + aux_batch["size"],
                 }
-        else:
-            for main_batch in main_iter:
+            else:
                 yield {
                     "main": main_batch,
                     "size": main_batch["size"],
                 }
 
     def __len__(self):
-        return len(self.main_dl)
+        return len(self.main_dl) if self.num_batches is None else self.num_batches

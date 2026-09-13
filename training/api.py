@@ -117,6 +117,11 @@ def train_model(
     _check_and_copy("vocabulary.json", data_dir, ckpt_save_dir)
     model_config = config.model
     training_config = config.training
+    if training_config.trainer.seed is not None:
+        lightning.pytorch.seed_everything(
+            training_config.trainer.seed,
+            workers=True,
+        )
 
     pl_module: BaseLightningModule = pl_module_cls(
         data_dir=data_dir,

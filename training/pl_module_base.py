@@ -28,8 +28,8 @@ matplotlib.use("Agg")  # fix Tcl_AsyncDelete: async handler deleted by the wrong
 
 class LossValue(NamedTuple):
     mean: torch.Tensor  # per-valid-element mean (interpretable, for logging)
-    batch_count: int  # valid elements in THIS micro-batch
-    group_count: int  # valid elements across ALL A micro-batches in the accumulation group
+    batch_count: float  # weighted valid elements in THIS micro-batch
+    group_count: float  # weighted valid elements across the accumulation group
 
 
 class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):

@@ -53,6 +53,35 @@ _MONOTONICITY = "Monotonicity"
 _PHONEME_ERROR_RATE = "PER"
 
 
+def _split_batch_budget(total: int, aux_ratio: float, name: str) -> tuple[int, int]:
+    """Split a fixed total budget using an aux-to-main ratio."""
+    aux = round(total * aux_ratio / (1.0 + aux_ratio))
+    main = total - aux
+    if main <= 0 or aux <= 0:
+        raise ValueError(
+            f"training.dataloader.{name}={total} cannot be split with "
+            f"aux_ratio={aux_ratio} (aux:main); both main and aux budgets "
+            "must be positive."
+        )
+    return main, aux
+
+
+def _accumulation_group_count(
+    dataset: BaseDataset,
+    sampler: DynamicBatchSampler,
+    batch_idx: int,
+    accumulate_grad_batches: int,
+    key: str,
+) -> float:
+    """Sum dataset metadata over the sampler's current accumulation group."""
+    sampler.form_batches()
+    group_start = (batch_idx // accumulate_grad_batches) * accumulate_grad_batches
+    batches = sampler.batches[group_start : group_start + accumulate_grad_batches]
+    if len(batches) != accumulate_grad_batches:
+        raise RuntimeError("Sampler did not provide a complete gradient accumulation group.")
+    return float(sum(dataset.get_metadata(key, index) for batch in batches for index in batch))
+
+
 class ForcedAlignmentModule(BaseLightningModule):
 
     @classmethod
@@ -197,8 +226,10 @@ class ForcedAlignmentModule(BaseLightningModule):
     def build_train_dataset(self) -> BaseDataset:
         dl_cfg = self.training_config.dataloader
         return PhonemeTimingDataset(
-            self.data_dir, "train",
+            self.data_dir,
+            "train",
             augmentation_config=self.training_config.augmentation,
+            augmentation_seed=self.training_config.trainer.seed,
             max_concat_size=dl_cfg.max_concat_size,
             max_concat_frames=dl_cfg.max_concat_frames,
         )
@@ -223,8 +254,12 @@ class ForcedAlignmentModule(BaseLightningModule):
     def build_aux_dataset(self) -> BaseDataset | None:
         dl_cfg = self.training_config.dataloader
         return TextOnlyDataset(
-            self.aux_data_dir, "aux",
+            self.aux_data_dir,
+            "aux",
             augmentation_config=self.training_config.augmentation,
+            augmentation_seed=(
+                None if self.training_config.trainer.seed is None else self.training_config.trainer.seed + 1
+            ),
             max_concat_size=dl_cfg.max_concat_size,
             max_concat_frames=dl_cfg.max_concat_frames,
         )
@@ -236,16 +271,28 @@ class ForcedAlignmentModule(BaseLightningModule):
             return ZippedDataLoader(main_dl)
 
         dl_cfg = self.training_config.dataloader
-        multiplier = dl_cfg.aux_multiplier
+        main_batch_size, aux_batch_size = _split_batch_budget(
+            dl_cfg.max_batch_size,
+            dl_cfg.aux_ratio,
+            "max_batch_size",
+        )
+        main_batch_frames, aux_batch_frames = _split_batch_budget(
+            dl_cfg.max_batch_frames,
+            dl_cfg.aux_ratio,
+            "max_batch_frames",
+        )
+        self._main_active_batch_size = main_batch_size
+        self._main_active_batch_frames = main_batch_frames
+        baseline_num_batches = len(main_dl)
         self.aux_sampler = DynamicBatchSampler(
             self.aux_dataset,
-            max_batch_size=int(dl_cfg.max_batch_size * multiplier),
-            max_batch_frames=int(dl_cfg.max_batch_frames * multiplier),
+            max_batch_size=aux_batch_size,
+            max_batch_frames=aux_batch_frames,
             sort_by_len=True,
             frame_count_grid=dl_cfg.frame_count_grid,
             batch_count_multiple_of=self.training_config.trainer.accumulate_grad_batches,
             reassign_batches=True,
-            shuffle_batches=False,
+            shuffle_batches=True,
             seed=42,
         )
         aux_dl = DataLoader(
@@ -257,7 +304,13 @@ class ForcedAlignmentModule(BaseLightningModule):
             pin_memory=True,
             persistent_workers=dl_cfg.num_workers > 0,
         )
-        return ZippedDataLoader(main_dl, aux_dl, self.aux_sampler)
+        return ZippedDataLoader(
+            main_dl,
+            aux_dl,
+            self.aux_sampler,
+            aux_warmup_epochs=dl_cfg.aux_warmup_epochs,
+            num_batches=baseline_num_batches,
+        )
 
     def val_dataloader(self):
         return ZippedDataLoader(super().val_dataloader())
@@ -269,6 +322,14 @@ class ForcedAlignmentModule(BaseLightningModule):
     def on_train_epoch_start(self):
         super().on_train_epoch_start()
         if self.aux_sampler is not None:
+            dl_cfg = self.training_config.dataloader
+            if self._is_aux_warmup():
+                self.train_sampler.max_batch_size = dl_cfg.max_batch_size
+                self.train_sampler.max_batch_frames = dl_cfg.max_batch_frames
+            else:
+                self.train_sampler.max_batch_size = self._main_active_batch_size
+                self.train_sampler.max_batch_frames = self._main_active_batch_frames
+            self.train_sampler.formed = None
             self.aux_sampler.set_epoch(self.current_epoch)
 
     def _is_aux_warmup(self) -> bool:
@@ -278,13 +339,15 @@ class ForcedAlignmentModule(BaseLightningModule):
             and self.current_epoch < self.training_config.dataloader.aux_warmup_epochs
         )
 
-    def _group_count(self, batch_idx: int | None, key: str) -> int:
+    def _group_count(self, batch_idx: int | None, key: str) -> float:
         if batch_idx is None:
             return 0  # validation: weight falls back to 1.0 in training_step
-        batches = self.get_accumulation_group(batch_idx)
-        return sum(
-            self.train_dataset.get_metadata(key, idx)
-            for batch in batches for idx in batch
+        return _accumulation_group_count(
+            self.train_dataset,
+            self.train_sampler,
+            batch_idx,
+            self.training_config.trainer.accumulate_grad_batches,
+            key,
         )
 
     def forward_model(self, sample: dict[str, Tensor], infer: bool, batch_idx=None):
