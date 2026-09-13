@@ -62,11 +62,9 @@ def load_config_for_inference(
     return model_config, inference_config
 
 
-def load_state_dict_for_inference(path: pathlib.Path, ema=True) -> dict[str, Tensor]:
+def load_state_dict_for_inference(path: pathlib.Path) -> dict[str, Tensor]:
     checkpoint = torch.load(path, map_location="cpu")
     state_dict: dict = checkpoint.get("state_dict", {})
-    if ema and (ema_state_dict := checkpoint.get("ema_state_dict")) is not None:
-        state_dict.update(ema_state_dict)
     if not state_dict:
         raise KeyError(f"No valid state dict found in checkpoint: {path}.")
     return state_dict
@@ -118,7 +116,7 @@ def load_inference_model(
     backend = backend_cls(model_config, inference_config)
 
     # Load state dict
-    state_dict = load_state_dict_for_inference(checkpoint_path, ema=True)
+    state_dict = load_state_dict_for_inference(checkpoint_path)
     backend.load_state_dict(state_dict, strict=True)
     backend.eval()
 

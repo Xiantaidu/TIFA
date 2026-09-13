@@ -399,8 +399,6 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
             metric.reset()
         for metric in self.metrics.values():
             metric.reset()
-        if self.use_ema:
-            self.ema.apply()  # switch to EMA parameters for validation
         n = len(self.valid_dataset)
         k = min(n, self.training_config.validation.max_plots)
         self.plot_indices = set(numpy.linspace(0, n, k, endpoint=False, dtype=int).tolist())
@@ -456,8 +454,6 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
                 self.plot_validation_results(sample, outputs)
                 file.unlink()
         self.plot_validation_metrics()
-        if self.use_ema:
-            self.ema.restore()  # restore original parameters after validation
 
     def on_save_checkpoint(self, checkpoint: dict[str, torch.Tensor]):
         if self.use_ema:

@@ -111,6 +111,8 @@ class ExponentialMovingAverage:
                     + "\n".join(f"  {key}" for key in unexpected_keys)
                 )
         for name, tensor in self.shadow.items():
+            if name not in state_dict:
+                continue
             if tensor.shape != state_dict[name].shape:
                 raise RuntimeError(
                     f"Shape mismatch for key '{name}': "
