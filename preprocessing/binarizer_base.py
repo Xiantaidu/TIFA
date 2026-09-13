@@ -185,6 +185,15 @@ class BaseBinarizer(abc.ABC):
         self.vocabulary = vocab_builder.build()
         self.save_vocab_plot(vocab_builder.counter())
 
+    def filter_metadata_by_vocabulary(
+        self,
+        metadata_list: list[MetadataItem],
+    ) -> list[MetadataItem]:
+        """Return metadata items compatible with the assigned vocabulary."""
+        if self.vocabulary is None:
+            raise RuntimeError("Vocabulary has not been built.")
+        return metadata_list
+
     def save_vocab_plot(self, counter) -> None:
         fig = vocab_distribution_to_figure(counter)
         if fig is not None:

@@ -13,9 +13,41 @@ __all__ = [
     "MASK_TOKEN",
     "SPACE_TOKEN",
     "NUM_RESERVED_TOKENS",
+    "qualify_symbol",
+    "is_stop_symbol",
     "VocabularyBuilder",
     "Vocabulary",
 ]
+
+
+def qualify_symbol(
+    symbol: str,
+    default_language: str | None,
+    global_symbols: Iterable[str],
+) -> str:
+    """Apply the vocabulary's language-prefix rule to one symbol."""
+    if symbol not in global_symbols and "/" not in symbol and default_language is not None:
+        return f"{default_language}/{symbol}"
+    return symbol
+
+
+def is_stop_symbol(
+    symbol: str,
+    default_language: str | None,
+    global_symbols: Iterable[str],
+    stop_symbols: Iterable[str],
+) -> bool:
+    """Return whether a raw or language-qualified symbol is a stop."""
+    if symbol in stop_symbols:
+        return True
+    return (
+        qualify_symbol(
+            symbol,
+            default_language,
+            global_symbols,
+        )
+        in stop_symbols
+    )
 
 
 class VocabularyBuilder:
@@ -35,14 +67,16 @@ class VocabularyBuilder:
         if prebuilt_vocab is not None:
             self._symbol_counts.update({s: 0 for s in prebuilt_vocab.symbol_to_id})
 
-    def add(self, symbols: Iterable[str], default_language: str) -> None:
+    def add(self, symbols: Iterable[str], default_language: str | None) -> None:
         for s in symbols:
-            if s in self.stop_symbols:
+            if is_stop_symbol(
+                s,
+                default_language,
+                self.global_symbols,
+                self.stop_symbols,
+            ):
                 continue
-            if s not in self.global_symbols and "/" not in s and default_language is not None:
-                s = f"{default_language}/{s}"
-            if s in self.stop_symbols:
-                continue
+            s = qualify_symbol(s, default_language, self.global_symbols)
             self._symbol_counts[s] = self._symbol_counts.get(s, 0) + 1
 
     def counter(self) -> Mapping[str, int]:

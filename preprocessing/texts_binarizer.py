@@ -11,6 +11,7 @@ from lib import logging
 from lib.audio import load_audio
 from lib.feature.pitch import get_pitch_parselmouth
 from lib.levenshtein import segment_groups
+from lib.vocabulary import is_stop_symbol
 
 from .binarizer_base import (
     BaseBinarizer,
@@ -46,6 +47,63 @@ class TextOnlyBinarizer(BaseBinarizer):
 
     def resolve_data_dir(self) -> pathlib.Path:
         return self.config.text_only_data_dir_resolved
+
+    def _is_stop_symbol(self, symbol: str, language: str | None) -> bool:
+        vocabulary_config = self.config.vocabulary
+        return is_stop_symbol(
+            symbol,
+            language,
+            vocabulary_config.global_symbols,
+            vocabulary_config.stop_symbols,
+        )
+
+    def _encode_symbol(self, symbol: str, language: str | None) -> int | None:
+        if self.vocabulary is None:
+            raise RuntimeError("Vocabulary has not been built.")
+        token_id = self.vocabulary.encode(symbol, language)
+        if token_id is not None:
+            return token_id
+        if self._is_stop_symbol(symbol, language):
+            return None
+        raise ValueError(f"Token '{symbol}' is not in the main vocabulary for language " f"'{language}'.")
+
+    def filter_metadata_by_vocabulary(
+        self,
+        metadata_list: list[MetadataItem],
+    ) -> list[MetadataItem]:
+        if self.vocabulary is None:
+            raise RuntimeError("Vocabulary has not been built.")
+
+        retained: list[MetadataItem] = []
+        dropped_count = 0
+        for item in metadata_list:
+            oov_symbols = sorted(
+                {
+                    symbol
+                    for symbol in item.raw_symbols
+                    if not self._is_stop_symbol(symbol, item.language)
+                    and self.vocabulary.encode(symbol, item.language) is None
+                }
+            )
+            if not oov_symbols:
+                retained.append(item)
+                continue
+
+            dropped_count += 1
+            # TODO: Replace whole-item OOV dropping with an explicit unknown-
+            # token or partial-path policy after the model supports one.
+            logging.warning(
+                f"Dropping aux item '{item.name}' from "
+                f"'{item.waveform_fn.as_posix()}' because the main vocabulary "
+                f"cannot encode: {', '.join(oov_symbols)}."
+            )
+
+        if dropped_count:
+            logging.warning(
+                f"Dropped {dropped_count}/{len(metadata_list)} aux item(s) "
+                f"containing tokens absent from the main vocabulary."
+            )
+        return retained
 
     def load_metadata(self, subset_dir: pathlib.Path) -> list[MetadataItem]:
         index_path = subset_dir / "index.csv"
@@ -132,9 +190,9 @@ class TextOnlyBinarizer(BaseBinarizer):
         if item.phones is not None:
             encoded_groups: list[list[list[int]]] = []
             for ph in item.phones:
-                tid = self.vocabulary.encode(ph, item.language)
+                tid = self._encode_symbol(ph, item.language)
                 if tid is None:
-                    # Stop symbol, not in vocabulary -- skip
+                    # Stop symbols are intentionally omitted from alignment.
                     continue
                 encoded_groups.append([[tid]])
         else:
@@ -149,13 +207,9 @@ class TextOnlyBinarizer(BaseBinarizer):
                     for path in gw.phones:
                         tok_ids = []
                         for ph in path:
-                            tid = self.vocabulary.encode(ph, item.language)
-                            if tid is None:
-                                raise RuntimeError(
-                                    f"Token '{ph}' not in vocabulary "
-                                    f"for item '{item.name}'."
-                                )
-                            tok_ids.append(tid)
+                            tid = self._encode_symbol(ph, item.language)
+                            if tid is not None:
+                                tok_ids.append(tid)
                         encoded_paths.append(tok_ids)
                 encoded_groups.append(encoded_paths)
 

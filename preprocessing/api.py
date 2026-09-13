@@ -50,17 +50,30 @@ def build_vocab_from_datasets(
         binarizer_classes: list[type],
 ):
     binarizers = [cls(config=config) for cls in binarizer_classes]
-    all_metadata = []
-    for b in binarizers:
-        metadata = b.collect_metadata()
-        logging.info(
-            f"Collected {len(metadata)} metadata items "
-            f"from '{b.data_dir.as_posix()}' ({b.__class__.__name__})."
-        )
-        all_metadata.extend(metadata)
-    logging.info(f"Collected {len(all_metadata)} metadata items in total.")
-    vocab, counter, _ = build_shared_vocab(config.vocabulary, all_metadata)
+    main_metadata = binarizers[0].collect_metadata()
+    logging.info(
+        f"Collected {len(main_metadata)} main metadata items "
+        f"from '{binarizers[0].data_dir.as_posix()}' "
+        f"({binarizers[0].__class__.__name__})."
+    )
+    if not main_metadata:
+        raise RuntimeError("No metadata items found in the main dataset.")
+    vocabulary, counter, builder = build_shared_vocab(
+        config.vocabulary,
+        main_metadata,
+    )
+    for binarizer in binarizers:
+        binarizer.vocabulary = vocabulary
+        binarizer.vocab_builder = builder
     binarizers[0].save_vocab_plot(counter)
+
+    for binarizer in binarizers[1:]:
+        metadata = binarizer.collect_metadata()
+        retained = binarizer.filter_metadata_by_vocabulary(metadata)
+        logging.info(
+            f"Validated {len(metadata)} aux metadata items from "
+            f"'{binarizer.data_dir.as_posix()}': {len(retained)} retained."
+        )
     logging.success("Vocabulary built and plot saved.")
 
 
@@ -83,7 +96,7 @@ def binarize_datasets(
         logging.success("Binarization completed.")
         return
 
-    # Multi-dataset: collect metadata from all
+    # Multi-dataset: collect metadata from each dataset.
     per_metadata = []
     for b in binarizers:
         metadata = b.collect_metadata()
@@ -92,17 +105,32 @@ def binarize_datasets(
             f"({b.__class__.__name__})."
         )
         per_metadata.append(metadata)
-    all_metadata = [item for metadata in per_metadata for item in metadata]
-    if not all_metadata:
-        raise RuntimeError("No metadata items found in any dataset.")
+    if not per_metadata[0]:
+        raise RuntimeError("No metadata items found in the main dataset.")
 
-    # Build shared vocabulary
-    shared_vocab, counter, builder = build_shared_vocab(config.vocabulary, all_metadata)
+    # The model vocabulary is defined only by supervised main data. Aux-only
+    # symbols must never expand the output space.
+    shared_vocab, counter, builder = build_shared_vocab(
+        config.vocabulary,
+        per_metadata[0],
+    )
     for b in binarizers:
         b.vocabulary = shared_vocab
         b.vocab_builder = builder
 
-    # Main binarizer handles plot
+    # Validate aux metadata before any binary output is written.
+    for index in range(1, len(binarizers)):
+        original_count = len(per_metadata[index])
+        per_metadata[index] = binarizers[index].filter_metadata_by_vocabulary(
+            per_metadata[index],
+        )
+        logging.info(
+            f"Aux dataset '{binarizers[index].data_dir.as_posix()}': "
+            f"retained {len(per_metadata[index])}/{original_count} items "
+            f"after main-vocabulary validation."
+        )
+
+    # Main binarizer handles plot.
     binarizers[0].save_vocab_plot(counter)
 
     # Each binarizer builds dataset independently
