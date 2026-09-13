@@ -26,8 +26,9 @@ class SpectrogramContext:
 @dataclass
 class ScoreResult:
     """Output of pronunciation scoring / disambiguation."""
+
     tokens: Tensor  # [B, N] best token sequence (compacted, 0-padded)
-    groups: Tensor  # [B, N] best group sequence (compacted, 0-padded)
+    groups: Tensor | None  # [B, N] selected group IDs, or None when not supplied
     alts: Tensor  # [B, S_max] chosen alternative index per segment
     scores: Tensor  # [B, S_max, W_max] per-segment mean log-likelihood-ratio (0-padded for invalid alternatives)
 
@@ -78,7 +79,7 @@ class InferenceBackend(ABC):
             spec: SpectrogramContext,
             *,
             paths: Tensor,
-            groups: Tensor,
+            groups: Tensor | None = None,
             segments: Tensor,
             widths: Tensor,
     ) -> ScoreResult:
@@ -89,7 +90,8 @@ class InferenceBackend(ABC):
         Args:
             spec: SpectrogramContext.
             paths: ``[B, N_grid, W_max]`` int64, alternative token IDs.
-            groups: ``[B, N_grid, W_max]`` int64, alternative group IDs.
+            groups: optional ``[B, N_grid, W_max]`` int64 group IDs carried
+                along the selected path; not used for scoring.
             segments: ``[B, N_grid]`` int64, segment index per grid position.
             widths: ``[B, S_max]`` int64, number of alternatives per segment.
 
@@ -126,21 +128,28 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
     def __init__(
             self,
             model_config: ModelConfig,
-            inference_config: InferenceConfig,
+            inference_config: InferenceConfig | None = None,
+            *,
+            model: ForcedAlignmentModel | None = None,
+            spec_fn: StretchableMelSpectrogram | None = None,
     ):
         super().__init__()
-        feat = inference_config.features
-        self._timestep = feat.hop_size / feat.audio_sample_rate
-        self.spec_fn = StretchableMelSpectrogram(
-            sample_rate=feat.audio_sample_rate,
-            n_mels=feat.spectrogram.num_bins,
-            n_fft=feat.fft_size,
-            win_length=feat.win_size,
-            hop_length=feat.hop_size,
-            fmin=feat.spectrogram.fmin,
-            fmax=feat.spectrogram.fmax,
-        )
-        self.model = ForcedAlignmentModel(model_config)
+        if spec_fn is None:
+            if inference_config is None:
+                raise ValueError("inference_config is required when spec_fn is not provided.")
+            feat = inference_config.features
+            spec_fn = StretchableMelSpectrogram(
+                sample_rate=feat.audio_sample_rate,
+                n_mels=feat.spectrogram.num_bins,
+                n_fft=feat.fft_size,
+                win_length=feat.win_size,
+                hop_length=feat.hop_size,
+                fmin=feat.spectrogram.fmin,
+                fmax=feat.spectrogram.fmax,
+            )
+        self.spec_fn = spec_fn
+        self._timestep = spec_fn.hop_length / spec_fn.sample_rate
+        self.model = model if model is not None else ForcedAlignmentModel(model_config)
 
     @property
     def timestep(self) -> float:
@@ -165,7 +174,7 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
             spec: SpectrogramContext,
             *,
             paths: Tensor,
-            groups: Tensor,
+            groups: Tensor | None = None,
             segments: Tensor,
             widths: Tensor,
     ) -> ScoreResult:
@@ -174,98 +183,74 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
         S_max = widths.shape[1]
         W_max = paths.shape[2]
 
-        single_path = widths.max(dim=1).values == 1  # [B]
-        multi_idx = torch.nonzero(~single_path, as_tuple=True)[0]  # [B_m]
+        single_path = widths.max(dim=1).values == 1
+        multi_idx = torch.nonzero(~single_path, as_tuple=True)[0]
         B_m = int(multi_idx.numel())
 
         best_alts = torch.zeros(B, S_max, dtype=torch.int64, device=device)
-        mean_scores = torch.zeros(B, S_max, W_max, device=device)
+        mean_scores = torch.zeros(B, S_max, W_max, dtype=torch.float32, device=device)
 
         if B_m > 0:
             paths_m = paths[multi_idx]
             segments_m = segments[multi_idx]
             widths_m = widths[multi_idx]
-            features_m = spec.features[multi_idx]
-            mask_m = spec.mask[multi_idx]
 
-            # ---- Phase A: Build masked token sequence ----
+            # Mask all divergent positions for audio-conditioned MLM scoring.
             N_total = int((segments_m != 0).sum(dim=-1).max().item())
             masked_tokens = paths_m[:, :N_total, 0].clone()
-
-            widths_0 = torch.cat([
-                torch.ones(B_m, 1, dtype=torch.int64, device=device), widths_m,
-            ], dim=1)  # [B_m, 1 + S_max]
-            div_mask = widths_0.gather(1, segments_m[:, :N_total]) > 1
-            masked_tokens[div_mask] = MASK_TOKEN
-
-            seq_lens = (segments_m != 0).sum(dim=-1)  # [B_m]
-            pos_mask = (
-                    torch.arange(N_total, device=device).unsqueeze(0)
-                    >= seq_lens.unsqueeze(-1)
-            )
+            widths_0 = F.pad(widths_m, (1, 0), value=1)
+            width_at_pos = widths_0.gather(1, segments_m[:, :N_total])
+            masked_tokens[width_at_pos > 1] = MASK_TOKEN
+            seq_lens = (segments_m != 0).sum(dim=-1)
+            pos_mask = torch.arange(N_total, device=device).unsqueeze(0) >= seq_lens.unsqueeze(-1)
             masked_tokens[pos_mask] = 0
 
-            # ---- Phase B: MLM forward ----
-            n_mask_mlm = masked_tokens != 0
             _, _, _, token_logits = self.model(
-                features_m, masked_tokens, mask_m, n_mask_mlm,
+                spec.features[multi_idx],
+                masked_tokens,
+                spec.mask[multi_idx],
+                masked_tokens != 0,
             )
-
-            # ---- Phase C: Score queries and aggregate per segment ----
             V = token_logits.shape[-1]
             log_probs = F.log_softmax(token_logits.float(), dim=-1)
 
-            s_g = segments_m[:, :N_total].unsqueeze(-1) - 1  # [B_m, N_total, 1]
-            w_at_pos = widths_0.gather(1, segments_m[:, :N_total]).unsqueeze(-1)
+            # Shorter alternatives use SPACE targets at omitted positions.
             w_g = torch.arange(W_max, device=device).view(1, 1, -1)
-
-            valid_g = (s_g >= 0) & (w_g < w_at_pos) & (w_at_pos > 1)
-            flat_g = valid_g.nonzero(as_tuple=False)  # [num_valid, 3]
-            b_f, r_f, w_f = flat_g[:, 0], flat_g[:, 1], flat_g[:, 2]
-            tok_f = paths_m[b_f, r_f, w_f]
-
-            queries = torch.zeros(
-                B_m, W_max, N_total, dtype=torch.int64, device=device,
+            valid_g = (
+                (segments_m[:, :N_total].unsqueeze(-1) > 0)
+                & (w_g < width_at_pos.unsqueeze(-1))
+                & (width_at_pos.unsqueeze(-1) > 1)
             )
+            b_f, r_f, w_f = valid_g.nonzero(as_tuple=True)
+            tok_f = paths_m[b_f, r_f, w_f]
+            queries = torch.zeros(B_m, W_max, N_total, dtype=torch.int64, device=device)
             queries[b_f, w_f, r_f] = SPACE_TOKEN
             real = tok_f != 0
             queries[b_f[real], w_f[real], r_f[real]] = tok_f[real]
 
             expanded = log_probs.unsqueeze(1).expand(-1, W_max, -1, -1)
-            scores = expanded.gather(
-                -1, queries.unsqueeze(-1),
-            ).squeeze(-1) + math.log(V)  # [B_m, W_max, N_total]
-            q_mask = queries != 0
+            scores = expanded.gather(-1, queries.unsqueeze(-1)).squeeze(-1) + math.log(V)
+            seg_mask = segments_m[:, :N_total].unsqueeze(1) == torch.arange(
+                1,
+                S_max + 1,
+                device=device,
+            ).view(1, -1, 1)
+            score_sum = (scores.unsqueeze(1) * seg_mask.unsqueeze(2)).sum(dim=-1)
+            score_count = ((queries != 0).unsqueeze(1) * seg_mask.unsqueeze(2)).sum(dim=-1).clamp(min=1)
+            segment_scores = score_sum / score_count
 
-            seg_oh = (
-                    segments_m[:, :N_total].unsqueeze(1) ==
-                    torch.arange(1, S_max + 1, device=device).view(1, -1, 1)
-            )  # [B_m, S_max, N_total]
-            score_sum = (scores.unsqueeze(1) * seg_oh.unsqueeze(2)).sum(dim=-1)
-            score_cnt = (
-                    q_mask.unsqueeze(1) * seg_oh.unsqueeze(2)
-            ).sum(dim=-1).clamp(min=1)
-            m_scores = score_sum / score_cnt  # [B_m, S_max, W_max]
+            alt_valid = (w_g < widths_m.unsqueeze(-1)) & (widths_m.unsqueeze(-1) > 1)
+            segment_scores = segment_scores.masked_fill(~alt_valid, float("-inf"))
+            best_alts[multi_idx] = segment_scores.argmax(dim=-1)
+            mean_scores[multi_idx] = segment_scores.masked_fill(~alt_valid, 0.0)
 
-            alt_ok = (
-                    (torch.arange(W_max, device=device).view(1, 1, -1)
-                     < widths_m.unsqueeze(-1)) &
-                    (widths_m.unsqueeze(-1) > 1)
-            )
-            m_scores[~alt_ok] = float("-inf")
-            best_alts[multi_idx] = m_scores.argmax(dim=-1)
-            m_scores[~alt_ok] = 0.0
-            mean_scores[multi_idx] = m_scores
-
-        # ---- Phase D: Extract best tokens for all items ----
-        tokens_raw, groups_raw = extract_tokens(
-            paths, groups, segments=segments, choices=best_alts,
-        )
-        tokens_best, groups_best = compact_sequences(tokens_raw, groups_raw)
+        grids = (paths,) if groups is None else (paths, groups)
+        selected = extract_tokens(*grids, segments=segments, choices=best_alts)
+        compacted = compact_sequences(*selected)
 
         return ScoreResult(
-            tokens=tokens_best,
-            groups=groups_best,
+            tokens=compacted[0],
+            groups=compacted[1] if groups is not None else None,
             alts=best_alts,
             scores=mean_scores,
         )
@@ -341,7 +326,7 @@ class ForcedAlignmentSSLInferenceModel(nn.Module, InferenceBackend):
         mask = idx.unsqueeze(0) < L.unsqueeze(1)
         return SpectrogramContext(features=features, mask=mask)
 
-    def score(self, spec, paths, groups, segments, widths):
+    def score(self, spec, *, paths, groups=None, segments, widths):
         raise NotImplementedError("SSL inference not yet implemented")
 
     def align(self, spec, tokens, groups=None, unit: Literal["frame", "second"] = "second"):
