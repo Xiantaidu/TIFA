@@ -6,6 +6,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
+from inference.backend import ForcedAlignmentInferenceModel, SpectrogramContext
 from lib.config.schema import RootConfig, LossConfig, AugmentationConfig
 from lib.plot import alignment_to_figure, emission_to_figure, topk_bar_figure
 from modules.decoding import decode_alignment_flat
@@ -32,13 +33,24 @@ from training.data import (
     DynamicBatchSampler,
     ZippedDataLoader,
 )
-from training.pl_module_base import BaseLightningModule, LossValue
+from training.pl_module_base import (
+    BaseLightningModule,
+    LossValue,
+)
+from training.pseudo_label import (
+    PseudoLabelBatch,
+    build_pseudo_labels,
+    concat_pseudo_label_groups,
+)
 
 # Loss names shared between register_losses_and_metrics and forward_model.
 _FRAME_ALIGNMENT = "frame_alignment_loss"
 _SPAN_CONTRASTIVE = "span_contrastive_loss"
 _TOKEN_IDENTITY = "token_identity_loss"
 _FRAME_IDENTITY = "frame_identity_loss"
+_AUX_FRAME_ALIGNMENT = "aux_frame_alignment_loss"
+_AUX_SPAN_CONTRASTIVE = "aux_span_contrastive_loss"
+_AUX_FRAME_IDENTITY = "aux_frame_identity_loss"
 
 # Metric name bases shared between _register_fa_metrics and plot_validation_metrics.
 _BER_ONSET = "BER_onset"
@@ -66,6 +78,20 @@ def _split_batch_budget(total: int, aux_ratio: float, name: str) -> tuple[int, i
     return main, aux
 
 
+def _convert_aux_sampler_budget(
+    group_batch_size: int,
+    group_batch_frames: int,
+    max_concat_size: int | None,
+) -> tuple[int, int]:
+    """Convert student concat-group budgets to raw teacher fragment budgets.
+
+    Item capacity expands because the sampler now sees fragments. The padded
+    frame budget already measures the teacher tensor footprint, so it is kept.
+    """
+    concat_capacity = max_concat_size if max_concat_size is not None else 1
+    return group_batch_size * concat_capacity, group_batch_frames
+
+
 def _accumulation_group_count(
     dataset: BaseDataset,
     sampler: DynamicBatchSampler,
@@ -83,6 +109,29 @@ def _accumulation_group_count(
 
 
 class ForcedAlignmentModule(BaseLightningModule):
+
+    def post_init(self) -> None:
+        self._validate_semisupervised_config()
+
+    def _validate_semisupervised_config(self) -> None:
+        cfg = self.training_config.semisupervised
+        if not cfg.enabled:
+            return
+        if self.aux_data_dir is None:
+            raise ValueError("training.semisupervised.enabled requires binarizer.text_only_data_dir.")
+        if not self.training_config.weight_averaging.ema_enabled:
+            raise ValueError("training.semisupervised.enabled requires training.weight_averaging.ema_enabled.")
+        dl_cfg = self.training_config.dataloader
+        _split_batch_budget(
+            dl_cfg.max_batch_size,
+            dl_cfg.aux_ratio,
+            "max_batch_size",
+        )
+        _split_batch_budget(
+            dl_cfg.max_batch_frames,
+            dl_cfg.aux_ratio,
+            "max_batch_frames",
+        )
 
     @classmethod
     def resolve_data_dirs(cls, config: RootConfig) -> tuple[pathlib.Path, pathlib.Path | None]:
@@ -112,6 +161,32 @@ class ForcedAlignmentModule(BaseLightningModule):
             _FRAME_IDENTITY, FrameIdentityLoss(),
             weight=loss_cfg.frame_identity.weight,
         )
+
+        semi_cfg = self.training_config.semisupervised
+        if semi_cfg.enabled:
+            self.register_loss(
+                _AUX_FRAME_ALIGNMENT,
+                FrameAlignmentLoss(
+                    temperature=loss_cfg.frame_alignment.temperature,
+                ),
+                weight=semi_cfg.aux_loss_weight,
+                validation=False,
+            )
+            self.register_loss(
+                _AUX_SPAN_CONTRASTIVE,
+                SpanContrastiveLoss(
+                    temperature=loss_cfg.span_contrastive.temperature,
+                    bidirectional=loss_cfg.span_contrastive.bidirectional,
+                ),
+                weight=semi_cfg.aux_loss_weight,
+                validation=False,
+            )
+            self.register_loss(
+                _AUX_FRAME_IDENTITY,
+                FrameIdentityLoss(),
+                weight=(semi_cfg.aux_loss_weight * semi_cfg.pseudo_frame_identity_weight),
+                validation=False,
+            )
 
         self._register_fa_metrics()
         if self.use_parallel_dirty_metrics:
@@ -252,16 +327,21 @@ class ForcedAlignmentModule(BaseLightningModule):
         )
 
     def build_aux_dataset(self) -> BaseDataset | None:
-        dl_cfg = self.training_config.dataloader
+        if not self.training_config.semisupervised.enabled:
+            return None
+        aug_cfg = self.training_config.augmentation.drop(
+            "time_stretching",
+            "sequence_edit",
+            "token_masking",
+        )
         return TextOnlyDataset(
             self.aux_data_dir,
             "aux",
-            augmentation_config=self.training_config.augmentation,
+            augmentation_config=aug_cfg,
+            augmentation_return_dirty=True,
             augmentation_seed=(
                 None if self.training_config.trainer.seed is None else self.training_config.trainer.seed + 1
             ),
-            max_concat_size=dl_cfg.max_concat_size,
-            max_concat_frames=dl_cfg.max_concat_frames,
         )
 
     def train_dataloader(self):
@@ -281,13 +361,18 @@ class ForcedAlignmentModule(BaseLightningModule):
             dl_cfg.aux_ratio,
             "max_batch_frames",
         )
+        aux_raw_batch_size, aux_raw_batch_frames = _convert_aux_sampler_budget(
+            aux_batch_size,
+            aux_batch_frames,
+            dl_cfg.max_concat_size,
+        )
         self._main_active_batch_size = main_batch_size
         self._main_active_batch_frames = main_batch_frames
         baseline_num_batches = len(main_dl)
         self.aux_sampler = DynamicBatchSampler(
             self.aux_dataset,
-            max_batch_size=aux_batch_size,
-            max_batch_frames=aux_batch_frames,
+            max_batch_size=aux_raw_batch_size,
+            max_batch_frames=aux_raw_batch_frames,
             sort_by_len=True,
             frame_count_grid=dl_cfg.frame_count_grid,
             batch_count_multiple_of=self.training_config.trainer.accumulate_grad_batches,
@@ -350,13 +435,197 @@ class ForcedAlignmentModule(BaseLightningModule):
             key,
         )
 
-    def forward_model(self, sample: dict[str, Tensor], infer: bool, batch_idx=None):
-        main_sample = sample["main"]
-        # TODO: aux_sample not used yet.
-        # When computing aux losses, zero them during warmup:
-        #   if self._is_aux_warmup():
-        #       aux_loss = torch.zeros_like(aux_loss)
+    def _aux_group_count(self, batch_idx: int, key: str) -> float:
+        return _accumulation_group_count(
+            self.aux_dataset,
+            self.aux_sampler,
+            batch_idx,
+            self.training_config.trainer.accumulate_grad_batches,
+            key,
+        )
 
+    def _zero_aux_losses(
+        self,
+        reference: Tensor,
+        group_frames: float = 0.0,
+        group_tokens: float = 0.0,
+    ) -> dict[str, LossValue]:
+        zero = reference.new_zeros(())
+        return {
+            _AUX_FRAME_ALIGNMENT: LossValue(zero, 0, group_frames),
+            _AUX_SPAN_CONTRASTIVE: LossValue(zero, 0, group_tokens),
+            _AUX_FRAME_IDENTITY: LossValue(zero, 0, group_frames),
+        }
+
+    def _generate_aux_pseudo_labels(self, aux_sample: dict[str, Tensor]) -> PseudoLabelBatch:
+        if not self.use_ema:
+            raise RuntimeError("Semi-supervised training requires an EMA teacher.")
+
+        spectrogram = aux_sample["spectrogram"]
+        frame_lengths = aux_sample["T"]
+        max_T = spectrogram.shape[1]
+        t_mask = torch.arange(max_T, device=spectrogram.device).unsqueeze(0) < frame_lengths.unsqueeze(1)
+        spec = SpectrogramContext(features=spectrogram.float(), mask=t_mask)
+        # Keep this borrowed backend local to avoid registering the model twice.
+        backend = ForcedAlignmentInferenceModel(
+            self.model_config,
+            model=self.model,
+            spec_fn=self.aux_dataset.mel_spectrogram,
+        )
+        was_training = self.model.training
+        applied = False
+        self.model.eval()
+        try:
+            self.ema.apply()
+            applied = True
+            with torch.no_grad(), torch.autocast(
+                device_type=spectrogram.device.type,
+                enabled=False,
+            ):
+                tokens = backend.score(
+                    spec,
+                    paths=aux_sample["paths"],
+                    segments=aux_sample["segments"],
+                    widths=aux_sample["widths"],
+                ).tokens
+                n_mask = tokens != 0
+                token_lengths = n_mask.sum(dim=-1)
+                if int(token_lengths.max().item()) == 0:
+                    agreement = spectrogram.new_zeros((spectrogram.shape[0],))
+                    similarity = spectrogram.new_zeros(
+                        (spectrogram.shape[0], max_T, tokens.shape[1]),
+                    )
+                    spans = torch.zeros(
+                        spectrogram.shape[0],
+                        tokens.shape[1],
+                        2,
+                        dtype=torch.long,
+                        device=spectrogram.device,
+                    )
+                else:
+                    aligned = backend.align(spec, tokens=tokens, unit="frame")
+                    agreement = aligned.agreement
+                    similarity = aligned.similarity
+                    spans = aligned.spans
+        finally:
+            if applied:
+                self.ema.restore()
+            self.model.train(was_training)
+
+        validation_cfg = self.training_config.validation
+        semi_cfg = self.training_config.semisupervised
+        return build_pseudo_labels(
+            tokens=tokens,
+            spans=spans,
+            similarity=similarity,
+            agreement=agreement,
+            t_mask=t_mask,
+            n_mask=n_mask,
+            vocab_size=self.vocab.vocab_size,
+            min_agreement=semi_cfg.min_agreement,
+            min_confidence=semi_cfg.min_confidence,
+            min_determinacy=semi_cfg.min_determinacy,
+            min_monotonicity=semi_cfg.min_monotonicity,
+            determinacy_power=validation_cfg.metrics_determinacy_power,
+            determinacy_width=validation_cfg.metrics_determinacy_width,
+            monotonicity_power=validation_cfg.metrics_monotonicity_power,
+            monotonicity_width=validation_cfg.metrics_monotonicity_width,
+        )
+
+    def _forward_aux(
+        self,
+        aux_sample: dict[str, Tensor],
+        batch_idx: int,
+    ) -> dict[str, LossValue]:
+        reference = aux_sample["spectrogram_dirty"]
+        group_frames = self._aux_group_count(batch_idx, "lengths")
+        group_tokens = self._aux_group_count(batch_idx, "paths")
+        if self._is_aux_warmup():
+            return self._zero_aux_losses(reference, group_frames, group_tokens)
+
+        pseudo = self._generate_aux_pseudo_labels(aux_sample)
+        self.log(
+            "training/aux_acceptance_rate",
+            pseudo.accepted.float().mean(),
+            on_step=True,
+            on_epoch=False,
+            logger=True,
+            sync_dist=False,
+            batch_size=int(aux_sample["size"]),
+        )
+        dl_cfg = self.training_config.dataloader
+        student = concat_pseudo_label_groups(
+            aux_sample,
+            pseudo,
+            max_concat_size=dl_cfg.max_concat_size,
+            max_concat_frames=dl_cfg.max_concat_frames,
+        )
+        if student is None:
+            return self._zero_aux_losses(
+                reference,
+                group_frames,
+                group_tokens,
+            )
+
+        frame_features, frame_logits, token_features, _ = self.model(
+            student.spectrogram,
+            student.tokens,
+            student.t_mask,
+            student.n_mask,
+        )
+        frame_alignment = self.losses[_AUX_FRAME_ALIGNMENT](
+            frame_features,
+            token_features,
+            student.regions,
+            student.t_mask,
+            student.n_mask,
+        )
+        span_contrastive = self.losses[_AUX_SPAN_CONTRASTIVE](
+            frame_features,
+            token_features,
+            student.spans,
+            student.t_mask,
+            student.n_mask,
+        )
+        frame_identity = self.losses[_AUX_FRAME_IDENTITY](
+            frame_logits,
+            student.frame_targets,
+            student.t_mask,
+        )
+
+        frame_count = int(student.t_mask.sum().item())
+        token_count = int(student.n_mask.sum().item())
+        return {
+            _AUX_FRAME_ALIGNMENT: LossValue(
+                frame_alignment,
+                frame_count,
+                group_frames,
+            ),
+            _AUX_SPAN_CONTRASTIVE: LossValue(
+                span_contrastive,
+                token_count,
+                group_tokens,
+            ),
+            _AUX_FRAME_IDENTITY: LossValue(
+                frame_identity,
+                frame_count,
+                group_frames,
+            ),
+        }
+
+    def forward_model(self, sample: dict[str, Tensor], infer: bool, batch_idx=None):
+        aux_losses = {}
+        if not infer and batch_idx is not None and self.training_config.semisupervised.enabled:
+            if self._is_aux_warmup():
+                aux_losses = self._zero_aux_losses(
+                    sample["main"]["spectrogram"],
+                )
+            else:
+                if "aux" not in sample:
+                    raise RuntimeError("Semi-supervised training batch is missing aux data.")
+                aux_losses = self._forward_aux(sample["aux"], batch_idx)
+
+        main_sample = sample["main"]
         spectrogram = main_sample["spectrogram"]
         tokens = main_sample["tokens"]
         regions = main_sample["regions"]
@@ -468,6 +737,7 @@ class ForcedAlignmentModule(BaseLightningModule):
             _TOKEN_IDENTITY: token_identity_loss,
             _FRAME_IDENTITY: frame_identity_loss,
         }
+        losses.update(aux_losses)
 
         return losses
 

@@ -27,6 +27,14 @@ training:
   dataloader:
     aux_ratio: 1.0
     aux_warmup_epochs: 10
+  semisupervised:
+    enabled: true
+    aux_loss_weight: 0.25
+    pseudo_frame_identity_weight: 0.25
+    min_agreement: 0.5
+    min_confidence: 0.10
+    min_determinacy: 0.55
+    min_monotonicity: 0.55
   augmentation:
     sequence_edit:
       enabled: true
@@ -59,3 +67,5 @@ training:
     metrics_conjunction_k_values: [20]
     metrics_determinacy_power: 2.0
     metrics_determinacy_width: 5
+  weight_averaging:
+    ema_enabled: true

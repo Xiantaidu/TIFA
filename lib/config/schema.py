@@ -591,8 +591,19 @@ class WeightAveragingConfig(ConfigBaseModel):
     ema_exclude_params: list[str] = Field([])
 
 
+class SemiSupervisedConfig(ConfigBaseModel):
+    enabled: bool = Field(False)
+    aux_loss_weight: float = Field(0.25, ge=0.0)
+    pseudo_frame_identity_weight: float = Field(0.25, ge=0.0)
+    min_agreement: float = Field(0.5, ge=0.0, le=1.0)
+    min_confidence: float = Field(0.10)
+    min_determinacy: float = Field(0.55, ge=0.0, le=1.0)
+    min_monotonicity: float = Field(0.55, ge=0.0, le=1.0)
+
+
 class TrainingConfig(ConfigBaseModel):
     augmentation: AugmentationConfig = Field(...)
+    semisupervised: SemiSupervisedConfig = Field(default_factory=SemiSupervisedConfig)
     iterative_ranking: IterativeRankingConfig = Field(default_factory=IterativeRankingConfig)
     loss: LossConfig = Field(...)
     dataloader: DataLoaderConfig = Field(...)

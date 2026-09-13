@@ -224,7 +224,7 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
                 callback=rank_zero_info
             )
 
-    def register_loss(self, name: str, loss: nn.Module, weight: float = 1.0) -> None:
+    def register_loss(self, name: str, loss: nn.Module, weight: float = 1.0, validation: bool = True) -> None:
         """
         Register a loss module that can be accessed via `self.losses`.
         The *weight* is applied in `training_step`; `forward_model` should
@@ -236,7 +236,8 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
             raise ValueError(f"Loss name '{name}' is already used by a metric.")
         self.losses[name] = loss
         self.loss_weights[name] = weight
-        self.val_losses[name] = MeanMetric()  # for validation logging
+        if validation:
+            self.val_losses[name] = MeanMetric()  # for validation logging
 
     def register_metric(self, name: str, metric: Metric) -> None:
         """
