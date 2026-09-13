@@ -221,8 +221,6 @@ class WarmupDecayingCosineAnnealingWarmRestarts(LRScheduler):
         self.last_epoch = step
 
 
-
-
 class WarmupDecayingWSDWarmRestarts(LRScheduler):
     """Warmup + plateau/cooldown WSD-style warm restarts with decaying peaks.
 
@@ -385,4 +383,3 @@ class WarmupDecayingWSDWarmRestarts(LRScheduler):
 
     def set_step(self, step: int):
         self.last_epoch = step
-
