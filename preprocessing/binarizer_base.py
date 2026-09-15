@@ -3,6 +3,7 @@ import math
 import pathlib
 import random
 from dataclasses import dataclass
+from typing import Generic, TypeVar
 
 import librosa
 import matplotlib.pyplot as plt
@@ -29,6 +30,9 @@ class MetadataItem(abc.ABC):
     raw_symbols: list[str]  # including stop symbols
 
 
+MetadataT = TypeVar("MetadataT", bound=MetadataItem)
+
+
 @dataclass
 class DataSample:
     path: str
@@ -43,7 +47,7 @@ class DataSample:
             self.derived = {}
 
 
-class BaseBinarizer(abc.ABC):
+class BaseBinarizer(abc.ABC, Generic[MetadataT]):
     __data_attrs__: list[str] = None
 
     def __init__(self, config: BinarizerConfig, eval_mode=False, aux_mode=False):
@@ -56,8 +60,8 @@ class BaseBinarizer(abc.ABC):
         self.vocabulary: Vocabulary | None = None
         self.vocab_builder: VocabularyBuilder | None = None
 
-        self.valid_items: list[MetadataItem] = []
-        self.train_items: list[MetadataItem] = []
+        self.valid_items: list[MetadataT] = []
+        self.train_items: list[MetadataT] = []
 
     @abc.abstractmethod
     def resolve_data_dir(self) -> pathlib.Path:
@@ -66,11 +70,11 @@ class BaseBinarizer(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def load_metadata(self, subset_dir: pathlib.Path) -> list[MetadataItem]:
+    def load_metadata(self, subset_dir: pathlib.Path) -> list[MetadataT]:
         pass
 
     @abc.abstractmethod
-    def process_item(self, item: MetadataItem) -> DataSample:
+    def process_item(self, item: MetadataT) -> DataSample:
         pass
 
     def _resolve_validation_scope_dir(self) -> pathlib.Path:
@@ -112,7 +116,7 @@ class BaseBinarizer(abc.ABC):
 
     def _select_validation_indices(
         self,
-        metadata_list: list[MetadataItem],
+        metadata_list: list[MetadataT],
     ) -> set[int]:
         scope_dir = self._resolve_validation_scope_dir()
         candidates = [
@@ -137,7 +141,7 @@ class BaseBinarizer(abc.ABC):
         )
         return {index for index, _ in selected}
 
-    def split_dataset(self, metadata_list: list[MetadataItem]):
+    def split_dataset(self, metadata_list: list[MetadataT]):
         if self.aux_mode:
             self.train_items = sorted(
                 metadata_list, key=lambda itm: itm.estimated_duration, reverse=True
@@ -160,7 +164,7 @@ class BaseBinarizer(abc.ABC):
         if not self.valid_items:
             raise RuntimeError("Validation set is empty.")
 
-    def process_items(self, items: list[MetadataItem], prefix: str, multiprocessing=True):
+    def process_items(self, items: list[MetadataT], prefix: str, multiprocessing=True):
         builder = IndexedDatasetBuilder(
             path=self.data_dir, prefix=prefix, allowed_attr=self.__data_attrs__
         )
@@ -195,7 +199,7 @@ class BaseBinarizer(abc.ABC):
                 item_paths.append(sample.path)
                 lengths.append(sample.length)
                 for k, v in sample.data.items():
-                    if isinstance(v, numpy.ndarray) and v.ndim > 0:
+                    if isinstance(v, numpy.ndarray) and v.ndim > 0 and k not in sample.derived:
                         if k not in attr_lengths:
                             attr_lengths[k] = []
                         attr_lengths[k].append(v.shape[0])
@@ -221,9 +225,9 @@ class BaseBinarizer(abc.ABC):
         logging.info(f"Total duration of {prefix}: {format_duration(total_duration)}.")
         logging.debug(f"Processing {prefix} items done.")
 
-    def collect_metadata(self) -> list[MetadataItem]:
+    def collect_metadata(self) -> list[MetadataT]:
         index_file_paths = list(self.data_dir.rglob("index.csv"))
-        metadata_list = []
+        metadata_list: list[MetadataT] = []
         for index_file_path in index_file_paths:
             subset_dir = index_file_path.parent
             subset_metadata_list = self.load_metadata(subset_dir)
@@ -231,7 +235,7 @@ class BaseBinarizer(abc.ABC):
             logging.debug(f"Loaded {len(subset_metadata_list)} metadata items from '{subset_dir.as_posix()}'.")
         return metadata_list
 
-    def build_vocabulary(self, metadata_list: list[MetadataItem]):
+    def build_vocabulary(self, metadata_list: list[MetadataT]):
         prebuilt = None
         if self.config.vocabulary.prebuilt_vocab_file is not None:
             prebuilt = Vocabulary.from_file(self.config.vocabulary.prebuilt_vocab_file)
@@ -249,8 +253,8 @@ class BaseBinarizer(abc.ABC):
 
     def filter_metadata_by_vocabulary(
         self,
-        metadata_list: list[MetadataItem],
-    ) -> list[MetadataItem]:
+        metadata_list: list[MetadataT],
+    ) -> list[MetadataT]:
         """Return metadata items compatible with the assigned vocabulary."""
         if self.vocabulary is None:
             raise RuntimeError("Vocabulary has not been built.")
@@ -264,7 +268,7 @@ class BaseBinarizer(abc.ABC):
             plt.close(fig)
             logging.info(f"Vocabulary distribution plot saved to '{filename.as_posix()}'.")
 
-    def build_dataset(self, metadata_list: list[MetadataItem]):
+    def build_dataset(self, metadata_list: list[MetadataT]):
         self.split_dataset(metadata_list)
         logging.info(f"Training set total size: {len(self.train_items)}.")
         logging.info(f"Validation set total size: {len(self.valid_items)}.")

@@ -40,8 +40,8 @@ class _ChineseScriptConverter(PronunciationScriptDictionaryConverter):
     def claim(self, token: str) -> bool:
         return self._is_hanzi(token)
 
-    def text_to_script(self, tokens: list[str]) -> list[list[str]]:
-        simplified = self._engine.simplify(tokens)
+    def text_to_scripts(self, words: list[str]) -> list[list[str]]:
+        simplified = self._engine.simplify(words)
         best = self._engine.query_raw(simplified, style=STYLE_NORMAL)
         result: list[list[str]] = []
         for ch, best_list in zip(simplified, best):

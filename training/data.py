@@ -13,6 +13,7 @@ from lib.config.io import load_raw_config
 from lib.config.schema import AugmentationConfig, BinarizerFeaturesConfig
 from lib.feature.mel import StretchableMelSpectrogram
 from lib.indexed_dataset import IndexedDataset
+from lib.path_traversal import path_lengths
 from lib.sequence_mutation import apply_mask_mutations, apply_sequence_edits
 from lib.vocabulary import MASK_TOKEN, SPACE_TOKEN, NUM_RESERVED_TOKENS, Vocabulary
 from .augmentation import (
@@ -580,12 +581,20 @@ class PhonemeTimingDataset(BaseDataset):
 class TextOnlyDataset(BaseDataset):
     __multi_dims__ = {
         **BaseDataset.__multi_dims__,
-        "paths": 2
+        "paths": 2,
+        "groups": 2,
+        "candidates": 2,
     }
-    __non_zero_paddings__ = {
-        **BaseDataset.__non_zero_paddings__,
-        "widths": 1,
-    }
+
+    def _setup(self):
+        first = self.data.dset.get("0")
+        if first is not None and (
+            not {"paths", "words", "groups", "candidates"}.issubset(first.keys())
+            or first["paths"].ndim != 2
+            or first["candidates"].dtype != numpy.dtype(bool)
+        ):
+            raise ValueError("Text-only data requires complete candidate tensor grids; re-binarize the dataset.")
+        super()._setup()
 
     def __getitem__(self, index: int) -> dict:
         sample = super().__getitem__(index)
@@ -596,42 +605,28 @@ class TextOnlyDataset(BaseDataset):
     # noinspection PyMethodMayBeStatic
     def _prepare_item(self, sample: dict) -> dict:
         sample["T"] = torch.tensor(sample["spectrogram"].shape[0], dtype=torch.long)
-        sample["N"] = torch.tensor(sample["paths"].shape[0], dtype=torch.long)
+        sample["N"] = path_lengths(
+            sample["paths"].unsqueeze(0), sample["words"].unsqueeze(0), sample["candidates"].unsqueeze(0),
+        )[0]
         return sample
 
     def _concat_specific_samples(self, samples: list[dict]) -> dict:
-        S_vals = [int(s["segments"].max().item()) for s in samples]
-        S_cumsum = [0]
-        for sv in S_vals[:-1]:
-            S_cumsum.append(S_cumsum[-1] + sv)
-
-        segs = []
-        for s, offset in zip(samples, S_cumsum):
-            seg = s["segments"]
-            if offset > 0:
-                seg = seg.clone()
-                mask = seg > 0
-                seg[mask] += offset
-            segs.append(seg)
-        merged_segments = torch.cat(segs)
-
-        merged_widths = torch.cat([s["widths"] for s in samples])
-
-        max_width = max(s["paths"].shape[1] for s in samples)
-        padded = []
-        for s in samples:
-            pw = s["paths"].shape[1]
-            if pw < max_width:
-                p = torch.nn.functional.pad(s["paths"], (0, max_width - pw))
-            else:
-                p = s["paths"]
-            padded.append(p)
-        merged_paths = torch.cat(padded, dim=0)
-
+        width = max(sample["paths"].shape[1] for sample in samples)
+        paths, words, groups, candidates = [], [], [], []
+        offset = 0
+        for sample in samples:
+            padding = (0, width - sample["paths"].shape[1])
+            paths.append(torch.nn.functional.pad(sample["paths"], padding))
+            groups.append(torch.nn.functional.pad(sample["groups"], padding))
+            candidates.append(torch.nn.functional.pad(sample["candidates"], padding))
+            owners = sample["words"]
+            words.append(owners + (owners > 0).long() * offset)
+            offset += sample["candidates"].shape[0]
         return {
-            "paths": merged_paths,
-            "segments": merged_segments,
-            "widths": merged_widths,
+            "paths": torch.cat(paths),
+            "words": torch.cat(words),
+            "groups": torch.cat(groups),
+            "candidates": torch.cat(candidates),
         }
 
 

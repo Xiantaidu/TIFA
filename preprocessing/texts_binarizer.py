@@ -6,11 +6,11 @@ import librosa
 import numpy
 
 from g2p.api import build_pipeline_from_config
-from g2p.converters.base import G2PText
+from g2p.converters.base import G2PWord
+from g2p.encoding import encode_paths
 from lib import logging
 from lib.audio import load_audio
 from lib.feature.pitch import get_pitch_parselmouth
-from lib.levenshtein import segment_groups
 from lib.vocabulary import is_stop_symbol
 
 from .binarizer_base import (
@@ -21,9 +21,10 @@ from .binarizer_base import (
 )
 
 TEXTS_ITEM_ATTRIBUTES = [
-    "paths",  # [N, max(widths)] int64  --  path grid, 0 = no token
-    "segments",  # [N] int64  --  1-based segment index per grid position
-    "widths",  # [max(segments)] int64  --  number of alternative sub-paths per segment
+    "paths",  # [P,C] complete aligned candidate columns
+    "words",  # [P] semantic word IDs; zero for fixed known phones
+    "groups",  # [P,C] local pronunciation groups
+    "candidates",  # [W,C] validity, including empty candidates
     "f0",  # [T] float32, pitch in Hz
 ]
 
@@ -31,11 +32,11 @@ TEXTS_ITEM_ATTRIBUTES = [
 @dataclass
 class TextMetadataItem(MetadataItem):
     text: str
-    g2p_texts: list[G2PText] | None = None
+    g2p_words: list[G2PWord] | None = None
     phones: list[str] | None = None
 
 
-class TextOnlyBinarizer(BaseBinarizer):
+class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
     __data_attrs__ = TEXTS_ITEM_ATTRIBUTES
 
     def __init__(self, *args, **kwargs):
@@ -69,12 +70,12 @@ class TextOnlyBinarizer(BaseBinarizer):
 
     def filter_metadata_by_vocabulary(
         self,
-        metadata_list: list[MetadataItem],
-    ) -> list[MetadataItem]:
+        metadata_list: list[TextMetadataItem],
+    ) -> list[TextMetadataItem]:
         if self.vocabulary is None:
             raise RuntimeError("Vocabulary has not been built.")
 
-        retained: list[MetadataItem] = []
+        retained: list[TextMetadataItem] = []
         dropped_count = 0
         for item in metadata_list:
             oov_symbols = sorted(
@@ -89,9 +90,21 @@ class TextOnlyBinarizer(BaseBinarizer):
                 retained.append(item)
                 continue
 
+            if item.g2p_words is not None:
+                data, _, _ = encode_paths(
+                    item.g2p_words, self.vocabulary, "force",
+                    default_language=item.language,
+                    global_symbols=self.config.vocabulary.global_symbols,
+                    stop_symbols=self.config.vocabulary.stop_symbols,
+                )
+                if data["candidates"].shape[0] and data["candidates"].any(axis=-1).all():
+                    retained.append(item)
+                    logging.warning(f"Dropping OOV pronunciation paths from aux item '{item.name}'.")
+                    continue
+
             dropped_count += 1
-            # TODO: Replace whole-item OOV dropping with an explicit unknown-
-            # token or partial-path policy after the model supports one.
+            # Known-phone samples have no alternatives. A G2P sample must
+            # retain at least one complete candidate for every source word.
             logging.warning(
                 f"Dropping aux item '{item.name}' from "
                 f"'{item.waveform_fn.as_posix()}' because the main vocabulary "
@@ -105,11 +118,11 @@ class TextOnlyBinarizer(BaseBinarizer):
             )
         return retained
 
-    def load_metadata(self, subset_dir: pathlib.Path) -> list[MetadataItem]:
+    def load_metadata(self, subset_dir: pathlib.Path) -> list[TextMetadataItem]:
         index_path = subset_dir / "index.csv"
         with open(index_path, "r", encoding="utf8") as f:
             rows = list(csv.DictReader(f))
-        items: list[MetadataItem] = []
+        items: list[TextMetadataItem] = []
         for row in rows:
             name = row["name"]
             waveform_fn = find_waveform_file(subset_dir, name)
@@ -128,7 +141,7 @@ class TextOnlyBinarizer(BaseBinarizer):
                     estimated_duration=estimated_duration,
                     raw_symbols=raw_phones,
                     text="",
-                    g2p_texts=None,
+                    g2p_words=None,
                     phones=raw_phones,
                 ))
                 continue
@@ -139,17 +152,18 @@ class TextOnlyBinarizer(BaseBinarizer):
                     f"Either configure G2P or add a 'phones' column to the index.csv."
                 )
             try:
-                g2p_texts = self.g2p.convert(text, languages=[language])
+                g2p_words = self.g2p.convert(text, languages=[language])
             except Exception as e:
                 logging.warning(
                     f"G2P failed for item '{name}': {e}"
                 )
                 continue
             symbols: list[str] = []
-            for gt in g2p_texts:
-                for gw in gt.words:
-                    for path in gw.phones:
-                        symbols.extend(path)
+            for word in g2p_words:
+                for reading in word.readings:
+                    for path in reading.paths:
+                        for group in path:
+                            symbols.extend(group.phonemes)
             items.append(TextMetadataItem(
                 name=name,
                 language=language,
@@ -157,7 +171,7 @@ class TextOnlyBinarizer(BaseBinarizer):
                 estimated_duration=estimated_duration,
                 raw_symbols=symbols,
                 text=text,
-                g2p_texts=g2p_texts,
+                g2p_words=g2p_words,
             ))
         return items
 
@@ -188,62 +202,32 @@ class TextOnlyBinarizer(BaseBinarizer):
             )
 
         if item.phones is not None:
-            encoded_groups: list[list[list[int]]] = []
-            for ph in item.phones:
-                tid = self._encode_symbol(ph, item.language)
-                if tid is None:
-                    # Stop symbols are intentionally omitted from alignment.
-                    continue
-                encoded_groups.append([[tid]])
+            tokens = [
+                tid for ph in item.phones
+                if (tid := self._encode_symbol(ph, item.language)) is not None
+            ]
+            size = len(tokens)
+            paths = numpy.zeros((max(1, size), 1), dtype=numpy.int64)
+            paths[:size, 0] = tokens
+            data = {
+                "paths": paths,
+                "words": numpy.zeros(paths.shape[0], dtype=numpy.int64),
+                "groups": numpy.zeros_like(paths),
+                "candidates": numpy.zeros((0, 1), dtype=numpy.bool_),
+            }
         else:
-            groups = item.g2p_texts
-            if groups is None:
+            if item.g2p_words is None:
                 raise RuntimeError(f"G2P not run for item '{item.name}'")
+            data, lexicon, _ = encode_paths(
+                item.g2p_words,
+                self.vocabulary,
+                "force",
+                default_language=item.language,
+                global_symbols=self.config.vocabulary.global_symbols,
+                stop_symbols=self.config.vocabulary.stop_symbols,
+            )
+            size = sum(max((len(path["phonemes"]) for path in word), default=0) for word in lexicon)
 
-            encoded_groups: list[list[list[int]]] = []
-            for gt in groups:
-                encoded_paths = []
-                for gw in gt.words:
-                    for path in gw.phones:
-                        tok_ids = []
-                        for ph in path:
-                            tid = self._encode_symbol(ph, item.language)
-                            if tid is not None:
-                                tok_ids.append(tid)
-                        encoded_paths.append(tok_ids)
-                encoded_groups.append(encoded_paths)
-
-        all_segments = segment_groups(encoded_groups)
-
-        N = sum(
-            max(len(sp) for sp in sub_paths)
-            for sub_paths in all_segments
-        )
-        max_width = max(
-            (len(sub_paths) for sub_paths in all_segments),
-            default=0,
-        )
-        S = len(all_segments)
-
-        paths = numpy.zeros((N, max_width), dtype=numpy.int64)
-        segments_arr = numpy.zeros(N, dtype=numpy.int64)
-        widths = numpy.zeros(S, dtype=numpy.int64)
-
-        col = 0
-        for s_idx, sub_paths in enumerate(all_segments):
-            L = max(len(sp) for sp in sub_paths)
-            widths[s_idx] = len(sub_paths)
-            segments_arr[col:col + L] = s_idx + 1
-            for alt_idx, path in enumerate(sub_paths):
-                for pos, tok_id in enumerate(path):
-                    paths[col + pos, alt_idx] = tok_id
-            col += L
-
-        data = {
-            "paths": paths,
-            "segments": segments_arr,
-            "widths": widths,
-        }
         if f0 is not None:
             data["f0"] = f0
         return DataSample(
@@ -251,4 +235,5 @@ class TextOnlyBinarizer(BaseBinarizer):
             name=item.name,
             length=length,
             data=data,
+            derived={"paths": size},
         )

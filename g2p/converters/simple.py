@@ -1,5 +1,5 @@
 from g2p.registry import converter
-from .base import Converter, G2PText, G2PWord
+from .base import Converter, G2PGroup, G2PWord, G2PReading
 
 
 @converter(id="passthrough", language=None)
@@ -10,8 +10,10 @@ class PassthroughConverter(Converter):
     def claim(self, token: str) -> bool:
         return True
 
-    def convert(self, tokens: list[str]) -> list[G2PText]:
-        return [G2PText(text=t, words=[G2PWord(word=t, phones=[[t]])]) for t in tokens]
+    def convert(self, words: list[str]) -> list[G2PWord]:
+        return [G2PWord(text=t, readings=[G2PReading(paths=[
+            [G2PGroup(script=t, phonemes=[t])],
+        ])]) for t in words]
 
 
 @converter(id="characters", language=None)
@@ -25,11 +27,12 @@ class CharPhonemeConverter(Converter):
     def claim(self, token: str) -> bool:
         return all(c in self._mapping for c in token)
 
-    def convert(self, tokens: list[str]) -> list[G2PText]:
-        result: list[G2PText] = []
-        for token in tokens:
+    def convert(self, words: list[str]) -> list[G2PWord]:
+        result: list[G2PWord] = []
+        for token in words:
             phonemes: list[str] = []
             for c in token:
                 phonemes.extend(self._mapping[c])
-            result.append(G2PText(text=token, words=[G2PWord(word=token, phones=[phonemes])]))
+            path = [G2PGroup(script=token, phonemes=phonemes)] if phonemes else []
+            result.append(G2PWord(text=token, readings=[G2PReading(paths=[path])]))
         return result

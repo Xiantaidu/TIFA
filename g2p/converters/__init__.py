@@ -1,7 +1,7 @@
 import importlib
 from pathlib import Path
 
-from .base import Converter, G2PConversionError, G2PText, G2PWord
+from .base import Converter, G2PConversionError, G2PGroup, G2PPath, G2PWord, G2PReading
 
 _dir = Path(__file__).parent
 for _f in _dir.iterdir():

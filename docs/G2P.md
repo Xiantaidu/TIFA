@@ -9,38 +9,52 @@ flowchart LR
     Text["text<br/>(str)"] --> PP[preprocess]
     PP --> Tok[tokenize]
     Tok --> Conv[convert]
-    Conv --> Ph["G2PText sequences<br/>(list[G2PText])"]
+    Conv --> Ph["G2PWord sequences<br/>(list[G2PWord])"]
 ```
 
 | Stage      | Input                | Output                       | Purpose                                                   |
 |------------|----------------------|------------------------------|-----------------------------------------------------------|
 | Preprocess | raw text as `[text]` | modified `[text]`            | Clean text before tokenization (lowercase, strip, filter) |
 | Tokenize   | `list[str]`          | `list[str]`                  | Split text into tokens (words, characters, etc.)          |
-| Convert    | `list[str]`          | `list[G2PText]`              | Convert tokens to three-tier G2P output with language tags    |
+| Convert    | `list[str]`          | `list[G2PWord]`              | Convert tokens to grouped pronunciation paths with language tags    |
 
 Each stage runs its components sequentially — each feeds its output to the next.
 
-### G2PText and G2PWord
+### Words, readings, paths, and groups
 
 ```python
+from dataclasses import dataclass
+from typing import TypeAlias
+
+@dataclass
+class G2PGroup:
+    script: str
+    phonemes: list[str]
+
+G2PPath: TypeAlias = list[G2PGroup]
+
+@dataclass
+class G2PReading:
+    paths: list[G2PPath]
+
 @dataclass
 class G2PWord:
-    """A pronunciation-script word with its phoneme alternatives."""
-    word: str                       # pronunciation-script word (pinyin, romaji, etc.)
-    phones: list[list[str]]         # alternative phoneme sequences
-
-@dataclass
-class G2PText:
-    """Three-tier G2P output for one text token."""
-    text: str                       # original token from the tokenizer
-    words: list[G2PWord]            # one or more pronunciation-script words
-    language: str | None = None     # e.g. "cmn", "yue" — set by the pipeline
+    text: str
+    language: str | None
+    readings: list[G2PReading]
 ```
 
-Pipeline output is `list[G2PText]`, one per token. Each `G2PText` contains the original
-text, the intermediate pronunciation-script words (pinyin, romaji, etc.), and their
-phoneme alternatives. Binarizers flatten `words[*].phones[*]` for model input; the
-word-level structure is available for multi-tier inference output (e.g. TextGrids).
+The pipeline returns one semantic word per tokenizer token. A reading groups
+complete legal phoneme realizations; each path is an ordered list of contiguous
+pronunciation groups. Each group owns its pronunciation script and phonemes.
+Different paths can have different group counts, boundaries, and scripts.
+
+An empty path represents an empty pronunciation. Empty groups are not retained.
+`paths=[]` means no alternatives, whereas `paths=[[]]` contains one empty alternative.
+There is no separate `G2PReading.script`: the scripts belong to each path's groups.
+
+Converter-local preprocessors and converters must preserve word count.
+`G2PWord.text` retains the tokenizer output before converter-local preprocessing.
 
 ## Architecture
 
@@ -80,7 +94,7 @@ g2p/
 │   ├── base.py         # Preprocessor ABC
 │   └── simple.py       # FilterPunctuation, LowercasePreprocessor, StripWhitespacePreprocessor, RemoveAccentsPreprocessor
 └── converters/
-    ├── base.py         # Converter ABC, G2PText, G2PWord, G2PConversionError, resolve_language()
+    ├── base.py         # Converter ABC, G2PWord, G2PReading, G2PGroup, G2PPath, G2PConversionError, resolve_language()
     ├── paradigm.py     # LexiconConverter, PronunciationScriptConverter
     ├── dictionary.py   # load_pronunciation_dict(), DictionaryConverter, PronunciationScriptDictionaryConverter
     ├── chinese.py      # MandarinConverter (id=chinese-pinyin), CantoneseConverter (id=cantonese-jyutping)
@@ -121,10 +135,10 @@ Transforms a token sequence. Applied before tokenization — receives `[raw_text
 Converts tokens to phoneme sequences. Each converter implements:
 
 - `claim(token) → bool` — whether this converter handles the given token
-- `convert(tokens) → list[G2PText]` — convert tokens to three-tier G2P output
+- `convert(words) → list[G2PWord]` — convert tokens to grouped pronunciation paths
 - `preprocessors() → list[Preprocessor]` (optional) — private preprocessors for claimed tokens
 
-`Converter.language` is a class attribute `tuple[str, ...] | None`. The pipeline resolves which specific tag matched and stamps it on each `G2PText.language`. Converters with `language=None` leave the field `None`.
+`Converter.language` is a class attribute `tuple[str, ...] | None`. The pipeline resolves which specific tag matched and stamps it on each `G2PWord.language`. Converters with `language=None` leave the field `None`.
 
 **Built-in converters:**
 
@@ -147,7 +161,7 @@ Key behaviors:
 - Katakana auto-converted to hiragana before lookup
 - `claim()` accepts single kana and 2-char digraphs (kana + small kana)
 - `double_written_sokuon: bool = False` — gemination: `cl` + consonant → duplicate consonant (e.g. っか → k, ka)
-- `script_to_phonemes` handles `cl` → `[["cl"]]`, empty string → `[[]]`, and single consonants from gemination → `[[consonant]]`
+- `script_to_paths` returns complete paths whose groups carry the romaji script and dictionary phonemes. An empty script returns `[[]]`; a geminated consonant produces a one-phone group.
 
 ### LSTM Converter
 
@@ -165,12 +179,12 @@ Paradigm base classes live in `paradigm.py` and `dictionary.py`. They are **not*
 
 **`PronunciationScriptConverter`** — for writing systems that use a decoupled pronunciation script (pinyin, jyutping, romaji). Two-phase:
 
-1. `text_to_script(tokens) → list[list[str]]` — text → script tokens (with alternatives)
-2. `script_to_phonemes(script) → list[list[str]]` — script token → phoneme sequences
+1. `text_to_scripts(words) → list[list[str]]` — text → script tokens (with alternatives)
+2. `script_to_paths(script) → list[G2PPath]` — a reading script → complete grouped paths
 
-Both methods are abstract. `convert()` orchestrates them and deduplicates paths.
+Both methods are abstract. `convert()` checks word cardinality and deduplicates identical paths within each distinct intermediate reading script, comparing every group's script and phonemes. The intermediate script string is not stored separately on the reading.
 
-**`PronunciationScriptDictionaryConverter`** — extends `PronunciationScriptConverter`. Fills in `script_to_phonemes` via `load_pronunciation_dict()`. Subclasses implement `text_to_script` and pass a required `dict_path` to the constructor.
+**`PronunciationScriptDictionaryConverter`** — extends `PronunciationScriptConverter`. Fills in `script_to_paths` via `load_pronunciation_dict()`. Subclasses implement `text_to_scripts` and pass a required `dict_path` to the constructor.
 
 **`LexiconConverter`** — for alphabetical languages where text IS the pronunciation script. Has a pronunciation dictionary for known words and an abstract `infer_oov(token)` method for out-of-vocabulary inference. `dict_path` is optional (pure inference is valid).
 
@@ -180,7 +194,7 @@ When the pipeline runs with `languages=["cmn"]`:
 
 1. Converters are filtered: a converter runs if `language is None` or any of its tags are in the set.
 2. For each converter, `resolve_language(converter.language, language_set)` picks the single matching tag (or first tag when no filter is set).
-3. The tag is stamped on each output `G2PText.language`.
+3. The tag is stamped on each output `G2PWord.language`.
 
 ### Convert algorithm
 
@@ -189,7 +203,7 @@ The pipeline processes tokens in priority order through each active converter:
 1. Find the next contiguous run of unconverted tokens where `converter.claim()` is true.
 2. Apply the converter's private preprocessors to the run.
 3. Call `converter.convert()` on the run.
-4. Stamp the resolved language on each result. Assign pronuncations back.
+4. Check output cardinality, restore the source word text, and stamp the resolved language.
 5. Repeat until the converter has no more claimed runs. Move to the next converter.
 
 Any tokens still unconverted after all converters raise `G2PConversionError`.
@@ -292,12 +306,13 @@ from g2p.converters.simple import PassthroughConverter
 pipeline = G2PPipeline(
     preprocessors=[LowercasePreprocessor()],
     tokenizers=[WhitespaceTokenizer()],
-    converters=[DictionaryConverter(path="dict.txt"), PassthroughConverter()],
+    converters=[DictionaryConverter(dict_path="dict.txt"), PassthroughConverter()],
 )
 
 result = pipeline.convert("Hello world")
-# → [G2PText(text="hello", words=[G2PWord(word="hello", phones=[["hh","ax","l","ow"],["hh","eh","l","ow"]])], language=None),
-#    G2PText(text="world", words=[G2PWord(word="world", phones=[["w","er","l","d"]])], language=None)]
+assert result[0].text == "hello"
+# result[0].readings[0].paths contains the two complete dictionary variants.
+# Each variant is a single group with script="hello".
 ```
 
 Language filtering:
@@ -305,7 +320,7 @@ Language filtering:
 ```python
 result = pipeline.convert("你好", languages=["cmn"])
 # MandarinConverter matched with "cmn"
-# → [G2PText(text="你", words=[G2PWord(word="ni3", phones=[["ni"]])], language="cmn")]
+# result[0].readings[0].paths[0][0].script is the primary pinyin script.
 ```
 
 Config-based:
@@ -325,15 +340,20 @@ Drop a file into `g2p/converters/`:
 ```python
 # g2p/converters/my_lang.py
 from g2p.registry import converter
-from g2p.converters.base import Converter, G2PText, G2PWord
+from g2p.converters.base import Converter, G2PGroup, G2PWord, G2PReading
 
 @converter(id="my-lang", language="xyz")
 class MyLangConverter(Converter):
     def claim(self, token: str) -> bool:
         return True
 
-    def convert(self, tokens: list[str]) -> list[G2PText]:
-        return [G2PText(text=t, words=[G2PWord(word=t, phones=[[...]])]) for t in tokens]
+    def convert(self, words: list[str]) -> list[G2PWord]:
+        return [
+            G2PWord(text=word, language=None, readings=[
+                G2PReading(paths=[[G2PGroup(script=word, phonemes=[word])]])
+            ])
+            for word in words
+        ]
 ```
 
 Or derive from a paradigm:
@@ -342,8 +362,8 @@ Or derive from a paradigm:
 from g2p.converters.paradigm import PronunciationScriptConverter
 
 class MyConverter(PronunciationScriptConverter):
-    def text_to_script(self, tokens): ...
-    def script_to_phonemes(self, script): ...
+    def text_to_scripts(self, words): ...
+    def script_to_paths(self, script): ...
 ```
 
 Then reference in config:

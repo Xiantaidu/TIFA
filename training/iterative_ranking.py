@@ -7,20 +7,20 @@ import torch.distributed
 from torch import Tensor
 
 
-class SegmentRewards:
-    """Per-segment reward vector for PathRanker accumulation.
+class WordRewards:
+    """Per-word reward vector for PathRanker accumulation.
 
     Attributes:
         item_idx: dataset item index.
-        seg_idx: segment index within the item.
-        rewards: ``[w]`` tensor where *w* is the segment's total alt count.
+        word_idx: word index within the item.
+        rewards: ``[w]`` tensor where *w* is the word's complete candidate count.
     """
 
-    __slots__ = ("item_idx", "seg_idx", "rewards")
+    __slots__ = ("item_idx", "word_idx", "rewards")
 
-    def __init__(self, item_idx: int, seg_idx: int, rewards: Tensor):
+    def __init__(self, item_idx: int, word_idx: int, rewards: Tensor):
         self.item_idx = item_idx
-        self.seg_idx = seg_idx
+        self.word_idx = word_idx
         self.rewards = rewards
 
 
@@ -34,9 +34,9 @@ def rank_rewards(rank_size: int) -> Tensor:
 
 
 class PathRanker:
-    """Per-segment accumulated rewards with sparse auto-creation.
+    """Per-word accumulated rewards with sparse auto-creation.
 
-    Stores ``{item_idx: {seg_idx: Tensor([alt0_reward, ...])}}``.
+    Stores ``{item_idx: {word_idx: Tensor([alt0_reward, ...])}}``.
     """
 
     def __init__(self, gamma: float):
@@ -50,44 +50,44 @@ class PathRanker:
         return list(self._rewards)
 
     def get_best_path(self, item_idx: int) -> dict[int, int]:
-        """``{seg_idx: best_alt_idx}`` for known divergent segments. Empty if unknown."""
+        """``{word_idx: best_candidate_idx}`` for known ambiguous words. Empty if unknown."""
         segs = self._rewards.get(item_idx)
         if not segs:
             return {}
         return {p: int(r.argmax().item()) for p, r in segs.items()}
 
-    def sync_results(self, results: list[SegmentRewards]) -> None:
+    def sync_results(self, results: list[WordRewards]) -> None:
         """Apply per-batch deltas, all-gathering across DDP ranks."""
         if not torch.distributed.is_initialized() or torch.distributed.get_world_size() < 2:
             for r in results:
-                self._apply_rewards(r.item_idx, r.seg_idx, r.rewards)
+                self._apply_rewards(r.item_idx, r.word_idx, r.rewards)
             return
 
         world_size = torch.distributed.get_world_size()
-        all_results: list[list[SegmentRewards]] = [None] * world_size
+        all_results: list[list[WordRewards]] = [None] * world_size
         torch.distributed.all_gather_object(all_results, results)
         for rank_results in all_results:
             for r in rank_results:
-                self._apply_rewards(r.item_idx, r.seg_idx, r.rewards)
+                self._apply_rewards(r.item_idx, r.word_idx, r.rewards)
 
-    def _apply_rewards(self, item_idx: int, seg_idx: int, rewards: Tensor) -> None:
-        """Accumulate a per-segment reward vector, clamped to [0, inf)."""
-        self._ensure_segment(item_idx, seg_idx, rewards.numel())
-        seg = self._rewards[item_idx][seg_idx]
+    def _apply_rewards(self, item_idx: int, word_idx: int, rewards: Tensor) -> None:
+        """Accumulate a per-word reward vector, clamped to [0, inf)."""
+        self._ensure_word(item_idx, word_idx, rewards.numel())
+        seg = self._rewards[item_idx][word_idx]
         seg.add_(rewards.cpu().to(dtype=torch.long))
         seg.clamp_(min=0)
 
-    def _ensure_segment(self, item_idx: int, seg_idx: int, width: int):
+    def _ensure_word(self, item_idx: int, word_idx: int, width: int):
         if item_idx not in self._rewards:
             self._rewards[item_idx] = {}
         segs = self._rewards[item_idx]
-        if seg_idx not in segs:
-            segs[seg_idx] = torch.zeros(width, dtype=torch.long)
-        elif segs[seg_idx].numel() < width:
-            old = segs[seg_idx]
+        if word_idx not in segs:
+            segs[word_idx] = torch.zeros(width, dtype=torch.long)
+        elif segs[word_idx].numel() < width:
+            old = segs[word_idx]
             new = torch.zeros(width, dtype=torch.long)
             new[:len(old)] = old
-            segs[seg_idx] = new
+            segs[word_idx] = new
 
     def decay_rewards(self):
         for segs in self._rewards.values():
@@ -96,17 +96,19 @@ class PathRanker:
                     rewards.float().mul_(self.gamma).round_().long()
                 )
 
-    def state_dict(self) -> dict[str, Tensor]:
-        """``{"itemIdx,segIdx": per_alternative_rewards}``."""
+    def state_dict(self) -> dict[str, dict[str, Tensor]]:
+        """``{"words": {"itemIdx,wordIdx": per_candidate_rewards}}``."""
         sd: dict[str, Tensor] = {}
         for i, segs in self._rewards.items():
             for p, rewards in segs.items():
                 sd[f"{i},{p}"] = rewards.clone()
-        return sd
+        return {"words": sd}
 
-    def load_state_dict(self, state_dict: dict[str, Tensor]):
+    def load_state_dict(self, state_dict: dict[str, dict[str, Tensor]]):
+        if "words" not in state_dict:
+            raise ValueError("Expected word-ranking state; reinitialize rankings for the re-binarized data.")
         self._rewards.clear()
-        for key, tensor in state_dict.items():
+        for key, tensor in state_dict["words"].items():
             i_str, p_str = key.split(",")
             i = int(i_str)
             p = int(p_str)
@@ -125,7 +127,7 @@ class IterativeRanking(lightning.pytorch.Callback):
         self.update_every_n_epochs = update_every_n_epochs
         self.ranker: PathRanker | None = None
         self._best_paths: dict[int, dict[int, int]] | None = None
-        self._pending_ranker_state: dict[str, Tensor] | None = None
+        self._pending_ranker_state: dict[str, dict[str, Tensor]] | None = None
 
     def on_train_start(
             self,

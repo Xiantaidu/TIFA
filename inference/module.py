@@ -3,14 +3,16 @@ import torch
 
 from inference.backend import InferenceBackend, SpectrogramContext
 from lib import logging
+from lib.path_traversal import materialize_paths
 
 
 class ForcedAlignmentInferenceModule(pl.LightningModule):
     """Forced alignment inference. Works with any InferenceBackend."""
 
-    def __init__(self, backend: InferenceBackend):
+    def __init__(self, backend: InferenceBackend, score_unit: str = "levenshtein"):
         super().__init__()
         self.backend = backend
+        self.score_unit = score_unit
 
     def predict_step(self, batch, batch_idx):
         for msg in batch.get("warning", []):
@@ -21,53 +23,54 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
 
         waveform = batch["waveform"]  # [B, L]
         duration = batch["duration"]  # [B] seconds
-        paths = batch["paths"]  # [B, N_grid, W_max]
-        groups = batch["groups"]  # [B, N_grid, W_max]
-        segments = batch["segments"]  # [B, N_grid]
-        widths = batch["widths"]  # [B, S_max]
-
-        phonemes = batch["phonemes"]  # list[dict[(int,int), list[str]]]
-        lexicon = batch["lexicon"]  # list[list[dict[str, list[list[str]]]]]
+        paths = batch["paths"]
 
         # ---- Spectrogram ----
         spec = self.backend.spectrogram(waveform, duration)
 
         # ---- Score ----
-        scored = self.backend.score(spec, paths=paths, groups=groups, segments=segments, widths=widths)
+        scored = self.backend.score(
+            spec, paths=paths, words=batch["words"], candidates=batch["candidates"], unit=self.score_unit,
+        )
+        tokens, words, groups = materialize_paths(paths, batch["words"], batch["groups"], scored.choices)
 
         # ---- Align ----
-        result = self.backend.align(spec, tokens=scored.tokens, groups=scored.groups, unit="frame")
+        result = self.backend.align(spec, tokens=tokens, groups=groups, unit="frame")
 
         # ---- Assemble per-item results ----
         results = []
         for i, identifier in enumerate(batch["identifier"]):
-            N_i = int((scored.tokens[i] != 0).sum().item())
+            N_i = int((tokens[i] != 0).sum().item())
             T_i = int(spec.mask[i].sum().item())
-            S_i = int(segments[i].max().item())
+            W_i = len(batch["lexicon"][i])
 
             spec_i = spec.features[i, :T_i]
-            widths_i = widths[i, :S_i]
-            tokens_i = scored.tokens[i, :N_i]
-            groups_i = scored.groups[i, :N_i]
-            alts_i = scored.alts[i, :S_i]
-            scores_i = scored.scores[i, :S_i]
+            tokens_i = tokens[i, :N_i]
+            groups_i = groups[i, :N_i]
             spans_i = result.spans[i, :N_i]
             sim_i = result.similarity[i, :T_i, :N_i]
             agreement_i = result.agreement[i].item()
 
+            phonemes = [
+                label
+                for candidates, choice in zip(batch["lexicon"][i], scored.choices[i, :W_i].tolist())
+                if choice >= 0
+                for label in candidates[choice]["phonemes"]
+            ]
             results.append({
                 "identifier": identifier,
                 "spectrogram": spec_i,
-                "widths": widths_i,
                 "tokens": tokens_i,
                 "groups": groups_i,
-                "alts": alts_i,
-                "scores": scores_i,
+                "words": words[i, :N_i],
+                "choices": scored.choices[i, :W_i],
+                "scores": scored.scores[i, :W_i] if scored.scores is not None else None,
                 "spans": spans_i,
                 "similarity": sim_i,
                 "agreement": agreement_i,
-                "phonemes": phonemes[i],
-                "lexicon": lexicon[i],
+                "phonemes": phonemes,
+                "texts": batch["texts"][i],
+                "lexicon": batch["lexicon"][i],
             })
 
         return results

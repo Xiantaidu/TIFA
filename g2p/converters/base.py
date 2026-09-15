@@ -1,36 +1,35 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import TypeAlias
 
 from ..preprocessors.base import Preprocessor
 
 
 @dataclass
-class G2PWord:
-    """A pronunciation-script word with its phoneme alternatives.
+class G2PGroup:
+    """A contiguous pronunciation group and its pronunciation script."""
 
-    ``word`` is the intermediate representation (pinyin, romaji, etc.).
-    ``phones`` holds alternative phoneme sequences for this word.
-    """
+    script: str
+    phonemes: list[str]
 
-    word: str
-    phones: list[list[str]] = field(default_factory=list)
+
+G2PPath: TypeAlias = list[G2PGroup]
 
 
 @dataclass
-class G2PText:
-    """Three-tier G2P output for one text token.
+class G2PReading:
+    """Complete legal phoneme realizations of one reading."""
 
-    ``text`` is the original token from the tokenizer.
-    ``words`` holds one or more pronunciation-script as word-level alternatives,
-    each word alternative holding its own phoneme-level alternatives.
-    *language* is set by the pipeline to the tag (e.g. ``"cmn"``) that
-    caused this converter to be selected.  Converters with no language
-    registration leave it ``None``.
-    """
+    paths: list[G2PPath] = field(default_factory=list)
+
+
+@dataclass
+class G2PWord:
+    """One semantic tokenizer word, with its alternative readings."""
 
     text: str
-    words: list[G2PWord] = field(default_factory=list)
     language: str | None = None
+    readings: list[G2PReading] = field(default_factory=list)
 
 
 class Converter(ABC):
@@ -45,7 +44,7 @@ class Converter(ABC):
         return []
 
     @abstractmethod
-    def convert(self, tokens: list[str]) -> list[G2PText]:
+    def convert(self, words: list[str]) -> list[G2PWord]:
         ...
 
 

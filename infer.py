@@ -174,7 +174,6 @@ def _run_inference(
         audio_sample_rate=backend.sample_rate,
         language=g2p_languages if g2p_languages else None,
         oov_handling=oov_handling,
-        path_grid_unit=score_unit,
     )
 
     callbacks = [
@@ -200,6 +199,7 @@ def _run_inference(
         num_workers=num_workers,
         precision=precision,
         mode="predict",
+        score_unit=score_unit,
     )
     logging.success("Inference completed.", callback=rank_zero_info)
 

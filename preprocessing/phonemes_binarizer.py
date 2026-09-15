@@ -24,13 +24,13 @@ class PhonemeMetadataItem(MetadataItem):
     raw_durations: list[float]  # including stop symbols, in seconds
 
 
-class PhonemeTimingBinarizer(BaseBinarizer):
+class PhonemeTimingBinarizer(BaseBinarizer[PhonemeMetadataItem]):
     __data_attrs__ = PHONEMES_ITEM_ATTRIBUTES
 
     def resolve_data_dir(self) -> pathlib.Path:
         return self.config.phoneme_timing_data_dir_resolved
 
-    def load_metadata(self, subset_dir) -> list[MetadataItem]:
+    def load_metadata(self, subset_dir) -> list[PhonemeMetadataItem]:
         index_path = subset_dir / "index.csv"
         with open(index_path, "r", encoding="utf8") as f:
             items = list(csv.DictReader(f))

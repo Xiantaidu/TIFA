@@ -6,7 +6,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from torch import nn, Tensor
 
 from lib.config.schema import RootConfig, LossConfig
-from lib.path_traversal import sample_paths_uniform
+from lib.path_traversal import first_choices, materialize_paths, sample_paths_uniform
 from lib.plot import alignment_to_figure, emission_to_figure, reconstruction_to_figure
 from lib.vocabulary import SPACE_TOKEN
 from modules.commons.common_layers import TemporalMask
@@ -18,7 +18,7 @@ from training.data import (
     BaseDataset,
     TextOnlyDataset,
 )
-from training.iterative_ranking import RankingModule, SegmentRewards, rank_rewards
+from training.iterative_ranking import RankingModule, WordRewards, rank_rewards
 from training.pl_module_base import BaseLightningModule, LossValue
 
 # Loss names shared between register_losses_and_metrics and forward_model.
@@ -136,16 +136,17 @@ class ForcedAlignmentSSLModule(BaseLightningModule, RankingModule):
 
     def forward_model(self, sample: dict[str, Tensor], infer: bool, batch_idx=None):
         spectrogram = sample["spectrogram"]  # [B, T, n_mels]
-        paths = sample["paths"]  # [B, N, W]
+        paths = sample["paths"]  # [B, P, C], word ownership given by sample["words"]
         T = sample["T"]  # [B] int64
-        N = sample["N"]  # [B] int64
         f0 = sample["f0"]  # [B, T]
 
         device = spectrogram.device
         _, max_T, _ = spectrogram.shape
 
-        # Select first path alternative, interleave space tokens
-        tokens_raw = paths[:, :, 0]  # [B, N]
+        # Select complete paths before interleaving space tokens.
+        choices = first_choices(sample["candidates"])
+        tokens_raw, _, _ = materialize_paths(paths, sample["words"], sample["groups"], choices)
+        N = (tokens_raw != 0).sum(dim=1)
         tokens, n_mask = interleave_spaces(tokens_raw, space=SPACE_TOKEN, lengths=N)
         # tokens: [B, 2*N+1], n_mask: [B, 2*N+1] bool
 
@@ -228,66 +229,29 @@ class ForcedAlignmentSSLModule(BaseLightningModule, RankingModule):
         }
 
     def _compute_ranking(self, sample):
-        widths = sample["widths"]  # [B, S_max] padded with 1
+        candidates = sample["candidates"]
         rank_size = self.training_config.iterative_ranking.rank_size
-        B = sample["size"]
-        S_max = widths.shape[1]
-        device = sample["spectrogram"].device
-
-        choices = sample_paths_uniform(widths, rank_size)  # [B, rank_size, S_max]
-
-        results: list[SegmentRewards] = []
+        choices = sample_paths_uniform(candidates, rank_size)
         with torch.no_grad():
-            for b in range(B):
-                item_idx = int(sample["indices"][b].item())
-                item_data = {
-                    "spectrogram": sample["spectrogram"][b],
-                    "paths": sample["paths"][b],
-                    "segments": sample["segments"][b],
-                    "N": sample["N"][b].item(),
-                    "widths": widths[b],
-                }
-                for s in range(S_max):
-                    w = int(widths[b, s].item())
-                    if w <= 1:
-                        continue
-                    # rank_size alt choices for this segment, one per sampled path
-                    alts = choices[b, :, s]  # [rank_size]
-                    # Score each alt, then rank best->worst
-                    scores = torch.zeros(rank_size, device=device, dtype=torch.long)
-                    for j in range(rank_size):
-                        scores[j] = self.score_subpath(
-                            item_data, s, int(alts[j].item()),
-                        )
-                    _, rank_order = scores.sort(descending=True)
-                    rewards = rank_rewards(rank_size).to(device)
-                    # Accumulate rank-based rewards into segment vector
-                    vec = torch.zeros(w, device=device, dtype=torch.long)
-                    for j in range(rank_size):
-                        alt_idx = int(alts[rank_order[j]].item())
-                        vec[alt_idx] += rewards[j].item()
-                    results.append(SegmentRewards(item_idx, s, vec))
+            scores = self.score_paths(sample, choices)
+            order = scores.argsort(dim=1, descending=True)
+            picked = choices.gather(1, order).transpose(1, 2)
+            rewards = rank_rewards(rank_size).to(candidates.device).view(1, 1, rank_size)
+            rewards = rewards.expand_as(picked).masked_fill(picked < 0, 0)
+            totals = torch.zeros_like(candidates, dtype=torch.long).scatter_add(
+                2, picked.clamp_min(0), rewards,
+            )
+        # The ranker's persistent per-item records are a Python output boundary.
+        counts = candidates.sum(dim=-1)
+        results = []
+        for b, w in (counts > 1).nonzero().tolist():
+            count = int(counts[b, w])
+            results.append(WordRewards(int(sample["indices"][b]), w, totals[b, w, :count]))
         return results
 
-    def score_subpath(self, item_data: dict,
-                      seg_idx: int, alt_idx: int) -> float:
-        """Score one subpath for a divergent segment. Higher = better."""
-        return 0.0  # TODO: real scoring based on model architecture
-
-    def _extract_subpath_tokens(
-            self, paths: torch.Tensor, segments: torch.Tensor,
-            seg_idx: int, alt_idx: int, n_grid: int
-    ) -> torch.Tensor:
-        """Extract the token sequence for one subpath of a specific segment."""
-        tokens = []
-        for i in range(n_grid):
-            s = segments[i].item() - 1
-            if s != seg_idx:
-                continue
-            tok = paths[i, alt_idx].item()
-            if tok != 0:
-                tokens.append(tok)
-        return torch.tensor(tokens, dtype=torch.long)
+    def score_paths(self, item_data: dict, choices: Tensor) -> Tensor:
+        """Return [B,K,W] complete-candidate scores. SSL scoring is a stub."""
+        return torch.zeros_like(choices, dtype=torch.float32)
 
     def plot_validation_results(self, sample, outputs):
         indices = sample["indices"]

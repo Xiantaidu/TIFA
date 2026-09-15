@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from .converters.base import (
     Converter,
     G2PConversionError,
-    G2PText,
+    G2PWord,
     resolve_language,
 )
 from .preprocessors.base import Preprocessor
@@ -14,7 +14,7 @@ from .tokenizers.base import Tokenizer
 class _TokenState:
     text: str
     index: int
-    result: G2PText | None = None
+    result: G2PWord | None = None
 
 
 class G2PPipeline:
@@ -30,7 +30,7 @@ class G2PPipeline:
 
     def convert(
         self, text: str, *, languages: list[str] | None = None,
-    ) -> list[G2PText]:
+    ) -> list[G2PWord]:
         language_set = set(languages) if languages else None
         active = [
             c for c in self._converters
@@ -62,9 +62,14 @@ class G2PPipeline:
                 run_texts = [s.text for s in run_states]
                 for pp in converter.preprocessors():
                     run_texts = pp.process(run_texts)
+                    if len(run_texts) != len(run_states):
+                        raise ValueError("Converter preprocessors must preserve word count.")
                 results = converter.convert(run_texts)
+                if len(results) != len(run_states):
+                    raise ValueError("Converters must return exactly one G2PWord per input word.")
                 resolved = resolve_language(converter.language, language_set)
                 for state, result in zip(run_states, results):
+                    result.text = state.text
                     result.language = resolved
                     state.result = result
                 i = j

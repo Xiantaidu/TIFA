@@ -2,9 +2,10 @@
 """
 
 from g2p.registry import converter
+from .base import G2PGroup, G2PPath
 from .dictionary import PronunciationScriptDictionaryConverter
 
-# Small kana used in yōon digraphs and other digraphs.
+# Small kana used in yoon digraphs and other digraphs.
 _SMALL_KANA = frozenset("ゃゅょャュョぁぃぅぇぉァィゥェォ")
 
 # Hiragana-only romaji table, derived from cpp-kana's kanaToRomajiMap.
@@ -12,7 +13,7 @@ _SMALL_KANA = frozenset("ゃゅょャュョぁぃぅぇぉァィゥェォ")
 _KANA_TO_ROMAJI: dict[str, str] = {
     # ---- sokuon ----
     "っ": "cl",
-    # ---- gojūon ----
+    # ---- gojuon ----
     "あ": "a", "い": "i", "う": "u", "え": "e", "お": "o",
     "か": "ka", "き": "ki", "く": "ku", "け": "ke", "こ": "ko",
     "さ": "sa", "し": "shi", "す": "su", "せ": "se", "そ": "so",
@@ -31,7 +32,7 @@ _KANA_TO_ROMAJI: dict[str, str] = {
     "ば": "ba", "び": "bi", "ぶ": "bu", "べ": "be", "ぼ": "bo",
     # ---- handakuten ----
     "ぱ": "pa", "ぴ": "pi", "ぷ": "pu", "ぺ": "pe", "ぽ": "po",
-    # ---- yōon / digraphs ----
+    # ---- yoon / digraphs ----
     "きゃ": "kya", "きゅ": "kyu", "きょ": "kyo", "きぇ": "kye",
     "ぎゃ": "gya", "ぎゅ": "gyu", "ぎょ": "gyo", "ぎぇ": "gye",
     "しゃ": "sha", "しゅ": "shu", "しょ": "sho", "しぇ": "she",
@@ -61,7 +62,7 @@ _KANA_TO_ROMAJI: dict[str, str] = {
     "ぬぁ": "nwa", "ぬぃ": "nwi", "ぬぇ": "nwe", "ぬぉ": "nwo",
     "むぁ": "mwa", "むぃ": "mwi", "むぇ": "mwe", "むぉ": "mwo",
     "るぁ": "rwa", "るぃ": "rwi", "るぇ": "rwe", "るぉ": "rwo",
-    # ---- ヴ variants (hiragana form ゔ) ----
+    # ---- vu variants (hiragana U+3094) ----
     "ゔ": "vu",
     "ゔぁ": "va", "ゔぃ": "vi", "ゔぇ": "ve", "ゔぉ": "vo",
     # ---- special ----
@@ -152,23 +153,23 @@ class JapaneseKanaConverter(PronunciationScriptDictionaryConverter):
             return _is_kana(token[0]) and token[1] in _SMALL_KANA
         return False
 
-    def script_to_phonemes(self, script: str) -> list[list[str]]:
+    def script_to_paths(self, script: str) -> list[G2PPath]:
         if script == "":
             return [[]]
         if script in self._script_dict:
-            return [list(p) for p in self._script_dict[script]]
+            return super().script_to_paths(script)
         # Single consonants from gemination pass through directly
         if len(script) == 1 and script in _CONSONANT_LEADING:
-            return [[script]]
+            return [[G2PGroup(script=script, phonemes=[script])]]
         raise KeyError(
             f"Script token {script!r} not found in script-to-phoneme dict."
         )
 
-    def text_to_script(self, tokens: list[str]) -> list[list[str]]:
+    def text_to_scripts(self, words: list[str]) -> list[list[str]]:
         # Convert katakana to hiragana for unified lookup
-        hiragana_tokens = [_kata_to_hira(t) for t in tokens]
+        hiragana_tokens = [_kata_to_hira(t) for t in words]
 
-        # Kana -> romaji; ー (long vowel) and ゜ (handakuten) produce empty
+        # Kana -> romaji; long vowel U+30FC and handakuten U+309C are empty.
         romaji_list: list[str] = []
         for t in hiragana_tokens:
             if t in ("ー", "゜"):

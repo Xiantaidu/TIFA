@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 
 from inference.backend import ForcedAlignmentInferenceModel, SpectrogramContext
 from lib.config.schema import RootConfig, LossConfig, AugmentationConfig
+from lib.path_traversal import materialize_paths
 from lib.plot import alignment_to_figure, emission_to_figure, topk_bar_figure
 from modules.decoding import decode_alignment_flat
 from modules.forced_alignment import ForcedAlignmentModel
@@ -482,12 +483,13 @@ class ForcedAlignmentModule(BaseLightningModule):
                 device_type=spectrogram.device.type,
                 enabled=False,
             ):
-                tokens = backend.score(
-                    spec,
-                    paths=aux_sample["paths"],
-                    segments=aux_sample["segments"],
-                    widths=aux_sample["widths"],
-                ).tokens
+                scored = backend.score(
+                    spec, paths=aux_sample["paths"], words=aux_sample["words"],
+                    candidates=aux_sample["candidates"],
+                )
+                tokens, _, _ = materialize_paths(
+                    aux_sample["paths"], aux_sample["words"], aux_sample["groups"], scored.choices,
+                )
                 n_mask = tokens != 0
                 token_lengths = n_mask.sum(dim=-1)
                 if int(token_lengths.max().item()) == 0:

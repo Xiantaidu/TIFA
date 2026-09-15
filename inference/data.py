@@ -1,18 +1,16 @@
 import pathlib
-from dataclasses import dataclass
 from typing import Any, Literal
 
 import librosa
-import numpy
 import textgrid
 import torch
 import torch.utils.data
 
 from g2p.api import build_pipeline_from_config
+from g2p.encoding import G2PEncodingError, encode_paths
 from lib import logging
 from lib.audio import load_audio
 from lib.config.schema import G2PPipelineConfig
-from lib.levenshtein import segment_groups
 from lib.vocabulary import Vocabulary
 from training.data import collate_nd
 
@@ -21,96 +19,12 @@ def _skip(identifier: str, reason: str) -> dict[str, Any]:
     return {"skip": True, "identifier": identifier, "warning": f"Skipping '{identifier}': {reason}"}
 
 
-@dataclass(eq=False)
-class _TokenWithWord:
-    """Token with piggybacked group index and phoneme string for
-    Levenshtein alignment.
-
-    ``__eq__`` and ``__hash__`` use only *token*, so the alignment sees
-    phoneme identity.  *group* and *phoneme* survive all Levenshtein
-    operations unchanged.
-    """
-
-    token: int
-    group: int
-    phoneme: str
-
-    def __eq__(self, other):
-        if not isinstance(other, _TokenWithWord):
-            return NotImplemented
-        return self.token == other.token
-
-    def __hash__(self):
-        return hash(self.token)
-
-
-def _deduplicate_paths(paths: list[list[_TokenWithWord]]) -> list[list[_TokenWithWord]]:
-    seen: set[tuple[int, ...]] = set()
-    result: list[list[_TokenWithWord]] = []
-    for path in paths:
-        key = tuple(tw.token for tw in path)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(path)
-    return result
-
-
-def _merge_segment_run(
-        segments: list[list[list[_TokenWithWord]]],
-) -> list[list[_TokenWithWord]]:
-    merged: list[list[_TokenWithWord]] = [[]]
-    for sub_paths in segments:
-        merged = [prefix + path for prefix in merged for path in sub_paths]
-    return _deduplicate_paths(merged)
-
-
-def _is_equal_length(sub_paths: list[list[_TokenWithWord]]) -> bool:
-    return len({len(p) for p in sub_paths}) <= 1
-
-
-def _merge_score_unit_runs(
-        segments: list[list[list[_TokenWithWord]]],
-) -> list[list[list[_TokenWithWord]]]:
-    result: list[list[list[_TokenWithWord]]] = []
-    run: list[list[list[_TokenWithWord]]] = []
-    run_ambiguous = False
-
-    def flush() -> None:
-        nonlocal run
-        if not run:
-            return
-        if run_ambiguous:
-            first_unequal = next(
-                (i for i, sp in enumerate(run) if not _is_equal_length(sp)),
-                None,
-            )
-            if first_unequal is None:
-                result.extend(run)
-            else:
-                result.extend(run[:first_unequal])
-                result.append(_merge_segment_run(run[first_unequal:]))
-        else:
-            result.append(_merge_segment_run(run))
-        run = []
-
-    for sub_paths in segments:
-        ambiguous = len(sub_paths) > 1
-        if run and ambiguous != run_ambiguous:
-            flush()
-        run.append(sub_paths)
-        run_ambiguous = ambiguous
-
-    flush()
-    return result
-
-
 class AudioTextDataset(torch.utils.data.Dataset):
     """Pairs audio files with text files for forced alignment inference.
 
     Takes a filemap ``{identifier: audio_path}``.  In ``__getitem__``
     the paired ``.txt`` file is located alongside the audio and G2P
-    conversion produces phoneme path grids.
+    conversion produces complete word-candidate grids.
     """
 
     def __init__(
@@ -122,7 +36,6 @@ class AudioTextDataset(torch.utils.data.Dataset):
         audio_sample_rate: int,
         language: str | set[str] | None = None,
         oov_handling: Literal["raise", "discard", "force"] = "discard",
-        path_grid_unit: Literal["levenshtein", "word", "none"] = "levenshtein",
     ):
         self.g2p_config = g2p_config
         self.g2p_root = g2p_root
@@ -135,7 +48,6 @@ class AudioTextDataset(torch.utils.data.Dataset):
             language = list(language)
         self.language = language
         self.oov_handling = oov_handling
-        self.path_grid_unit = path_grid_unit
 
         self.items: list[tuple[pathlib.Path, str]] = [
             (audio_path, identifier)
@@ -170,103 +82,23 @@ class AudioTextDataset(torch.utils.data.Dataset):
             return _skip(identifier, "Empty text")
 
         try:
-            g2p_texts = g2p_pipeline.convert(
+            g2p_words = g2p_pipeline.convert(
                 text, languages=self.language,
             )
         except Exception as e:
             return _skip(identifier, f"G2P failed: {e}")
 
-        # Build encoded_groups (one per G2PText). Phoneme tokens are
-        # wrapped in _TokenWithWord so the G2PText index, original
-        # phoneme string, and G2PWord index piggyback through
-        # segment_groups unchanged.
-        # lexicon: per G2PText, {word_label: [[phonemes, ...], ...]}
-        # used by the callback to pick the best label for the chosen
-        # phoneme sequence via Levenshtein distance.
-        encoded_groups: list[list[list[_TokenWithWord]]] = []
-        lexicon: list[dict[str, list[list[str]]]] = []
-        warning = ""
-
-        for gt_idx, gt in enumerate(g2p_texts):
-            group_paths: list[list[_TokenWithWord]] = []
-            gw_paths: dict[str, list[list[str]]] = {}
-            oov_count = 0
-            for gw in gt.words:
-                for path in gw.phones:
-                    tok_ids = [
-                        self.vocabulary.encode(ph, gt.language) for ph in path
-                    ]
-                    if any(tid is None for tid in tok_ids):
-                        oov_phs = [ph for tid, ph in zip(tok_ids, path) if tid is None]
-                        if self.oov_handling == "raise":
-                            return {"skip": True, "error": f"Unknown phonemes {oov_phs} in text for '{identifier}'"}
-                        if self.oov_handling == "discard":
-                            return _skip(identifier, f"Unknown phoneme {oov_phs} in text")
-                        # forced: drop this path
-                        oov_count += 1
-                        continue
-                    group_paths.append([
-                        _TokenWithWord(tid, gt_idx + 1, f"{gt.language}/{ph}")
-                        for tid, ph in zip(tok_ids, path)
-                    ])
-                    gw_paths.setdefault(gw.word, []).append([f"{gt.language}/{ph}" for ph in path])
-
-            if oov_count > 0:
-                warning = f"Dropped {oov_count} OOV pronunciation(s)"
-
-            if not group_paths:
-                continue
-            encoded_groups.append(group_paths)
-            lexicon.append(gw_paths)
-
-        if not encoded_groups:
+        try:
+            data, lexicon, texts = encode_paths(g2p_words, self.vocabulary, self.oov_handling)
+        except G2PEncodingError as e:
+            if self.oov_handling == "raise":
+                return {"skip": True, "error": f"'{identifier}': {e}"}
+            return _skip(identifier, str(e))
+        if not data["paths"].any():
             return _skip(identifier, "No valid token sequence")
-
-        if self.path_grid_unit == "levenshtein":
-            all_segments = segment_groups(encoded_groups)
-        elif self.path_grid_unit == "none":
-            all_segments = [[[
-                tw for group_paths in encoded_groups for tw in group_paths[0]
-            ]]]
-        elif self.path_grid_unit == "word":
-            word_segments = [_deduplicate_paths(group_paths) for group_paths in encoded_groups]
-            all_segments = [
-                sub_paths for sub_paths in _merge_score_unit_runs(word_segments)
-                if any(len(path) > 0 for path in sub_paths)
-            ]
-        else:
-            raise ValueError(f"Unknown grid unit: {self.path_grid_unit}")
-
-        if not all_segments:
-            return _skip(identifier, "No valid token sequence")
-
-        N = sum(
-            max(len(sp) for sp in sub_paths)
-            for sub_paths in all_segments
-        )
-        max_width = max(
-            (len(sub_paths) for sub_paths in all_segments),
-            default=0,
-        )
-        S = len(all_segments)
-
-        paths = numpy.zeros((N, max_width), dtype=numpy.int64)
-        groups_arr = numpy.zeros((N, max_width), dtype=numpy.int64)
-        segments_arr = numpy.zeros(N, dtype=numpy.int64)
-        widths = numpy.zeros(S, dtype=numpy.int64)
-
-        col = 0
-        alts_to_phonemes: dict[tuple[int, int], list[str]] = {}
-        for s_idx, sub_paths in enumerate(all_segments):
-            L = max(len(sp) for sp in sub_paths)
-            widths[s_idx] = len(sub_paths)
-            segments_arr[col:col + L] = s_idx + 1
-            for alt_idx, path in enumerate(sub_paths):
-                alts_to_phonemes[(s_idx, alt_idx)] = [tw.phoneme for tw in path]
-                for pos, tw in enumerate(path):
-                    paths[col + pos, alt_idx] = tw.token
-                    groups_arr[col + pos, alt_idx] = tw.group
-            col += L
+        original_count = sum(len(reading.paths) for word in g2p_words for reading in word.readings)
+        dropped = original_count - int(data["candidates"].sum())
+        warning = f"Dropped {dropped} OOV pronunciation(s) in '{identifier}'" if dropped else ""
 
         audio, sr = load_audio(audio_path)
         if sr != self.sample_rate:
@@ -280,12 +112,9 @@ class AudioTextDataset(torch.utils.data.Dataset):
             "warning": warning,
             "waveform": torch.from_numpy(audio).float(),
             "duration": len(audio) / self.sample_rate,
-            "paths": torch.from_numpy(paths).long(),
-            "groups": torch.from_numpy(groups_arr).long(),
-            "segments": torch.from_numpy(segments_arr).long(),
-            "widths": torch.from_numpy(widths).long(),
-            "phonemes": alts_to_phonemes,
+            **{key: torch.from_numpy(value) for key, value in data.items()},
             "lexicon": lexicon,
+            "texts": texts,
         }
 
     @staticmethod
@@ -309,20 +138,12 @@ class AudioTextDataset(torch.utils.data.Dataset):
             "duration": torch.tensor(
                 [b["duration"] for b in valid], dtype=torch.float32,
             ),
-            "paths": collate_nd(
-                [b["paths"] for b in valid], pad_value=0, ndim=2,
-            ),
-            "groups": collate_nd(
-                [b["groups"] for b in valid], pad_value=0, ndim=2,
-            ),
-            "segments": collate_nd(
-                [b["segments"] for b in valid], pad_value=0,
-            ),
-            "widths": collate_nd(
-                [b["widths"] for b in valid], pad_value=1,
-            ),
-            "phonemes": [b["phonemes"] for b in valid],
+            **{
+                key: collate_nd([b[key] for b in valid], ndim=ndim)
+                for key, ndim in (("paths", 2), ("words", 1), ("groups", 2), ("candidates", 2))
+            },
             "lexicon": [b["lexicon"] for b in valid],
+            "texts": [b["texts"] for b in valid],
         }
 
 

@@ -1,4 +1,3 @@
-import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Literal
@@ -9,11 +8,11 @@ from torch import Tensor, nn
 
 from lib.config.schema import InferenceConfig, ModelConfig
 from lib.feature.mel import StretchableMelSpectrogram
-from lib.path_traversal import compact_sequences, extract_tokens
-from lib.vocabulary import MASK_TOKEN, SPACE_TOKEN
+from lib.path_traversal import first_choices
 from modules.decoding import decode_alignment_flat
 from modules.forced_alignment import ForcedAlignmentModel, ForcedAlignmentSSLModel
 from modules.functional import cross_cosine_similarity
+from .scoring import prepare_scoring, select_paths
 
 
 @dataclass
@@ -27,10 +26,8 @@ class SpectrogramContext:
 class ScoreResult:
     """Output of pronunciation scoring / disambiguation."""
 
-    tokens: Tensor  # [B, N] best token sequence (compacted, 0-padded)
-    groups: Tensor | None  # [B, N] selected group IDs, or None when not supplied
-    alts: Tensor  # [B, S_max] chosen alternative index per segment
-    scores: Tensor  # [B, S_max, W_max] per-segment mean log-likelihood-ratio (0-padded for invalid alternatives)
+    choices: Tensor  # [B, W] complete path index per word, -1 for absent words
+    scores: Tensor | None  # [B, W, C] conditional whole-sample scores; invalid = -inf
 
 
 @dataclass
@@ -79,24 +76,16 @@ class InferenceBackend(ABC):
             spec: SpectrogramContext,
             *,
             paths: Tensor,
-            groups: Tensor | None = None,
-            segments: Tensor,
-            widths: Tensor,
+            words: Tensor,
+            candidates: Tensor,
+            unit: Literal["levenshtein", "word", "none"] = "levenshtein",
     ) -> ScoreResult:
         """Score pronunciation alternatives and pick the best path.
 
-        For single-path items this is a no-op that returns the sole path.
-
-        Args:
-            spec: SpectrogramContext.
-            paths: ``[B, N_grid, W_max]`` int64, alternative token IDs.
-            groups: optional ``[B, N_grid, W_max]`` int64 group IDs carried
-                along the selected path; not used for scoring.
-            segments: ``[B, N_grid]`` int64, segment index per grid position.
-            widths: ``[B, S_max]`` int64, number of alternatives per segment.
-
-        Returns:
-            ScoreResult with the best token sequence and per-segment scores.
+        paths [B,P,C] keeps whole-word candidate columns. words [B,P]
+        assigns rows to semantic words; candidates [B,W,C] marks valid
+        candidates, including empty paths. Metadata stays outside scoring.
+        No-ambiguity items bypass MLM; unit='none' returns scores=None.
         """
 
     @abstractmethod
@@ -174,86 +163,30 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
             spec: SpectrogramContext,
             *,
             paths: Tensor,
-            groups: Tensor | None = None,
-            segments: Tensor,
-            widths: Tensor,
+            words: Tensor,
+            candidates: Tensor,
+            unit: Literal["levenshtein", "word", "none"] = "levenshtein",
     ) -> ScoreResult:
-        device = spec.features.device
-        B = paths.shape[0]
-        S_max = widths.shape[1]
-        W_max = paths.shape[2]
-
-        single_path = widths.max(dim=1).values == 1
-        multi_idx = torch.nonzero(~single_path, as_tuple=True)[0]
-        B_m = int(multi_idx.numel())
-
-        best_alts = torch.zeros(B, S_max, dtype=torch.int64, device=device)
-        mean_scores = torch.zeros(B, S_max, W_max, dtype=torch.float32, device=device)
-
-        if B_m > 0:
-            paths_m = paths[multi_idx]
-            segments_m = segments[multi_idx]
-            widths_m = widths[multi_idx]
-
-            # Mask all divergent positions for audio-conditioned MLM scoring.
-            N_total = int((segments_m != 0).sum(dim=-1).max().item())
-            masked_tokens = paths_m[:, :N_total, 0].clone()
-            widths_0 = F.pad(widths_m, (1, 0), value=1)
-            width_at_pos = widths_0.gather(1, segments_m[:, :N_total])
-            masked_tokens[width_at_pos > 1] = MASK_TOKEN
-            seq_lens = (segments_m != 0).sum(dim=-1)
-            pos_mask = torch.arange(N_total, device=device).unsqueeze(0) >= seq_lens.unsqueeze(-1)
-            masked_tokens[pos_mask] = 0
-
-            _, _, _, token_logits = self.model(
-                spec.features[multi_idx],
-                masked_tokens,
-                spec.mask[multi_idx],
-                masked_tokens != 0,
+        choices = first_choices(candidates)
+        if unit == "none":
+            return ScoreResult(choices=choices, scores=None)
+        masked_tokens, segments, mapping = prepare_scoring(paths, words, candidates, unit=unit)
+        scores = torch.zeros_like(candidates, dtype=torch.float32).masked_fill(~candidates, -torch.inf)
+        active = (segments > 0).any(dim=-1)
+        # Scheduling empty/no-ambiguity batches is outside the numerical graph.
+        if bool(active.any()):
+            tokens = masked_tokens[active]
+            _, _, _, logits = self.model(
+                spec.features[active], tokens, spec.mask[active], tokens != 0,
             )
-            V = token_logits.shape[-1]
-            log_probs = F.log_softmax(token_logits.float(), dim=-1)
-
-            # Shorter alternatives use SPACE targets at omitted positions.
-            w_g = torch.arange(W_max, device=device).view(1, 1, -1)
-            valid_g = (
-                (segments_m[:, :N_total].unsqueeze(-1) > 0)
-                & (w_g < width_at_pos.unsqueeze(-1))
-                & (width_at_pos.unsqueeze(-1) > 1)
+            picked, values = select_paths(
+                logits.float().log_softmax(-1),
+                paths[active], words[active], candidates[active],
+                segments[active], mapping[active],
             )
-            b_f, r_f, w_f = valid_g.nonzero(as_tuple=True)
-            tok_f = paths_m[b_f, r_f, w_f]
-            queries = torch.zeros(B_m, W_max, N_total, dtype=torch.int64, device=device)
-            queries[b_f, w_f, r_f] = SPACE_TOKEN
-            real = tok_f != 0
-            queries[b_f[real], w_f[real], r_f[real]] = tok_f[real]
-
-            expanded = log_probs.unsqueeze(1).expand(-1, W_max, -1, -1)
-            scores = expanded.gather(-1, queries.unsqueeze(-1)).squeeze(-1) + math.log(V)
-            seg_mask = segments_m[:, :N_total].unsqueeze(1) == torch.arange(
-                1,
-                S_max + 1,
-                device=device,
-            ).view(1, -1, 1)
-            score_sum = (scores.unsqueeze(1) * seg_mask.unsqueeze(2)).sum(dim=-1)
-            score_count = ((queries != 0).unsqueeze(1) * seg_mask.unsqueeze(2)).sum(dim=-1).clamp(min=1)
-            segment_scores = score_sum / score_count
-
-            alt_valid = (w_g < widths_m.unsqueeze(-1)) & (widths_m.unsqueeze(-1) > 1)
-            segment_scores = segment_scores.masked_fill(~alt_valid, float("-inf"))
-            best_alts[multi_idx] = segment_scores.argmax(dim=-1)
-            mean_scores[multi_idx] = segment_scores.masked_fill(~alt_valid, 0.0)
-
-        grids = (paths,) if groups is None else (paths, groups)
-        selected = extract_tokens(*grids, segments=segments, choices=best_alts)
-        compacted = compact_sequences(*selected)
-
-        return ScoreResult(
-            tokens=compacted[0],
-            groups=compacted[1] if groups is not None else None,
-            alts=best_alts,
-            scores=mean_scores,
-        )
+            choices[active] = picked
+            scores[active] = values
+        return ScoreResult(choices=choices, scores=scores)
 
     def align(
             self,
@@ -264,6 +197,24 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
             unit: Literal["frame", "second"] = "second",
     ) -> AlignResult:
         n_mask = tokens != 0
+        active = n_mask.any(dim=1) & spec.mask.any(dim=1)
+        if not bool(active.all()):
+            B, N = tokens.shape
+            dtype = torch.long if unit == "frame" else torch.float32
+            spans = torch.zeros((B, N, 2), dtype=dtype, device=tokens.device)
+            similarity = spec.features.new_zeros((B, spec.features.shape[1], N), dtype=torch.float32)
+            agreement = spec.features.new_zeros(B, dtype=torch.float32)
+            if bool(active.any()):
+                result = self.align(
+                    SpectrogramContext(spec.features[active], spec.mask[active]),
+                    tokens=tokens[active],
+                    groups=groups[active] if groups is not None else None,
+                    unit=unit,
+                )
+                spans[active, :result.spans.shape[1]] = result.spans
+                similarity[active] = result.similarity
+                agreement[active] = result.agreement
+            return AlignResult(spans=spans, similarity=similarity, agreement=agreement)
         frame_features, _, token_features, token_logits = self.model(
             spec.features, tokens, spec.mask, n_mask,
         )
@@ -326,7 +277,7 @@ class ForcedAlignmentSSLInferenceModel(nn.Module, InferenceBackend):
         mask = idx.unsqueeze(0) < L.unsqueeze(1)
         return SpectrogramContext(features=features, mask=mask)
 
-    def score(self, spec, *, paths, groups=None, segments, widths):
+    def score(self, spec, *, paths, words, candidates, unit="levenshtein"):
         raise NotImplementedError("SSL inference not yet implemented")
 
     def align(self, spec, tokens, groups=None, unit: Literal["frame", "second"] = "second"):

@@ -135,9 +135,10 @@ def run_inference(
     num_workers: int = 0,
     precision: str = "32-true",
     mode: str = "predict",
+    score_unit: str = "levenshtein",
 ) -> None:
     """Run inference (predict) or online evaluation (evaluate)."""
-    module = ForcedAlignmentInferenceModule(backend)
+    module = ForcedAlignmentInferenceModule(backend, score_unit=score_unit)
     trainer = pl.Trainer(
         precision=precision,
         logger=False,
@@ -167,7 +168,7 @@ def evaluate_offline(
 ) -> None:
     """Offline evaluation via trainer.test() with OfflineEvaluationModule.
 
-    Batch size and num_workers are hard-coded to 1/0 — no benefit
+    Batch size and num_workers are hard-coded to 1/0 -- no benefit
     from batching pre-computed text data.
     """
     module = OfflineEvaluationModule()

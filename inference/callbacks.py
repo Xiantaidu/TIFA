@@ -12,7 +12,6 @@ from lightning_utilities.core.rank_zero import rank_zero_only
 from torch import nn
 
 from lib import logging
-from lib.levenshtein import levenshtein_distance
 from lib.plot import (
     alignment_to_figure,
     emission_to_figure,
@@ -71,13 +70,6 @@ class _CompactEncoder(json.JSONEncoder):
         return o
 
 
-def _extract_chosen_phonemes(phoneme_map, alts):
-    phs = []
-    for seg, alt in enumerate(alts.tolist()):
-        phs.extend(phoneme_map.get((seg, alt), []))
-    return phs
-
-
 class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
     """Writes 2-tier TextGrid files from forced alignment results.
 
@@ -113,16 +105,19 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
         timestep = self.timestep
         for result in outputs:
             identifier = result["identifier"]
-            groups = result["groups"].tolist()  # [int, ...] 1-based G2PText index
+            groups = result["groups"].tolist()  # Selected pronunciation groups, 1-based
             spans = (result["spans"].float() * timestep).tolist()  # frames -> seconds
-            phonemes = _extract_chosen_phonemes(result["phonemes"], result["alts"])
+            phonemes = result["phonemes"]
             if self.language:
                 prefix = f"{self.language}/"
                 phonemes = [
                     ph[len(prefix):] if ph.startswith(prefix) else ph
                     for ph in phonemes
                 ]
-            lexicon = result["lexicon"]  # list[dict[str, list[list[str]]]]
+            group_scripts = []
+            for candidates, choice in zip(result["lexicon"], result["choices"].tolist()):
+                if choice >= 0:
+                    group_scripts.extend(candidates[choice]["scripts"])
             N = len(spans)
             if N == 0:
                 continue
@@ -182,10 +177,8 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
             if phone_intervals[-1][1] > total_duration:
                 total_duration = phone_intervals[-1][1]
 
-            # Step 5: prebuild word intervals
-            # Group phoneme spans by consecutive G2PText index, then
-            # pick the closest G2PWord label by minimum Levenshtein
-            # distance across all alternative paths.
+            # Step 5: retain the historical pronunciation-script tier.
+            # Group IDs and labels stay stable when zero-width phones are omitted.
             word_intervals = []
             i = 0
             while i < N:
@@ -200,20 +193,7 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
                     onset = word_intervals[-1][1]
                 if offset <= onset:
                     offset = onset + eps
-                ph_subseq = phonemes[i:j]
-                # Find best-matching G2PWord label
-                candidates = lexicon[g - 1]  # 0-based
-                if candidates:
-                    best_label = min(
-                        candidates,
-                        key=lambda lb: min(
-                            levenshtein_distance(ph_subseq, path)
-                            for path in candidates[lb]
-                        ),
-                    )
-                else:
-                    best_label = ""
-                word_intervals.append((onset, offset, best_label))
+                word_intervals.append((onset, offset, group_scripts[g - 1]))
                 i = j
 
             # Step 6: construct TextGrid from prebuilt data
@@ -266,7 +246,7 @@ class SavePlotCallback(lightning.pytorch.callbacks.Callback):
         for result in outputs:
             sim = result["similarity"]  # [T_i, N_i]
             identifier = result["identifier"]
-            phonemes = _extract_chosen_phonemes(result["phonemes"], result["alts"])
+            phonemes = result["phonemes"]
             N_i = sim.shape[1]
 
             # Similarity plot
@@ -542,31 +522,32 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
                 "num_tokens": N_i,
             })
 
-            if "scores" in result:
-                segs = []
-                alts_list = result["alts"].tolist()
-                phoneme_map = result["phonemes"]
-                widths_list = result["widths"].tolist()
-                scores_tensor = result["scores"]
-                for s in range(len(widths_list)):
-                    w = widths_list[s]
-                    if w <= 1:
+            if result.get("scores") is not None:
+                words = []
+                for w, (text, candidates, chosen) in enumerate(zip(
+                    result["texts"], result["lexicon"], result["choices"].tolist(),
+                )):
+                    width = len(candidates)
+                    if width <= 1:
                         continue
-                    seg = {"index": s, "width": w, "chosen": alts_list[s]}
-                    alts_out = []
-                    for a in range(w):
-                        alt = _CompactDict({
-                            "index": a,
-                            "phonemes": phoneme_map.get((s, a), []),
-                            "score": float(scores_tensor[s, a].item()),
-                        })
-                        alts_out.append(alt)
-                    seg["alternatives"] = alts_out
-                    segs.append(seg)
-                if segs:
+                    words.append({
+                        "index": w,
+                        "text": text,
+                        "chosen": chosen,
+                        "alternatives": [
+                            _CompactDict({
+                                "index": c,
+                                "scripts": candidate["scripts"],
+                                "phones": candidate["phonemes"],
+                                "score": float(result["scores"][w, c].item()),
+                            })
+                            for c, candidate in enumerate(candidates)
+                        ],
+                    })
+                if words:
                     self._score_records.append({
                         "identifier": result["identifier"],
-                        "segments": segs,
+                        "words": words,
                     })
 
     def on_test_end(
@@ -591,6 +572,7 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
         self._saved = True
 
         records = _gather_records(self._metric_records)
+        score_records = _gather_records(self._score_records)
 
         if not records:
             return
@@ -636,7 +618,6 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
                 json.dump(records, f, indent=2, ensure_ascii=False)
             self._save_stat_plots(records)
 
-            score_records = _gather_records(self._score_records)
             with open(self.save_dir / "scores.json", "w", encoding="utf8") as f:
                 f.write(_CompactEncoder(
                     indent=2, ensure_ascii=False,

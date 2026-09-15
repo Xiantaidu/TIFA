@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 
-from .base import Converter, G2PText, G2PWord
+from .base import Converter, G2PGroup, G2PPath, G2PWord, G2PReading
 
 
 class LexiconConverter(Converter, ABC):
@@ -39,15 +39,18 @@ class LexiconConverter(Converter, ABC):
     # Converter interface
     # ------------------------------------------------------------------
 
-    def convert(self, tokens: list[str]) -> list[G2PText]:
-        result: list[G2PText] = []
-        for token in tokens:
+    def convert(self, words: list[str]) -> list[G2PWord]:
+        result: list[G2PWord] = []
+        for token in words:
             pronunciations = self._dict.get(token)
             if pronunciations is not None:
                 paths = [list(p) for p in pronunciations]
             else:
                 paths = self.infer_oov(token)
-            result.append(G2PText(text=token, words=[G2PWord(word=token, phones=paths)]))
+            result.append(G2PWord(text=token, readings=[G2PReading(paths=[
+                [G2PGroup(script=token, phonemes=p)] if p else []
+                for p in paths
+            ])]))
         return result
 
 
@@ -56,14 +59,14 @@ class PronunciationScriptConverter(Converter, ABC):
 
     Two-phase convert:
 
-    1. ``text_to_script``  --  text tokens are rendered into pronunciation-
+    1. ``text_to_scripts``  --  text tokens are rendered into pronunciation-
        script tokens (pinyin, jyutping, romaji, ...).
-    2. ``script_to_phonemes``  --  each script token is mapped to one or
+    2. ``script_to_paths``  --  each script token is mapped to one or
        more phoneme sequences (typically via dictionary lookup).
     """
 
     @abstractmethod
-    def text_to_script(self, tokens: list[str]) -> list[list[str]]:
+    def text_to_scripts(self, words: list[str]) -> list[list[str]]:
         """Convert text tokens to pronunciation-script tokens.
 
         Each inner list holds the alternative script representations for
@@ -73,27 +76,29 @@ class PronunciationScriptConverter(Converter, ABC):
         ...
 
     @abstractmethod
-    def script_to_phonemes(self, script: str) -> list[list[str]]:
-        """Map a single script token to its phoneme sequences."""
+    def script_to_paths(self, script: str) -> list[G2PPath]:
+        """Map a reading script to complete paths with group script labels."""
         ...
 
-    def convert(self, tokens: list[str]) -> list[G2PText]:
-        scripts_per_token = self.text_to_script(tokens)
-        result: list[G2PText] = []
-        for token, scripts in zip(tokens, scripts_per_token):
-            words: list[G2PWord] = []
+    def convert(self, words: list[str]) -> list[G2PWord]:
+        scripts_per_token = self.text_to_scripts(words)
+        if len(scripts_per_token) != len(words):
+            raise ValueError("text_to_scripts must preserve word count.")
+        result: list[G2PWord] = []
+        for token, scripts in zip(words, scripts_per_token):
+            readings: list[G2PReading] = []
             seen_words: set[str] = set()
             for s in scripts:
                 if s in seen_words:
                     continue
                 seen_words.add(s)
-                seen_paths: set[tuple[str, ...]] = set()
-                phones: list[list[str]] = []
-                for phonemes in self.script_to_phonemes(s):
-                    key = tuple(phonemes)
+                seen_paths: set[tuple[tuple[str, tuple[str, ...]], ...]] = set()
+                paths: list[G2PPath] = []
+                for path in self.script_to_paths(s):
+                    key = tuple((group.script, tuple(group.phonemes)) for group in path)
                     if key not in seen_paths:
                         seen_paths.add(key)
-                        phones.append(list(phonemes))
-                words.append(G2PWord(word=s, phones=phones))
-            result.append(G2PText(text=token, words=words))
+                        paths.append(path)
+                readings.append(G2PReading(paths=paths))
+            result.append(G2PWord(text=token, readings=readings))
         return result

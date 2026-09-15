@@ -5,7 +5,7 @@ from abc import ABC
 from pathlib import Path
 
 from g2p.registry import converter
-from .base import Converter, G2PText, G2PWord
+from .base import Converter, G2PGroup, G2PPath, G2PWord, G2PReading
 from .paradigm import PronunciationScriptConverter
 
 _PRON_UNSAFE_RE = re.compile(r"\s*\(\d+\)$")
@@ -50,36 +50,42 @@ class DictionaryConverter(Converter):
     def claim(self, token: str) -> bool:
         return token.lower() in self._dict
 
-    def convert(self, tokens: list[str]) -> list[G2PText]:
-        result: list[G2PText] = []
-        for token in tokens:
+    def convert(self, words: list[str]) -> list[G2PWord]:
+        result: list[G2PWord] = []
+        for token in words:
             pronunciations = self._dict.get(token.lower())
             if pronunciations is None:
                 raise KeyError(
                     f"DictionaryConverter: token '{token}' not in dictionary. "
                     f"claim should have filtered it."
                 )
-            paths = [list(p) for p in pronunciations]
-            result.append(G2PText(text=token, words=[G2PWord(word=token, phones=paths)]))
+            paths = [
+                [G2PGroup(script=token, phonemes=list(p))] if p else []
+                for p in pronunciations
+            ]
+            result.append(G2PWord(text=token, readings=[G2PReading(paths=paths)]))
         return result
 
 
 class PronunciationScriptDictionaryConverter(PronunciationScriptConverter, ABC):
-    """``PronunciationScriptConverter`` whose *script_to_phonemes* step is a
+    """``PronunciationScriptConverter`` whose *script_to_paths* step is a
     dictionary lookup loaded from *dict_path*.
 
     When *dict_path* is omitted each script token passes through unchanged.
-    Subclasses implement ``text_to_script``.
+    Subclasses implement ``text_to_scripts``.
     """
 
     def __init__(self, dict_path: str) -> None:
         super().__init__()
         self._script_dict = load_pronunciation_dict(dict_path)
 
-    def script_to_phonemes(self, script: str) -> list[list[str]]:
+    def script_to_paths(self, script: str) -> list[G2PPath]:
         pronunciations = self._script_dict.get(script)
         if pronunciations is None:
             raise KeyError(
                 f"Script token {script!r} not found in script-to-phoneme dict."
             )
-        return [list(p) for p in pronunciations]
+        return [
+            [G2PGroup(script=script, phonemes=list(p))] if p else []
+            for p in pronunciations
+        ]
