@@ -36,11 +36,6 @@ class DynamicCheck:
             )
 
 
-class TokenizerConfig(ConfigBaseModel):
-    id: str = Field(...)
-    kwargs: dict[str, Any] = Field(default_factory=dict)
-
-
 class PreprocessorConfig(ConfigBaseModel):
     id: str = Field(...)
     kwargs: dict[str, Any] = Field(default_factory=dict)
@@ -54,7 +49,6 @@ class ConverterConfig(ConfigBaseModel):
 
 class G2PPipelineConfig(ConfigBaseModel):
     preprocessors: list[PreprocessorConfig] = Field(default_factory=list)
-    tokenizers: list[TokenizerConfig] = Field(..., min_length=1)
     converters: list[ConverterConfig] = Field(default_factory=list)
 
 

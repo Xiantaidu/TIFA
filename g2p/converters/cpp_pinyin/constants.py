@@ -5,7 +5,7 @@ HAN_RANGES = [
     (0x4E00, 0x9FA5),
 ]
 
-# CJK ranges matching FA2026 CJKTokenizer (for claim())
+# CJK character ranges.
 CJK_RANGES = [
     (0x2E80, 0x2EFF),
     (0x2F00, 0x2FDF),

@@ -4,9 +4,6 @@ binarizer:
       - id: filter-punctuation
       - id: strip-whitespace
       - id: lowercase
-    tokenizers:
-      - id: whitespace
-      - id: cjk
     converters:
       # Chinese: hanzi
       - id: chinese-pinyin
@@ -17,7 +14,7 @@ binarizer:
         language: zh
         kwargs:
           dict_path: "dictionaries/ds-zh-pinyin-lite.txt"
-      # Japanese: kanji + kana (use languages=["ja"] or ["jpn"] for Japanese text)
+      # Japanese: kanji + kana
       - id: japanese-mecab
         kwargs:
           dict_path: "dictionaries/japanese_dict_full.txt"

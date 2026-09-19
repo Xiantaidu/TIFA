@@ -6,12 +6,9 @@ from pathlib import Path
 from filelock import FileLock
 
 from g2p.registry import converter
-from g2p.tokenizers.cjk import CJKTokenizer
 from .base import Converter, G2PConversionError, G2PGroup, G2PPath, G2PReading, G2PWord
 from .dictionary import PronunciationScriptDictionaryConverter
-
-# Small kana used in yoon digraphs and other digraphs.
-_SMALL_KANA = frozenset("ゃゅょャュョぁぃぅぇぉァィゥェォ")
+from .text import SMALL_KANA, find_run, is_kana
 
 # Hiragana-only romaji table, derived from cpp-kana's kanaToRomajiMap.
 # Katakana is converted to hiragana before lookup.
@@ -91,11 +88,6 @@ def _kata_to_hira(text: str) -> str:
     return "".join(result)
 
 
-def _is_kana(ch: str) -> bool:
-    cp = ord(ch)
-    return (0x3040 <= cp <= 0x309F) or (0x30A0 <= cp <= 0x30FF)
-
-
 _CONSONANT_LEADING = frozenset(
     "bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ"
 )
@@ -147,16 +139,8 @@ class JapaneseKanaConverter(PronunciationScriptDictionaryConverter):
         super().__init__(dict_path=dict_path)
         self._double_written_sokuon = double_written_sokuon
 
-    def claim(self, token: str) -> bool:
-        if not token:
-            return False
-        # Single kana
-        if len(token) == 1:
-            return _is_kana(token)
-        # Kana digraph: two chars, first is kana, second is small kana
-        if len(token) == 2:
-            return _is_kana(token[0]) and token[1] in _SMALL_KANA
-        return False
+    def find(self, text: str) -> tuple[int, int] | None:
+        return find_run(text, is_kana)
 
     def script_to_paths(self, script: str) -> list[G2PPath]:
         if script == "":
@@ -184,7 +168,7 @@ class JapaneseKanaConverter(PronunciationScriptDictionaryConverter):
             if r is not None:
                 romaji_list.append(r)
             else:
-                romaji_list.append(t)  # passthrough  --  shouldn't happen if claim() is correct
+                romaji_list.append(t)
 
         if self._double_written_sokuon:
             romaji_list = _apply_sokuon(romaji_list)
@@ -195,7 +179,7 @@ class JapaneseKanaConverter(PronunciationScriptDictionaryConverter):
 def _is_japanese_char(char: str) -> bool:
     cp = ord(char)
     return (
-        _is_kana(char)
+        is_kana(char)
         or char in "々〆〇"
         or 0x3400 <= cp <= 0x4DBF
         or 0x4E00 <= cp <= 0x9FFF
@@ -230,7 +214,6 @@ class JapaneseMecabConverter(Converter):
         self._double_written_sokuon = double_written_sokuon
         self._unidic_dir = unidic_dir
         self._tagger = None
-        self._tokenizer = CJKTokenizer()
         self._kana = JapaneseKanaConverter(
             dict_path=dict_path, double_written_sokuon=double_written_sokuon,
         )
@@ -242,10 +225,10 @@ class JapaneseMecabConverter(Converter):
         state["_tagger"] = None
         return state
 
-    def claim(self, token: str) -> bool:
+    def find(self, text: str) -> tuple[int, int] | None:
         # In particular, never take ASCII romaji/phoneme input from the
         # Japanese dictionary converter used by existing training datasets.
-        return bool(token) and all(_is_japanese_char(char) for char in token)
+        return find_run(text, _is_japanese_char)
 
     def _get_tagger(self):
         if self._tagger is not None:
@@ -293,7 +276,7 @@ class JapaneseMecabConverter(Converter):
         return readings
 
     def _reading(self, kana: str) -> G2PReading:
-        kana_words = self._kana.convert(self._tokenizer.tokenize([kana]))
+        kana_words = self._kana.convert(kana)
         alternatives = [
             [path for reading in word.readings for path in reading.paths]
             for word in kana_words
@@ -310,8 +293,7 @@ class JapaneseMecabConverter(Converter):
                 paths.append(path)
         return G2PReading(paths=paths)
 
-    def convert(self, words: list[str]) -> list[G2PWord]:
-        text = "".join(words)
+    def convert(self, text: str) -> list[G2PWord]:
         if not text:
             return []
         # Snapshot surfaces before N-best calls replace MeCab's lattice.
@@ -321,8 +303,8 @@ class JapaneseMecabConverter(Converter):
             # Keep kana digraphs intact even if MeCab splits them.
             if (
                 surfaces
-                and surface[0] in _SMALL_KANA
-                and all(_is_kana(char) for char in surfaces[-1] + surface)
+                and surface[0] in SMALL_KANA
+                and all(is_kana(char) for char in surfaces[-1] + surface)
                 and _kata_to_hira(surfaces[-1][-1] + surface[0]) in _KANA_TO_ROMAJI
             ):
                 surfaces[-1] += surface
@@ -332,7 +314,7 @@ class JapaneseMecabConverter(Converter):
         word_readings: list[tuple[str, list[str]]] = []
         for surface in surfaces:
             pronunciations = self._pronunciations(surface)
-            if not pronunciations and not all(_is_kana(char) for char in surface):
+            if not pronunciations and not all(is_kana(char) for char in surface):
                 raise G2PConversionError([surface])
             if (
                 word_readings
@@ -357,5 +339,5 @@ class JapaneseMecabConverter(Converter):
                     text=surface, readings=[self._reading(pron) for pron in pronunciations],
                 ))
             else:
-                result.extend(self._kana.convert(self._tokenizer.tokenize([surface])))
+                result.extend(self._kana.convert(surface))
         return result

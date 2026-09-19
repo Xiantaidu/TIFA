@@ -1,32 +1,14 @@
-from dataclasses import dataclass
-
-from .converters.base import (
-    Converter,
-    G2PConversionError,
-    G2PWord,
-    resolve_language,
-)
+from .converters.base import Converter, G2PConversionError, G2PWord, resolve_language
 from .preprocessors.base import Preprocessor
-from .tokenizers.base import Tokenizer
-
-
-@dataclass
-class _TokenState:
-    """An unconverted token or the complete output of a converted run."""
-
-    text: str
-    results: list[G2PWord] | None = None
 
 
 class G2PPipeline:
     def __init__(
         self,
         preprocessors: list[Preprocessor] | None = None,
-        tokenizers: list[Tokenizer] | None = None,
         converters: list[Converter] | None = None,
     ) -> None:
         self._preprocessors = preprocessors or []
-        self._tokenizers = tokenizers or []
         self._converters = converters or []
 
     def convert(
@@ -42,44 +24,51 @@ class G2PPipeline:
         if not active:
             raise ValueError("No converter matches the requested languages.")
 
-        tokens = [text]
-        for pp in self._preprocessors:
-            tokens = pp.process(tokens)
-        for tok in self._tokenizers:
-            tokens = tok.tokenize(tokens)
+        fragments = [text]
+        for processor in self._preprocessors:
+            fragments = processor.process(fragments)
 
-        states = [_TokenState(text=t) for t in tokens]
-        for converter in active:
-            next_states: list[_TokenState] = []
-            i = 0
-            while i < len(states):
-                if states[i].results is not None or not converter.claim(states[i].text):
-                    next_states.append(states[i])
-                    i += 1
+        claimed: list[tuple[int, str]] = []
+        unrecognized: list[str] = []
+        for fragment in fragments:
+            ranges: list[tuple[int, int, int]] = []
+            pending = [(0, len(fragment), 0)]
+            while pending:
+                begin, end, priority = pending.pop()
+                if begin == end:
                     continue
-                j = i + 1
-                while (
-                    j < len(states)
-                    and states[j].results is None
-                    and converter.claim(states[j].text)
-                ):
-                    j += 1
-                run_states = states[i:j]
-                run_texts = [s.text for s in run_states]
-                for pp in converter.preprocessors():
-                    run_texts = pp.process(run_texts)
-                results = converter.convert(run_texts)
-                resolved = resolve_language(converter.language, language_set)
-                for result in results:
-                    result.language = resolved
-                # Keep even an empty output block so later converters cannot
-                # join input tokens across a run that was already handled.
-                next_states.append(_TokenState(text="", results=results))
-                i = j
-            states = next_states
+                part = fragment[begin:end]
+                for index in range(priority, len(active)):
+                    match = active[index].find(part)
+                    if match is None:
+                        continue
+                    left, right = match
+                    if not 0 <= left < right <= len(part):
+                        raise ValueError(f"{type(active[index]).__name__}.find returned invalid range {match}.")
+                    ranges.append((begin + left, begin + right, index))
+                    # LIFO order routes the left remainder before the right.
+                    pending.append((begin + right, end, index))
+                    pending.append((begin, begin + left, index + 1))
+                    break
+                else:
+                    if part.strip():
+                        unrecognized.append(part)
+            claimed.extend((index, fragment[begin:end]) for begin, end, index in sorted(ranges))
 
-        unconverted = [s for s in states if s.results is None]
-        if unconverted:
-            raise G2PConversionError([s.text for s in unconverted])
+        if unrecognized:
+            raise G2PConversionError(unrecognized)
 
-        return [word for s in states if s.results is not None for word in s.results]
+        result: list[G2PWord] = []
+        for index, part in claimed:
+            converter = active[index]
+            parts = [part]
+            for processor in converter.preprocessors():
+                parts = processor.process(parts)
+            language = resolve_language(converter.language, language_set)
+            for part in parts:
+                if part:
+                    words = converter.convert(part)
+                    for word in words:
+                        word.language = language
+                    result.extend(words)
+        return result

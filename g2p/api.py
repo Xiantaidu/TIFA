@@ -5,13 +5,11 @@ from lib.config.schema import (
     ConverterConfig,
     G2PPipelineConfig,
     PreprocessorConfig,
-    TokenizerConfig,
 )
 from .converters.base import Converter
 from .pipeline import G2PPipeline
 from .preprocessors.base import Preprocessor
-from .registry import get_converter, get_preprocessor, get_tokenizer, parse_language
-from .tokenizers.base import Tokenizer
+from .registry import get_converter, get_preprocessor, parse_language
 
 
 def _resolve_path_refs(obj: Any, root: Path) -> Any:
@@ -22,14 +20,6 @@ def _resolve_path_refs(obj: Any, root: Path) -> Any:
     if isinstance(obj, list):
         return [_resolve_path_refs(v, root) for v in obj]
     return obj
-
-
-def build_tokenizer_from_config(
-    config: TokenizerConfig, *, root_path: str | Path = ""
-) -> Tokenizer:
-    cls = get_tokenizer(config.id)
-    kwargs = _resolve_path_refs(config.kwargs, Path(root_path))
-    return cls(**kwargs)
 
 
 def build_preprocessor_from_config(
@@ -59,6 +49,5 @@ def build_pipeline_from_config(
     root = Path(root_path)
     return G2PPipeline(
         preprocessors=[build_preprocessor_from_config(pc, root_path=root) for pc in config.preprocessors],
-        tokenizers=[build_tokenizer_from_config(tc, root_path=root) for tc in config.tokenizers],
         converters=[build_converter_from_config(cc, root_path=root) for cc in config.converters],
     )

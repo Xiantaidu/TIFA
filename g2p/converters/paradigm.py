@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 
 from .base import Converter, G2PGroup, G2PPath, G2PWord, G2PReading
+from .text import split_words
 
 
 class LexiconConverter(Converter, ABC):
@@ -39,9 +40,9 @@ class LexiconConverter(Converter, ABC):
     # Converter interface
     # ------------------------------------------------------------------
 
-    def convert(self, words: list[str]) -> list[G2PWord]:
+    def convert(self, text: str) -> list[G2PWord]:
         result: list[G2PWord] = []
-        for token in words:
+        for token in split_words(text):
             pronunciations = self._dict.get(token)
             if pronunciations is not None:
                 paths = [list(p) for p in pronunciations]
@@ -80,7 +81,8 @@ class PronunciationScriptConverter(Converter, ABC):
         """Map a reading script to complete paths with group script labels."""
         ...
 
-    def convert(self, words: list[str]) -> list[G2PWord]:
+    def convert(self, text: str) -> list[G2PWord]:
+        words = split_words(text)
         scripts_per_token = self.text_to_scripts(words)
         if len(scripts_per_token) != len(words):
             raise ValueError("text_to_scripts must preserve word count.")

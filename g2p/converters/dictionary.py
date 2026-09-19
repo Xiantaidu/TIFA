@@ -7,6 +7,7 @@ from pathlib import Path
 from g2p.registry import converter
 from .base import Converter, G2PGroup, G2PPath, G2PWord, G2PReading
 from .paradigm import PronunciationScriptConverter
+from .text import split_words, word_spans
 
 _PRON_UNSAFE_RE = re.compile(r"\s*\(\d+\)$")
 
@@ -47,17 +48,20 @@ class DictionaryConverter(Converter):
             base = _PRON_UNSAFE_RE.sub("", key).lower()
             self._dict.setdefault(base, []).extend(prons)
 
-    def claim(self, token: str) -> bool:
-        return token.lower() in self._dict
+    def find(self, text: str) -> tuple[int, int] | None:
+        for begin, end in word_spans(text):
+            if text[begin:end].lower() in self._dict:
+                return begin, end
+        return None
 
-    def convert(self, words: list[str]) -> list[G2PWord]:
+    def convert(self, text: str) -> list[G2PWord]:
         result: list[G2PWord] = []
-        for token in words:
+        for token in split_words(text):
             pronunciations = self._dict.get(token.lower())
             if pronunciations is None:
                 raise KeyError(
                     f"DictionaryConverter: token '{token}' not in dictionary. "
-                    f"claim should have filtered it."
+                    f"find should have filtered it."
                 )
             paths = [
                 [G2PGroup(script=token, phonemes=list(p))] if p else []

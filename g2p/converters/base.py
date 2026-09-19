@@ -27,7 +27,7 @@ class G2PReading:
 class G2PWord:
     """One converter-defined output word, with its alternative readings.
 
-    Its text and boundaries may differ from the input tokenizer's words.
+    Its text and boundaries are determined by the converter.
     """
 
     text: str
@@ -39,7 +39,12 @@ class Converter(ABC):
     language: tuple[str, ...] | None = None
 
     @abstractmethod
-    def claim(self, token: str) -> bool:
+    def find(self, text: str) -> tuple[int, int] | None:
+        """Return the earliest accepted non-empty slice, or None.
+
+        Offsets use Python string indices in the supplied text. Matching
+        does not perform pronunciation inference.
+        """
         ...
 
     # noinspection PyMethodMayBeStatic
@@ -48,7 +53,7 @@ class Converter(ABC):
         return []
 
     @abstractmethod
-    def convert(self, words: list[str]) -> list[G2PWord]:
+    def convert(self, text: str) -> list[G2PWord]:
         """Convert a claimed run into zero or more output words.
 
         The pipeline preserves output text and order and sets each word's

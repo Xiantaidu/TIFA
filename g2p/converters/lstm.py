@@ -8,6 +8,7 @@ import numpy as np
 
 from g2p.registry import converter
 from .paradigm import LexiconConverter
+from .text import word_spans
 
 
 @converter(id="lstm", language=None)
@@ -47,11 +48,12 @@ class LSTMConverter(LexiconConverter):
     # LexiconConverter contract
     # ------------------------------------------------------------------
 
-    def claim(self, token: str) -> bool:
-        t = token.lower()
-        if t in self._dict:
-            return True
-        return all(c in self._char_vocab for c in t)
+    def find(self, text: str) -> tuple[int, int] | None:
+        for begin, end in word_spans(text):
+            word = text[begin:end].lower()
+            if word in self._dict or all(c in self._char_vocab for c in word):
+                return begin, end
+        return None
 
     def infer_oov(self, token: str) -> list[list[str]]:
         phonemes = self._predict(token)

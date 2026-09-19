@@ -12,6 +12,7 @@ from g2p.converters.cpp_pinyin import PinyinEngine
 from g2p.converters.cpp_pinyin.constants import STYLE_NORMAL
 from g2p.registry import converter
 from .dictionary import PronunciationScriptDictionaryConverter
+from .text import find_run
 
 _CPP_PINYIN_DIR = Path(__file__).parent / "cpp_pinyin" / "dicts"
 
@@ -37,8 +38,8 @@ class _ChineseScriptConverter(PronunciationScriptDictionaryConverter):
             return False
         return 0x4E00 <= ord(token) <= 0x9FA5
 
-    def claim(self, token: str) -> bool:
-        return self._is_hanzi(token)
+    def find(self, text: str) -> tuple[int, int] | None:
+        return find_run(text, self._is_hanzi)
 
     def text_to_scripts(self, words: list[str]) -> list[list[str]]:
         simplified = self._engine.simplify(words)
