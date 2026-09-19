@@ -171,6 +171,8 @@ Key behaviors:
 `japanese-mecab` (`ja`, `jpn`) segments kanji/kana text with MeCab and enumerates
 UniDic pronunciation candidates for each word. It reuses `JapaneseKanaConverter`
 to produce complete paths with romaji group labels.
+Pure kana without a UniDic pronunciation falls back to kana-sized words
+(digraphs stay together), using `JapaneseKanaConverter`.
 
 Requires optional dependencies, imported on first conversion:
 

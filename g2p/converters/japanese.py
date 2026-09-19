@@ -290,8 +290,6 @@ class JapaneseMecabConverter(Converter):
                 continue
             seen.add(pron)
             readings.append(pron)
-        if not readings and word and all(_is_kana(char) for char in word):
-            readings.append(word)
         return readings
 
     def _reading(self, kana: str) -> G2PReading:
@@ -334,25 +332,30 @@ class JapaneseMecabConverter(Converter):
         word_readings: list[tuple[str, list[str]]] = []
         for surface in surfaces:
             pronunciations = self._pronunciations(surface)
-            if not pronunciations:
+            if not pronunciations and not all(_is_kana(char) for char in surface):
                 raise G2PConversionError([surface])
             if (
                 word_readings
                 and self._double_written_sokuon
                 and any(_kata_to_hira(pron).rstrip("ー゜").endswith("っ")
-                        for pron in word_readings[-1][1])
+                        for pron in (word_readings[-1][1] or [word_readings[-1][0]]))
             ):
                 # Keep gemination and the following reading in one path choice.
                 previous, previous_readings = word_readings[-1]
                 word_readings[-1] = (
                     previous + surface,
                     list(dict.fromkeys(left + right for left, right in product(
-                        previous_readings, pronunciations,
+                        previous_readings or [previous], pronunciations or [surface],
                     ))),
                 )
             else:
                 word_readings.append((surface, pronunciations))
-        return [
-            G2PWord(text=surface, readings=[self._reading(pron) for pron in pronunciations])
-            for surface, pronunciations in word_readings
-        ]
+        result: list[G2PWord] = []
+        for surface, pronunciations in word_readings:
+            if pronunciations:
+                result.append(G2PWord(
+                    text=surface, readings=[self._reading(pron) for pron in pronunciations],
+                ))
+            else:
+                result.extend(self._kana.convert(self._tokenizer.tokenize([surface])))
+        return result
