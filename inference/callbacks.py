@@ -71,9 +71,10 @@ class _CompactEncoder(json.JSONEncoder):
 
 
 class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
-    """Writes 2-tier TextGrid files from forced alignment results.
+    """Writes 3-tier TextGrid files from forced alignment results.
 
     Tiers:
+    - texts: semantic word intervals with G2P word text
     - words: intervals from decoded spans, labels from G2P output
     - phones: intervals from decoded spans, labels from G2P output
 
@@ -105,6 +106,7 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
         timestep = self.timestep
         for result in outputs:
             identifier = result["identifier"]
+            words = result["words"].tolist()  # Semantic word IDs, 1-based
             groups = result["groups"].tolist()  # Selected pronunciation groups, 1-based
             spans = (result["spans"].float() * timestep).tolist()  # frames -> seconds
             phonemes = result["phonemes"]
@@ -151,6 +153,7 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
                     spans = [spans[i] for i in keep]
                     phonemes = [phonemes[i] for i in keep]
                     groups = [groups[i] for i in keep]
+                    words = [words[i] for i in keep]
                     N = len(spans)
 
             else:  # preserve
@@ -177,32 +180,34 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
             if phone_intervals[-1][1] > total_duration:
                 total_duration = phone_intervals[-1][1]
 
-            # Step 5: retain the historical pronunciation-script tier.
-            # Group IDs and labels stay stable when zero-width phones are omitted.
-            word_intervals = []
-            i = 0
-            while i < N:
-                g = groups[i]
-                j = i + 1
-                while j < N and groups[j] == g:
-                    j += 1
-                onset = phone_intervals[i][0]
-                offset = phone_intervals[j - 1][1]
-                # Ensure non-overlapping, non-zero-word
-                if word_intervals and onset < word_intervals[-1][1]:
-                    onset = word_intervals[-1][1]
-                if offset <= onset:
-                    offset = onset + eps
-                word_intervals.append((onset, offset, group_scripts[g - 1]))
-                i = j
-
-            # Step 6: construct TextGrid from prebuilt data
+            # Step 5: aggregate semantic words and pronunciation groups.
+            # IDs stay stable when zero-width phones are omitted.
             tg = textgrid.TextGrid()
-            words_tier = textgrid.IntervalTier("words", 0, total_duration)
-            for onset, offset, label in word_intervals:
-                words_tier.add(onset, offset, label)
-            tg.append(words_tier)
+            for name, owners, labels in (
+                ("texts", words, result["texts"]),
+                ("words", groups, group_scripts),
+            ):
+                intervals = []
+                i = 0
+                while i < N:
+                    owner = owners[i]
+                    j = i + 1
+                    while j < N and owners[j] == owner:
+                        j += 1
+                    onset = phone_intervals[i][0]
+                    offset = phone_intervals[j - 1][1]
+                    if intervals and onset < intervals[-1][1]:
+                        onset = intervals[-1][1]
+                    if offset <= onset:
+                        offset = onset + eps
+                    intervals.append((onset, offset, labels[owner - 1]))
+                    i = j
+                tier = textgrid.IntervalTier(name, 0, total_duration)
+                for onset, offset, label in intervals:
+                    tier.add(onset, offset, label)
+                tg.append(tier)
 
+            # Step 6: append phones and write the TextGrid.
             phones_tier = textgrid.IntervalTier("phones", 0, total_duration)
             for onset, offset, label in phone_intervals:
                 phones_tier.add(onset, offset, label)
