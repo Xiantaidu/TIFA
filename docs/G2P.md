@@ -44,8 +44,9 @@ class G2PWord:
     readings: list[G2PReading]
 ```
 
-The pipeline returns one semantic word per tokenizer token. A reading groups
-complete legal phoneme realizations; each path is an ordered list of contiguous
+Converters determine semantic word boundaries and may merge or split tokenizer
+tokens, or return no words for a claimed run. A reading groups complete legal
+phoneme realizations; each path is an ordered list of contiguous
 pronunciation groups. Each group owns its pronunciation script and phonemes.
 Different paths can have different group counts, boundaries, and scripts.
 
@@ -53,8 +54,9 @@ An empty path represents an empty pronunciation. Empty groups are not retained.
 `paths=[]` means no alternatives, whereas `paths=[[]]` contains one empty alternative.
 There is no separate `G2PReading.script`: the scripts belong to each path's groups.
 
-Converter-local preprocessors and converters must preserve word count.
-`G2PWord.text` retains the tokenizer output before converter-local preprocessing.
+Converter-local preprocessors and converters may change word count and text.
+`G2PWord.text` is supplied by the converter; the pipeline preserves that text and
+stamps the resolved language on every returned word.
 
 ## Architecture
 
@@ -98,7 +100,7 @@ g2p/
     ├── paradigm.py     # LexiconConverter, PronunciationScriptConverter
     ├── dictionary.py   # load_pronunciation_dict(), DictionaryConverter, PronunciationScriptDictionaryConverter
     ├── chinese.py      # MandarinConverter (id=chinese-pinyin), CantoneseConverter (id=cantonese-jyutping)
-    ├── japanese.py     # JapaneseKanaConverter (id=japanese-kana) — cpp-kana-aligned
+    ├── japanese.py     # JapaneseKanaConverter (id=japanese-kana), JapaneseMecabConverter (id=japanese-mecab)
     ├── lstm.py         # LSTMConverter (id=lstm) — ONNX encoder-decoder OOV
     ├── simple.py       # PassthroughConverter, CharPhonemeConverter
     └── cpp_pinyin/     # PinyinEngine + dicts (mandarin, cantonese)
@@ -150,6 +152,7 @@ Converts tokens to phoneme sequences. Each converter implements:
 | `chinese-pinyin`     | `MandarinConverter`    | hanzi → pinyin (cpp-pinyin engine) → phonemes (dict)                         |
 | `cantonese-jyutping` | `CantoneseConverter`   | hanzi → jyutping (cpp-pinyin engine) → phonemes (dict)                       |
 | `japanese-kana`      | `JapaneseKanaConverter`| kana → romaji (cpp-kana-aligned table) → phonemes (dict). Handles yōon digraphs, gemination |
+| `japanese-mecab`     | `JapaneseMecabConverter`| kanji/kana runs → MeCab words → UniDic pronunciation candidates → existing kana converter |
 | `lstm`               | `LSTMConverter`        | LexiconConverter with ONNX encoder-decoder inference for OOV words           |
 
 ### Japanese Kana converter
@@ -162,6 +165,32 @@ Key behaviors:
 - `claim()` accepts single kana and 2-char digraphs (kana + small kana)
 - `double_written_sokuon: bool = False` — gemination: `cl` + consonant → duplicate consonant (e.g. っか → k, ka)
 - `script_to_paths` returns complete paths whose groups carry the romaji script and dictionary phonemes. An empty script returns `[[]]`; a geminated consonant produces a one-phone group.
+
+### Japanese MeCab converter
+
+`japanese-mecab` (`ja`, `jpn`) segments kanji/kana text with MeCab and enumerates
+UniDic pronunciation candidates for each word. It reuses `JapaneseKanaConverter`
+to produce complete paths with romaji group labels.
+
+Requires optional dependencies, imported on first conversion:
+
+```shell
+python -m pip install "fugashi>=1.3,<2" "unidic>=1.1,<2"
+```
+
+Parameters:
+
+- `dict_path: str` — required romaji-to-phoneme dictionary.
+- `nbest: int = 32` — number of MeCab analyses to examine for each word.
+- `double_written_sokuon: bool = False` — duplicate the following consonant for
+  gemination, combining adjacent words when needed.
+- `unidic_dir: str | None = None` — optional full UniDic directory; defaults to
+  the installed `unidic` package's dictionary.
+
+The default UniDic dictionary downloads automatically on first use if missing;
+a custom `unidic_dir` must already be installed. Use `languages=["ja"]` or
+`["jpn"]` to avoid Chinese converters claiming kanji in the reference config.
+Romaji uses the dictionary fallback; numeric readings are unsupported.
 
 ### LSTM Converter
 
@@ -182,7 +211,7 @@ Paradigm base classes live in `paradigm.py` and `dictionary.py`. They are **not*
 1. `text_to_scripts(words) → list[list[str]]` — text → script tokens (with alternatives)
 2. `script_to_paths(script) → list[G2PPath]` — a reading script → complete grouped paths
 
-Both methods are abstract. `convert()` checks word cardinality and deduplicates identical paths within each distinct intermediate reading script, comparing every group's script and phonemes. The intermediate script string is not stored separately on the reading.
+Both methods are abstract. This paradigm's `convert()` requires one script list per input token and deduplicates identical paths within each distinct intermediate reading script, comparing every group's script and phonemes. The intermediate script string is not stored separately on the reading. This helper's token correspondence is separate from the pipeline, which permits arbitrary converter output counts.
 
 **`PronunciationScriptDictionaryConverter`** — extends `PronunciationScriptConverter`. Fills in `script_to_paths` via `load_pronunciation_dict()`. Subclasses implement `text_to_scripts` and pass a required `dict_path` to the constructor.
 
@@ -203,8 +232,14 @@ The pipeline processes tokens in priority order through each active converter:
 1. Find the next contiguous run of unconverted tokens where `converter.claim()` is true.
 2. Apply the converter's private preprocessors to the run.
 3. Call `converter.convert()` on the run.
-4. Check output cardinality, restore the source word text, and stamp the resolved language.
+4. Stamp the resolved language on every output word and replace the claimed run
+   with the complete output block, preserving the converter's text and boundaries.
 5. Repeat until the converter has no more claimed runs. Move to the next converter.
+
+Already converted runs remain barriers to later converters, including runs that
+returned an empty output. The pipeline never joins unconverted tokens across
+such a barrier. Adjacent claimed tokens are otherwise one run; whitespace or
+punctuation discarded by preprocessing/tokenization does not create a barrier.
 
 Any tokens still unconverted after all converters raise `G2PConversionError`.
 
@@ -250,14 +285,15 @@ binarizer:
         language: zh
         kwargs:
           dict_path: "dictionaries/ds-zh-pinyin-lite.txt"
-      # Japanese: kana
-      - id: japanese-kana
+      # Japanese: kanji + kana (filter with languages=["ja"] or ["jpn"])
+      - id: japanese-mecab
         kwargs:
           dict_path: "dictionaries/japanese_dict_full.txt"
+          nbest: 32
           double_written_sokuon: false
       # Japanese: romaji (direct dictionary fallback)
       - id: dictionary
-        language: ja
+        language: ja,jpn
         kwargs:
           dict_path: "dictionaries/japanese_dict_full.txt"
       # English: dictionary + LSTM OOV
