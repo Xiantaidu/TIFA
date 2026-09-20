@@ -2,6 +2,25 @@
 
 A multilingual grapheme-to-phoneme pipeline that converts raw text into phoneme sequences.
 
+## Resources
+
+The default pipeline in [configs/g2p.yaml](../configs/g2p.yaml) references pronunciation dictionaries included in the repository. Prepare the optional dependencies and model assets for the converters you configure; language filtering does not prevent configured converters from being constructed.
+
+For Japanese MeCab conversion, install the optional dependencies and download the full UniDic dictionary before offline use:
+
+```bash
+pip install "fugashi>=1.3,<2" "unidic>=1.1,<2"
+python -m unidic download
+```
+
+For English LSTM conversion, install `onnxruntime` and set `model_path` to a directory containing `encoder.onnx`, `decoder.onnx`, `char.json` and `phonemes.json`:
+
+```bash
+pip install onnxruntime
+```
+
+The default model directory is `assets/LstmG2p-Eng`. These assets are not included in Git. Model download instructions: **TBD**. Use the `dictionary` converter for dictionary-only conversion if these assets are unavailable.
+
 ## Pipeline
 
 ```mermaid
@@ -316,6 +335,35 @@ class ConverterConfig(ConfigBaseModel):
 `language` on `ConverterConfig` is **required** when the converter class has no registered language (`cls.language is None`). It overrides the decorator default when set.
 
 `@`-prefixed strings in kwargs resolve relative to `root_path`: `"@../dicts/eng.txt"` with `root_path="configs/g2p/"` → `configs/dicts/eng.txt`.
+
+### Custom inference configuration
+
+The file passed to `--g2p` contains the pipeline directly, without the training configuration's `binarizer.g2p` wrapper or `bases` inheritance:
+
+```yaml
+preprocessors:
+  - id: filter-punctuation
+  - id: strip-whitespace
+  - id: lowercase
+converters:
+  - id: dictionary
+    language: en
+    kwargs:
+      dict_path: "path/to/dictionary.txt"
+```
+
+```bash
+python infer.py [path-or-directory] -m [model-path] \
+  --g2p [g2p-config-path] -l en
+```
+
+The model's embedded pipeline is stored under `inference.g2p`. A custom file overrides it. Its emitted phonemes must match the model vocabulary; supplying another dictionary does not extend that vocabulary.
+
+Use `-l` for the default language and `-L` for additional tags, such as `-l zh -L en` with a Chinese-English pipeline. The default language prefix is omitted from output labels. Converter order still determines priority among active converters.
+
+Ordinary relative resource paths are resolved from the working directory. For `@` paths, the embedded pipeline uses the model directory as its root. A custom `--g2p` file inside the model directory tree uses its own parent directory; a custom file outside that tree uses the working directory. The Python API lets callers supply `root_path` explicitly.
+
+Unknown text and unknown phonemes are handled at different stages. Unclaimed text or converter failures cause inference to skip the sample. During vocabulary encoding, `--oov-handling discard` skips samples with unknown phonemes, `raise` reports an error, and `force` drops affected pronunciation paths. Samples without a valid token sequence are still skipped.
 
 ## Programmatic usage
 
