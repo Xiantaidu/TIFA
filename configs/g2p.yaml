@@ -31,6 +31,7 @@ binarizer:
         kwargs:
           dict_path: "dictionaries/ds_cmudict-07b.txt"
           model_path: "assets/LstmG2p-Eng"
+          beam_size: 16
       # English: pure dictionary
   #      - id: dictionary
   #        language: en

@@ -211,6 +211,7 @@ Extends `LexiconConverter`. Dictionary lookup first, ONNX encoder-decoder infere
 Parameters:
 - `dict_path: str | None` — optional pronunciation dictionary
 - `model_path: str` — directory with `encoder.onnx`, `decoder.onnx`, `char.json`, `phonemes.json`
+- `beam_size: int` — maximum number of search hypotheses; set to 1 for greedy decoding
 
 `find()` accepts the earliest complete word found in the dictionary or composed
 entirely of characters in the model vocabulary. ONNX sessions are lazily loaded
@@ -313,6 +314,7 @@ binarizer:
         kwargs:
           dict_path: "dictionaries/ds_cmudict-07b.txt"
           model_path: "assets/LstmG2p-Eng"
+          beam_size: 16
 ```
 
 ### Config schema

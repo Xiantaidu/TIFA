@@ -2,6 +2,7 @@
 """
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,22 @@ import numpy as np
 from g2p.registry import converter
 from .paradigm import LexiconConverter
 from .text import word_spans
+
+
+@dataclass
+class _Beam:
+    tokens: list[int]
+    score: float
+    hidden: np.ndarray
+    cell: np.ndarray
+    finished: bool = False
+
+    @property
+    def normalized_score(self) -> float:
+        # Unlike upstream LstmG2p, divide the cumulative log probability
+        # directly: multiplying it by the old length counts it again.
+        # Exclude BOS from the generated sequence length; include EOS.
+        return self.score / max(1, len(self.tokens) - 1)
 
 
 @converter(id="lstm", language=None)
@@ -19,10 +36,18 @@ class LSTMConverter(LexiconConverter):
         *dict_path*: pronunciation dictionary (tab-separated).
         *model_path*: directory containing ``encoder.onnx``,
           ``decoder.onnx``, ``char.json``, ``phonemes.json``.
+        *beam_size*: number of hypotheses to retain.
+          Set to 1 for greedy decoding. Returns distinct pronunciations
+          ranked by mean log probability, including EOS in the length.
     """
 
-    def __init__(self, *, dict_path: str = None, model_path: str) -> None:
+    def __init__(
+        self, *, dict_path: str = None, model_path: str, beam_size: int = 16
+    ) -> None:
+        if isinstance(beam_size, bool) or not isinstance(beam_size, int) or beam_size < 1:
+            raise ValueError("beam_size must be a positive integer")
         super().__init__(dict_path=dict_path)
+        self._beam_size = beam_size
 
         model_dir = Path(model_path)
         with open(model_dir / "char.json", "r", encoding="utf-8") as f:
@@ -56,8 +81,7 @@ class LSTMConverter(LexiconConverter):
         return None
 
     def infer_oov(self, token: str) -> list[list[str]]:
-        phonemes = self._predict(token)
-        return [phonemes]
+        return self._predict(token)
 
     # ------------------------------------------------------------------
     # ONNX inference
@@ -75,7 +99,7 @@ class LSTMConverter(LexiconConverter):
             f"{self._model_path}/decoder.onnx"
         )
 
-    def _predict(self, word: str) -> list[str]:
+    def _predict(self, word: str) -> list[list[str]]:
         self._ensure_sessions()
 
         word = word.lower().strip()
@@ -91,35 +115,50 @@ class LSTMConverter(LexiconConverter):
             None, {"input_ids": src}
         )
 
-        # Decoder  --  autoregressive greedy
-        batch_size = 1
-        decoder_input = np.full(
-            (batch_size, 1), self._bos_idx, dtype=np.int64
-        )
-        finished = False
-        predictions: list[int] = []
+        # Keep each hypothesis's decoder state separate; finished beams persist.
+        beams = [_Beam([self._bos_idx], 0.0, hidden, cell)]
 
         for _step in range(self._max_len):
-            if finished:
+            if all(beam.finished for beam in beams):
                 break
-            outputs = self._decoder_session.run(
-                None,
-                {
-                    "decoder_input": decoder_input,
-                    "hidden": hidden,
-                    "cell": cell,
-                    "encoder_outputs": encoder_outputs,
-                },
-            )
-            logits, hidden, cell, _ = outputs
-            pred_id = int(np.argmax(logits[0, 0, :]))
-            if pred_id == self._eos_idx:
-                finished = True
-            else:
-                predictions.append(pred_id)
-            decoder_input = np.array([[pred_id]], dtype=np.int64)
+            candidates: list[_Beam] = []
+            for beam in beams:
+                if beam.finished:
+                    candidates.append(beam)
+                    continue
+                logits, hidden, cell, _ = self._decoder_session.run(
+                    None,
+                    {
+                        "decoder_input": np.array([[beam.tokens[-1]]], dtype=np.int64),
+                        "hidden": beam.hidden,
+                        "cell": beam.cell,
+                        "encoder_outputs": encoder_outputs,
+                    },
+                )
+                log_probs = logits[0, 0, :].astype(np.float64)
+                log_probs -= np.max(log_probs)
+                log_probs -= np.log(np.exp(log_probs).sum())
+                # All extensions of one parent have the same length, so only
+                # its best beam_size tokens can survive global pruning.
+                top_ids = np.argsort(-log_probs, kind="stable")[:self._beam_size]
+                for pred_id in top_ids:
+                    pred_id = int(pred_id)
+                    candidates.append(_Beam(
+                        tokens=beam.tokens + [pred_id],
+                        score=beam.score + float(log_probs[pred_id]),
+                        hidden=hidden,
+                        cell=cell,
+                        finished=pred_id == self._eos_idx,
+                    ))
+            candidates.sort(key=lambda beam: beam.normalized_score, reverse=True)
+            beams = candidates[:self._beam_size]
 
-        return self._decode(predictions)
+        # Special-token removal can collapse distinct beams to one reading.
+        # Preserve the highest-ranked occurrence of each pronunciation.
+        pronunciations = dict.fromkeys(
+            tuple(self._decode(beam.tokens[1:])) for beam in beams
+        )
+        return [list(phonemes) for phonemes in pronunciations]
 
     def _decode(self, pred_ids: list[int]) -> list[str]:
         result: list[str] = []
