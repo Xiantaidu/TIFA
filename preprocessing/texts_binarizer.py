@@ -11,7 +11,7 @@ from g2p.encoding import encode_paths
 from lib import logging
 from lib.audio import load_audio
 from lib.feature.pitch import get_pitch_parselmouth
-from lib.vocabulary import is_stop_symbol
+from lib.vocabulary import is_stop_symbol, qualify_symbol
 
 from .binarizer_base import (
     BaseBinarizer,
@@ -34,6 +34,10 @@ class TextMetadataItem(MetadataItem):
     text: str
     g2p_words: list[G2PWord] | None = None
     phones: list[str] | None = None
+
+    @property
+    def default_language(self) -> str:
+        return self.language.split("+", 1)[0].strip()
 
 
 class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
@@ -82,8 +86,8 @@ class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
                 {
                     symbol
                     for symbol in item.raw_symbols
-                    if not self._is_stop_symbol(symbol, item.language)
-                    and self.vocabulary.encode(symbol, item.language) is None
+                    if not self._is_stop_symbol(symbol, item.default_language)
+                    and self.vocabulary.encode(symbol, item.default_language) is None
                 }
             )
             if not oov_symbols:
@@ -93,7 +97,7 @@ class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
             if item.g2p_words is not None:
                 data, _, _ = encode_paths(
                     item.g2p_words, self.vocabulary, "force",
-                    default_language=item.language,
+                    default_language=item.default_language,
                     global_symbols=self.config.vocabulary.global_symbols,
                     stop_symbols=self.config.vocabulary.stop_symbols,
                 )
@@ -129,6 +133,10 @@ class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
             if waveform_fn is None:
                 continue
             language = row["language"]
+            languages = [tag.strip() for tag in language.split("+")]
+            if any(not tag for tag in languages):
+                raise ValueError(f"Invalid language tags for item '{name}': {language!r}")
+            default_language = languages[0]
             estimated_duration = (
                 self.get_frame_count(waveform_fn) * self.timestep
             )
@@ -139,7 +147,10 @@ class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
                     language=language,
                     waveform_fn=waveform_fn,
                     estimated_duration=estimated_duration,
-                    raw_symbols=raw_phones,
+                    raw_symbols=[
+                        qualify_symbol(phone, default_language, self.config.vocabulary.global_symbols)
+                        for phone in raw_phones
+                    ],
                     text="",
                     g2p_words=None,
                     phones=raw_phones,
@@ -152,7 +163,7 @@ class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
                     f"Either configure G2P or add a 'phones' column to the index.csv."
                 )
             try:
-                g2p_words = self.g2p.convert(text, languages=[language])
+                g2p_words = self.g2p.convert(text, languages=languages)
             except Exception as e:
                 logging.warning(
                     f"G2P failed for item '{name}': {e}"
@@ -163,7 +174,14 @@ class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
                 for reading in word.readings:
                     for path in reading.paths:
                         for group in path:
-                            symbols.extend(group.phonemes)
+                            symbols.extend(
+                                qualify_symbol(
+                                    phone,
+                                    word.language or default_language,
+                                    self.config.vocabulary.global_symbols,
+                                )
+                                for phone in group.phonemes
+                            )
             items.append(TextMetadataItem(
                 name=name,
                 language=language,
@@ -204,7 +222,7 @@ class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
         if item.phones is not None:
             tokens = [
                 tid for ph in item.phones
-                if (tid := self._encode_symbol(ph, item.language)) is not None
+                if (tid := self._encode_symbol(ph, item.default_language)) is not None
             ]
             size = len(tokens)
             paths = numpy.zeros((max(1, size), 1), dtype=numpy.int64)
@@ -222,7 +240,7 @@ class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
                 item.g2p_words,
                 self.vocabulary,
                 "force",
-                default_language=item.language,
+                default_language=item.default_language,
                 global_symbols=self.config.vocabulary.global_symbols,
                 stop_symbols=self.config.vocabulary.stop_symbols,
             )

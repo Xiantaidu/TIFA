@@ -9,34 +9,29 @@ binarizer:
       - id: chinese-pinyin
         kwargs:
           dict_path: "dictionaries/ds-zh-pinyin-lite.txt"
-      # Chinese: pinyin
-      - id: dictionary
-        language: zh
-        kwargs:
-          dict_path: "dictionaries/ds-zh-pinyin-lite.txt"
       # Japanese: kanji + kana
       - id: japanese-mecab
         kwargs:
           dict_path: "dictionaries/japanese_dict_full.txt"
           nbest: 32
           double_written_sokuon: false
-      # Japanese: romaji
-      - id: dictionary
-        language: ja,jpn
-        kwargs:
-          dict_path: "dictionaries/japanese_dict_full.txt"
-      # English: dictionary + lstm
+      # English words take priority over pinyin/romaji in mixed-language text.
       - id: lstm
         language: en
         kwargs:
           dict_path: "dictionaries/ds_cmudict-07b.txt"
           model_path: "assets/LstmG2p-Eng"
           beam_size: 16
-      # English: pure dictionary
-  #      - id: dictionary
-  #        language: en
-  #        kwargs:
-  #          dict_path: "dictionaries/ds_cmudict-07b.txt"
+      # Chinese: pinyin
+      - id: dictionary
+        language: zh
+        kwargs:
+          dict_path: "dictionaries/ds-zh-pinyin-lite.txt"
+      # Japanese: romaji
+      - id: dictionary
+        language: ja,jpn
+        kwargs:
+          dict_path: "dictionaries/japanese_dict_full.txt"
   vocabulary:
     prebuilt_vocab_file: null
     global_symbols: [AP, SP, EP, GS, sil, br, pau]

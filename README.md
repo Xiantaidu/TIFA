@@ -244,6 +244,8 @@ Auxiliary data still requires audio, but does not require `durations`. Its `inde
 name,language,text
 item1,zh,你好
 item2,en,hello world
+item3,zh+en,你好 hello world
+item4,ja+en,君と hello world
 ```
 
 The pipeline in `binarizer.g2p` converts the text to pronunciation candidates. Prepare its dictionaries and dependencies as described in [G2P.md](docs/G2P.md). If phoneme sequences are already available, provide them directly:
@@ -254,6 +256,8 @@ item1,zh,n i h ao
 ```
 
 A nonempty `phones` field takes precedence over `text` and bypasses G2P for that item. Auxiliary data uses the main dataset's vocabulary. Preprocessing filters pronunciation candidates containing unsupported phonemes and skips samples that cannot be fully encoded; auxiliary-only phonemes do not expand the vocabulary.
+
+For multilingual fixed phones, use language prefixes such as `zh/n zh/i en/m en/iy`. The first language tag supplies the default for unqualified phones and converters without a language label.
 
 ### Configuration
 
