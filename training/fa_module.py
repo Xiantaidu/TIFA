@@ -508,7 +508,10 @@ class ForcedAlignmentModule(BaseLightningModule):
                     aligned = backend.align(spec, tokens=tokens, unit="frame")
                     agreement = aligned.agreement
                     similarity = aligned.similarity
-                    spans = aligned.spans
+                    # The decoder trims to real tokens; candidate grids retain padding.
+                    spans = nn.functional.pad(
+                        aligned.spans, (0, 0, 0, tokens.shape[1] - aligned.spans.shape[1]),
+                    )
         finally:
             if applied:
                 self.ema.restore()
@@ -546,15 +549,14 @@ class ForcedAlignmentModule(BaseLightningModule):
             return self._zero_aux_losses(reference, group_frames, group_tokens)
 
         pseudo = self._generate_aux_pseudo_labels(aux_sample)
-        self.log(
-            "training/aux_acceptance_rate",
-            pseudo.accepted.float().mean(),
-            on_step=True,
-            on_epoch=False,
-            logger=True,
-            sync_dist=False,
-            batch_size=int(aux_sample["size"]),
-        )
+        if (
+            self.global_step > self.logger_step
+            and self.global_step % self.training_config.trainer.log_every_n_steps == 0
+        ):
+            self.logger.log_metrics(
+                {"training/aux_acceptance_rate": pseudo.accepted.float().mean()},
+                step=self.global_step,
+            )
         dl_cfg = self.training_config.dataloader
         student = concat_pseudo_label_groups(
             aux_sample,
