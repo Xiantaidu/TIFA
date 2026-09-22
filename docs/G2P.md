@@ -19,7 +19,7 @@ For English LSTM conversion, install `onnxruntime` and set `model_path` to a dir
 pip install onnxruntime
 ```
 
-The default model directory is `assets/LstmG2p-Eng`. These assets are not included in Git. Model download instructions: **TBD**. Use the `dictionary` converter for dictionary-only conversion if these assets are unavailable.
+Download the English G2P model package from [LstmG2p v1.0.0](https://github.com/wolfgitpr/LstmG2p/releases/tag/v1.0.0) and extract its model files into `assets/LstmG2p-Eng`, the default model directory. These assets are not included in Git. Use the `dictionary` converter for dictionary-only conversion if these assets are unavailable.
 
 ## Pipeline
 
