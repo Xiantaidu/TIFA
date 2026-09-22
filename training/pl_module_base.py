@@ -377,6 +377,8 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
             **{name: lv.mean for name, lv in loss_values.items()},
             "batch_size": sample["size"],
         }
+        if "aux_size" in sample:
+            log_outputs["aux_batch_size"] = sample["aux_size"]
         # logs to progress bar
         self.log("total_loss", unweighted_total, prog_bar=True, logger=False, on_step=True, on_epoch=False)
         self.log("batch_size", sample["size"], prog_bar=True, logger=False, on_step=True, on_epoch=False)

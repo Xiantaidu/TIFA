@@ -824,10 +824,11 @@ class DynamicBatchSampler(torch.utils.data.distributed.DistributedSampler):
 class ZippedDataLoader:
     """
     Wraps a main DataLoader, optionally zipped with an aux DataLoader.
-    Batches are always wrapped as ``{"main": ..., "size": ...}``.
-    When aux is active, ``"aux"`` is included and ``"size"`` is the combined
-    main-plus-aux item count. ``num_batches`` keeps the epoch length fixed when
-    the main sampler switches to its smaller active-phase budget.
+    Batches are always wrapped as ``{"main": ..., "size": ...}``, where
+    ``"size"`` is the main batch item count. When aux is active, ``"aux"`` and
+    ``"aux_size"`` are included, with ``"aux_size"`` counting raw aux items
+    before filtering or concatenation. ``num_batches`` keeps the epoch length
+    fixed when the main sampler switches to its smaller active-phase budget.
     """
 
     def __init__(
@@ -853,6 +854,7 @@ class ZippedDataLoader:
         if num_batches <= 0:
             raise RuntimeError("Main dataloader must produce at least one batch.")
         main_iter = iter(self.main_dl)
+        aux_iter = None
         aux_active = self.aux_dl is not None and self.aux_sampler.epoch >= self.aux_warmup_epochs
         if aux_active:
             self.aux_sampler.target_num_batches = num_batches
@@ -866,7 +868,7 @@ class ZippedDataLoader:
                 raise RuntimeError(
                     f"Main dataloader produced {batch_index} batches; " f"expected {num_batches}."
                 ) from exc
-            if aux_active:
+            if aux_iter is not None:
                 try:
                     aux_batch = next(aux_iter)
                 except StopIteration:
@@ -876,7 +878,8 @@ class ZippedDataLoader:
                 yield {
                     "main": main_batch,
                     "aux": aux_batch,
-                    "size": main_batch["size"] + aux_batch["size"],
+                    "size": main_batch["size"],
+                    "aux_size": aux_batch["size"],
                 }
             else:
                 yield {
