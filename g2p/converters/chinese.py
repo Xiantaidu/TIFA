@@ -51,7 +51,9 @@ class _ChineseScriptConverter(PronunciationScriptDictionaryConverter):
             for reading in self._engine.readings(ch, style=STYLE_NORMAL):
                 if reading != primary:
                     scripts.append(reading)
-            result.append(scripts)
+            supported = [script for script in scripts if script in self._script_dict]
+            # Preserve the lookup error when none of the readings is supported.
+            result.append(supported or scripts)
         return result
 
 
