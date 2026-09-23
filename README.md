@@ -413,7 +413,21 @@ python evaluate.py offline --help
 
 ## Deployment
 
-ONNX export and deployment workflow: **TBD**.
+Models can be exported to ONNX format for further deployment.
+
+### Export ONNX models
+
+Run the following command to export a supervised model:
+
+```bash
+python deploy.py -m [model-path] -o [save-dir]
+```
+
+Keep the matching `config.yaml` and `vocabulary.json` beside the model. By default, ONNX models are exported using the _trace_ exporter and opset version 18. Use `--opset-version` to select an opset from 18 through 20.
+
+### Inference with ONNX models
+
+We don't provide a standalone ONNX inference pipeline in this repository. See the [documentation](ONNX.md) for the workflow, tensor interfaces and steps to implement in the host application.
 
 ## Integration
 
@@ -422,6 +436,7 @@ The repository exposes APIs for downstream applications:
 - Preprocessing: [preprocessing/api.py](preprocessing/api.py)
 - Training: [training/api.py](training/api.py)
 - Inference and evaluation: [inference/api.py](inference/api.py)
+- Deployment: [deployment/api.py](deployment/api.py)
 
 ## License
 

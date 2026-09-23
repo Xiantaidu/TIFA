@@ -83,7 +83,7 @@ def prepare_scoring(
     return masked_tokens, segments, mapping
 
 
-def _score_fragments(
+def score_fragments(
         log_probs: Tensor,
         paths: Tensor,
         words: Tensor,
@@ -128,7 +128,7 @@ def _score_fragments(
     ).clamp_max(P - 1)
     batch = torch.arange(B, device=paths.device).view(B, 1, 1, 1)
     values = log_probs[batch, locations, paths.unsqueeze(-1)]
-    values = values.masked_fill(~real.unsqueeze(-1), 0).double()
+    values = values.masked_fill(~real.unsqueeze(-1), 0)
     costs = values.new_zeros(B, P + 1, C, P + 1).scatter_add(
         1, fragments.unsqueeze(-1).unsqueeze(-1).expand_as(values), values,
     )
@@ -140,7 +140,7 @@ def _score_fragments(
     locations = (segment_starts.unsqueeze(-1) + q).clamp_max(P - 1)
     space = log_probs[
         torch.arange(B, device=paths.device).view(B, 1, 1), locations, SPACE_TOKEN,
-    ].double()
+    ]
     space = space.masked_fill(q >= segment_lengths.unsqueeze(-1), 0)
     suffix = space.flip(-1).cumsum(-1).flip(-1)
     tails = torch.cat([suffix, suffix.new_zeros(B, P + 1, 1)], dim=-1)
@@ -238,7 +238,23 @@ def select_paths(
     other word; independent score argmaxes do not reconstruct choices.
     Valid candidates score zero when there are no MASK slots.
     """
-    tensors = _score_fragments(log_probs, paths, words, segments, mapping)
+    tensors = score_fragments(log_probs, paths, words, segments, mapping)
+    return select_scored_paths(candidates, *tensors, vocab_size=log_probs.shape[-1])
+
+
+@torch.no_grad()
+def select_scored_paths(
+        candidates: Tensor,
+        descriptors: Tensor,
+        lengths: Tensor,
+        costs: Tensor,
+        tails: Tensor,
+        capacity: Tensor,
+        *,
+        vocab_size: int,
+) -> tuple[Tensor, Tensor]:
+    """Run host DP on precomputed fragment scores (including ONNX outputs)."""
+    tensors = descriptors, lengths, costs, tails, capacity
     descriptors, lengths, costs, tails, capacity = (
         value.detach().cpu().numpy() for value in tensors
     )
@@ -249,10 +265,10 @@ def select_paths(
         chosen, values = _select_sample(valid[b], descriptors[b], lengths[b], costs[b], tails[b], capacity[b])
         count = int(capacity[b].sum())
         if count:
-            values = values / count + math.log(log_probs.shape[-1])
+            values = values / count + math.log(vocab_size)
         choices[b] = chosen
         scores[b] = values
     return (
-        torch.as_tensor(choices, device=log_probs.device),
-        torch.as_tensor(scores, device=log_probs.device),
+        torch.as_tensor(choices, device=candidates.device),
+        torch.as_tensor(scores, device=candidates.device),
     )
