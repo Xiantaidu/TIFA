@@ -69,6 +69,13 @@ class LSTMConverter(LexiconConverter):
         self._decoder_session = None
         self._max_len = 48
 
+    def __getstate__(self):
+        # Native ONNX sessions cannot be pickled for spawned workers.
+        state = self.__dict__.copy()
+        state["_encoder_session"] = None
+        state["_decoder_session"] = None
+        return state
+
     # ------------------------------------------------------------------
     # LexiconConverter contract
     # ------------------------------------------------------------------
