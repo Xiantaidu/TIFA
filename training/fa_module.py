@@ -405,18 +405,38 @@ class ForcedAlignmentModule(BaseLightningModule):
         sample["indices"] = sample["main"]["indices"]
         super().validation_step(sample, batch_index)
 
+    def on_train_start(self):
+        super().on_train_start()
+        # Lightning skips on_train_epoch_start when resuming mid-epoch.
+        self._sync_train_sampler_state()
+
     def on_train_epoch_start(self):
-        super().on_train_epoch_start()
-        if self.aux_sampler is not None:
-            dl_cfg = self.training_config.dataloader
-            if self._is_aux_warmup():
-                self.train_sampler.max_batch_size = dl_cfg.max_batch_size
-                self.train_sampler.max_batch_frames = dl_cfg.max_batch_frames
-            else:
-                self.train_sampler.max_batch_size = self._main_active_batch_size
-                self.train_sampler.max_batch_frames = self._main_active_batch_frames
+        self._sync_train_sampler_state()
+
+    def _sync_train_sampler_state(self) -> None:
+        if self.train_sampler is None:
+            return
+
+        epoch = self.current_epoch
+        dl_cfg = self.training_config.dataloader
+        batch_size = dl_cfg.max_batch_size
+        batch_frames = dl_cfg.max_batch_frames
+        if self.aux_sampler is not None and not self._is_aux_warmup():
+            batch_size = self._main_active_batch_size
+            batch_frames = self._main_active_batch_frames
+
+        if (
+            self.train_sampler.epoch != epoch
+            or self.train_sampler.max_batch_size != batch_size
+            or self.train_sampler.max_batch_frames != batch_frames
+        ):
+            self.train_sampler.max_batch_size = batch_size
+            self.train_sampler.max_batch_frames = batch_frames
+            self.train_sampler.set_epoch(epoch)
             self.train_sampler.formed = None
-            self.aux_sampler.set_epoch(self.current_epoch)
+        if self.aux_sampler is not None and self.aux_sampler.epoch != epoch:
+            self.aux_sampler.set_epoch(epoch)
+            self.aux_sampler.formed = None
 
     def _is_aux_warmup(self) -> bool:
         """Whether aux dataset exists but hasn't started contributing yet."""
