@@ -54,8 +54,8 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
             phonemes = [
                 label
                 for candidates, choice in zip(batch["lexicon"][i], scored.choices[i, :W_i].tolist())
-                if choice >= 0
-                for label in candidates[choice]["phonemes"]
+                if choice > 0
+                for label in candidates[choice - 1]["phonemes"]
             ]
             results.append({
                 "identifier": identifier,

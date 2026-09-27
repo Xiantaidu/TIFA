@@ -2,8 +2,8 @@
 
 paths/groups: [B,P,C], words: [B,P], candidates: [B,W,C].
 P is the aligned source-grid capacity, C the candidate capacity.
-choices indexes one complete candidate per word, including empty paths.
-Fixed known phones have word zero and occupy candidate column zero.
+choices uses 1-based candidate IDs, including empty paths; zero means absent.
+Word and group IDs start at one; zero denotes padding.
 """
 
 import math
@@ -13,17 +13,17 @@ from torch import Tensor
 
 
 def first_choices(candidates: Tensor) -> Tensor:
-    """Choose the first valid candidate [B,W], or -1 for absent words."""
-    first = candidates.long().argmax(dim=-1)
-    return first.masked_fill(~candidates.any(dim=-1), -1)
+    """Choose the first valid 1-based candidate ID [B,W], or zero if absent."""
+    first = candidates.long().argmax(dim=-1) + 1
+    return first.masked_fill(~candidates.any(dim=-1), 0)
 
 
 def sample_paths_uniform(candidates: Tensor, k: int) -> Tensor:
     """Sample complete choices [B,k,W]; candidate validity is prefix-packed."""
     widths = candidates.sum(dim=-1)
     B, W = widths.shape
-    choices = (torch.rand(B, W, k, device=candidates.device) * widths.unsqueeze(-1)).long()
-    choices = choices.clamp(max=widths.unsqueeze(-1) - 1)
+    choices = (torch.rand(B, W, k, device=candidates.device) * widths.unsqueeze(-1)).long() + 1
+    choices = choices.clamp(max=widths.unsqueeze(-1))
     return choices.permute(0, 2, 1)
 
 
@@ -34,8 +34,8 @@ def sample_paths_perm(candidates: Tensor, r: int = 1) -> Tensor:
     rand = torch.rand(B, W, C, r, device=candidates.device)
     rand = rand.masked_fill(~candidates.unsqueeze(-1), torch.inf)
     perm = rand.argsort(dim=2)
-    choices = perm % widths.clamp(min=1).view(B, W, 1, 1)
-    choices = choices.masked_fill(widths.view(B, W, 1, 1) == 0, -1)
+    choices = perm % widths.clamp(min=1).view(B, W, 1, 1) + 1
+    choices = choices.masked_fill(widths.view(B, W, 1, 1) == 0, 0)
     return choices.permute(0, 3, 2, 1).reshape(B, r * C, W)
 
 
@@ -46,22 +46,21 @@ def extract_tokens(
 ) -> tuple[Tensor, ...]:
     """Gather whole candidates from [B,P,C] grids.
 
-    choices is [B,...,W]. All positions of a word use the same
-    candidate column. Word zero selects fixed column zero; a -1 choice
-    produces padding. Output capacity remains P.
+    choices is [B,...,W], with 1-based candidate IDs and zero for padding.
+    All positions of a word use the same candidate column. Word zero
+    selects padding. Output capacity remains P.
     """
     B, P, _ = args[0].shape
     middle_shape = choices.shape[1:-1]
     K = math.prod(middle_shape)
     chosen = choices.reshape(B, K, choices.shape[-1])
     chosen = torch.cat([chosen.new_zeros(B, K, 1), chosen], dim=-1)
-    per_position = chosen.gather(-1, words.unsqueeze(1).expand(B, K, P))
-    indices = per_position.clamp_min(0).unsqueeze(-1)
+    indices = chosen.gather(-1, words.unsqueeze(1).expand(B, K, P)).unsqueeze(-1)
     shape = (B, *middle_shape, P)
     results = []
     for source in args:
+        source = torch.cat([source.new_zeros(B, P, 1), source], dim=-1)
         selected = source.unsqueeze(1).expand(-1, K, -1, -1).gather(-1, indices).squeeze(-1)
-        selected = selected.masked_fill(per_position < 0, 0)
         results.append(selected.reshape(shape))
     return tuple(results)
 
@@ -91,7 +90,6 @@ def materialize_paths(
 
     Outputs are [B,...,P] for choices [B,...,W]. Gap slots are removed before comparing
     local groups, so an aligned gap cannot split a pronunciation group.
-    Fixed known phones retain word zero and each gets its own group.
     Text labels are recovered separately from candidate metadata.
     """
     tokens, local_groups = extract_tokens(paths, groups, words=words, choices=choices)
@@ -103,7 +101,6 @@ def materialize_paths(
         (positions == 0)
         | (owners != owners.roll(1, -1))
         | (local_groups != local_groups.roll(1, -1))
-        | (owners == 0)
     )
     numbered = starts.long().cumsum(dim=-1).masked_fill(~active, 0)
     return tokens, owners, numbered
@@ -114,4 +111,4 @@ def path_lengths(paths: Tensor, words: Tensor, candidates: Tensor) -> Tensor:
     B, _, C = paths.shape
     counts = paths.new_zeros(B, candidates.shape[1] + 1, C)
     counts = counts.scatter_add(1, words.unsqueeze(-1).expand_as(paths), (paths != 0).long())
-    return counts[:, 1:].amax(dim=-1).sum(dim=-1) + counts[:, 0, 0]
+    return counts[:, 1:].amax(dim=-1).sum(dim=-1)

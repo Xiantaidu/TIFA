@@ -22,7 +22,7 @@ from .binarizer_base import (
 
 TEXTS_ITEM_ATTRIBUTES = [
     "paths",  # [P,C] complete aligned candidate columns
-    "words",  # [P] semantic word IDs; zero for fixed known phones
+    "words",  # [P] semantic word IDs; zero for padding
     "groups",  # [P,C] local pronunciation groups
     "candidates",  # [W,C] validity, including empty candidates
     "f0",  # [T] float32, pitch in Hz
@@ -227,11 +227,13 @@ class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
             size = len(tokens)
             paths = numpy.zeros((max(1, size), 1), dtype=numpy.int64)
             paths[:size, 0] = tokens
+            groups = numpy.zeros_like(paths)
+            groups[:size, 0] = numpy.arange(1, size + 1)
             data = {
                 "paths": paths,
-                "words": numpy.zeros(paths.shape[0], dtype=numpy.int64),
-                "groups": numpy.zeros_like(paths),
-                "candidates": numpy.zeros((0, 1), dtype=numpy.bool_),
+                "words": (paths[:, 0] != 0).astype(numpy.int64),
+                "groups": groups,
+                "candidates": numpy.ones((1, 1), dtype=numpy.bool_),
             }
         else:
             if item.g2p_words is None:

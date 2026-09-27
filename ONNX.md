@@ -8,18 +8,17 @@ Both `model.onnx` calls use the same model. Orange nodes require host implementa
 flowchart TD
     A["External: audio preprocessing"] -->|waveform, duration| S[spectrogram.onnx]
     G["External: G2P, vocabulary encoding, candidate grid"] -->|paths, words, candidates| P[prepare.onnx]
-    U[grouped] --> P
-    P -->|tokens, segments, mapping, active| Q["External: select active samples, construct maskN"]
+    U["External: user preference"] -->|grouped| P
+    P -->|tokens, segments, mapping| Q["External: initialize choices, select samples with MASK segments, construct maskN"]
     G -->|paths, words, candidates| Q
     S -->|spectrogram, maskT| Q
     Q --> M1["model.onnx: pronunciation scoring"]
     M1 -->|logits| F[score.onnx]
     Q -->|paths, words, segments, mapping| F
     F -->|descriptors, lengths, costs, tails, capacity| D["External: whole-word candidate DP, scatter choices back"]
-    Q -->|candidates, selected indices| D
-    P -->|default choices| D
+    Q -->|candidates, selected indices, initial choices| D
     D -->|choices| E[select.onnx]
-    P -->|default choices when unambiguous| E
+    Q -->|choices for samples without MASK segments| E
     G -->|paths, words, groups| E
     E -->|best_tokens, maskN, best_groups| H["External: select nonempty samples, retain valid lengths"]
     S -->|spectrogram, maskT| H
@@ -29,7 +28,7 @@ flowchart TD
     V -->|frame spans| O["External: scale by timestep, restore labels, write TextGrid"]
     E -->|best_tokens, best_words| O
     classDef host fill:#fff0d6,stroke:#b97813,color:#222;
-    class A,G,Q,D,H,V,O host;
+    class A,G,U,Q,D,H,V,O host;
 ```
 
 Reference implementations: [select_scored_paths](inference/scoring.py) for whole-word candidate DP and [decode_alignment_flat](modules/decoding.py) for Viterbi decoding.
@@ -58,11 +57,13 @@ Reference implementations: [select_scored_paths](inference/scoring.py) for whole
 |:--|:--|:--|:--|
 | `spectrogram.onnx` | Extract log-mel features and frame masks | waveform, duration | spectrogram, maskT |
 | `model.onnx` | Compute frame/token similarities and token classification logits | spectrogram, tokens, maskT, maskN | similarities, logits |
-| `prepare.onnx` | Construct pronunciation scoring templates | paths, words, candidates, grouped | tokens, segments, mapping, choices, active |
+| `prepare.onnx` | Construct pronunciation scoring templates | paths, words, candidates, grouped | tokens, segments, mapping |
 | `score.onnx` | Compute log-probability costs for candidate fragments and SPACE suffixes | logits, paths, words, segments, mapping | descriptors, lengths, costs, tails, capacity |
 | `select.onnx` | Select complete pronunciations by choices, remove gaps, and renumber groups | paths, words, groups, choices | best_tokens, best_words, best_groups, maskN |
 
-Samples with `active=false` use default choices and skip pronunciation scoring. Samples with zero valid audio frames or tokens skip model calls. Pronunciation choices must apply to whole words; fragments cannot be selected independently.
+The host initializes `choices = any(candidates, axis=-1).astype(int64)`. Only samples with `any(segments[b,:] > 0)` enter pronunciation scoring; whole-word candidate DP fills their choices. Samples with zero valid audio frames or tokens skip model calls. Pronunciation choices must apply to whole words; fragments cannot be selected independently.
+
+Known phone sequences use one word with one candidate and a separate group ID for each phone.
 
 ## Dimensions
 
@@ -94,14 +95,13 @@ All tensor dimensions must be positive. Spectrogram inputs must satisfy `L > cei
 | similarities | mid | float32 | [B,T,N] | Frame/token cosine similarities for Viterbi decoding |
 | logits | mid | float32 | [B,N,V] | Unnormalized token classification outputs; N=P when passed to score |
 | paths | in | int64 | [B,P,C] | Each column preserves a complete candidate's identity within a word; 0 for alignment gaps or padding |
-| words | in | int64 | [B,P] | Word IDs w+1; 0 for fixed phones or padding. Fixed phones occupy only column 0 of paths |
+| words | in | int64 | [B,P] | Word IDs w+1; 0 for padding |
 | candidates | in | bool | [B,W,C] | Valid candidates form a prefix; an all-zero path with true denotes a valid empty candidate; an all-false row denotes an absent word |
 | grouped | in | bool | scalar | false: mask only divergent parts; true: mask entire ambiguous words |
 | groups | in | int64 | [B,P,C] | Consecutive group IDs within each candidate; 0 for gaps |
 | segments | mid | int64 | [B,P] | IDs of contiguous MASK runs in the scoring template; 0 elsewhere |
 | mapping | mid | int64 | [B,P] | Segment IDs for divergent rows of the original grid; 0 elsewhere |
-| choices | mid | int64 | [B,W] | Selected candidate column per word, starting at 0; -1 for absent words. prepare defaults to the first valid candidate |
-| active | mid | bool | [B] | Whether any MASK segment requires scoring |
+| choices | in | int64 | [B,W] | 1-based candidate IDs selected by the host: c+1 selects column c; 0 for absent words |
 | descriptors | mid | int64 | [B,P1,2] | (word ID, segment ID) per fragment; 0 marks invalid entries |
 | lengths | mid | int64 | [B,P1,C] | Nonzero token count per fragment and candidate |
 | costs | mid | float32 | [B,P1,C,P1] | Sum of log-probabilities per fragment, candidate, and starting offset; -inf when the fragment does not fit |

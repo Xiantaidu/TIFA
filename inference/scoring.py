@@ -34,8 +34,8 @@ def prepare_scoring(
     """Return templates, segments and source mapping, all int64 [B,P].
 
     paths [B,P,C] holds complete candidate columns, with zero for aligned
-    gaps or padding. words [B,P] gives w+1; zero denotes fixed known phones
-    or padding. candidates [B,W,C] distinguishes empty/absent candidates.
+    gaps or padding. words [B,P] gives w+1; zero denotes padding.
+    candidates [B,W,C] distinguishes empty/absent candidates.
 
     segments numbers contiguous MASK runs in the compacted template.
     mapping assigns each divergent source-grid row to its scoring segment.
@@ -46,8 +46,7 @@ def prepare_scoring(
         raise ValueError(f"Unknown scoring unit: {unit}")
     B, P, C = paths.shape
     positions = torch.arange(P, device=paths.device).expand(B, P)
-    fixed = torch.arange(C, device=paths.device).view(1, 1, C) == 0
-    valid = torch.cat([fixed.expand(B, 1, C), candidates], dim=1)
+    valid = torch.cat([candidates.new_zeros(B, 1, C), candidates], dim=1)
     valid = valid.gather(1, words.unsqueeze(-1).expand_as(paths))
     occupied = (paths != 0).any(dim=-1)
     shared = (((paths == paths[..., :1]) & (paths != 0)) | ~valid).all(dim=-1)
@@ -177,13 +176,13 @@ def _select_sample(valid, descriptors, lengths, costs, tails, capacity):
     parents, layers = [], []
     for w, row in enumerate(valid):
         pieces = np.flatnonzero(descriptors[:, 0] == w + 1)
-        candidates = np.flatnonzero(row).tolist() or [-1]
+        candidates = (np.flatnonzero(row) + 1).tolist() or [0]
         following, parent, order, edges = {}, {}, {}, []
         for source, value in forward[-1].items():
             for c in candidates:
                 transition = (
-                    _advance(source, pieces, c, descriptors, lengths, costs, tails, capacity)
-                    if c >= 0 else (source, 0.0)
+                    _advance(source, pieces, c - 1, descriptors, lengths, costs, tails, capacity)
+                    if c > 0 else (source, 0.0)
                 )
                 if transition is None:
                     continue
@@ -205,7 +204,7 @@ def _select_sample(valid, descriptors, lengths, costs, tails, capacity):
 
     terminal = {state: float(tails[state[0], state[1]]) for state in forward[-1]}
     state = min(forward[-1], key=lambda x: (-(forward[-1][x] + terminal[x]), ranks[x]))
-    choices = np.full(len(valid), -1, dtype=np.int64)
+    choices = np.zeros(len(valid), dtype=np.int64)
     for i in range(len(valid) - 1, -1, -1):
         state, choices[i] = parents[i][state]
 
@@ -216,8 +215,8 @@ def _select_sample(valid, descriptors, lengths, costs, tails, capacity):
         for source, target, c, cost in layers[i]:
             suffix = cost + backward[target]
             previous[source] = max(previous[source], suffix)
-            if c >= 0:
-                scores[i, c] = max(scores[i, c], forward[i][source] + suffix)
+            if c > 0:
+                scores[i, c - 1] = max(scores[i, c - 1], forward[i][source] + suffix)
         backward = previous
     return choices, scores
 
@@ -237,6 +236,7 @@ def select_paths(
     the DP boundary. Scores fix one word's candidate and optimize every
     other word; independent score argmaxes do not reconstruct choices.
     Valid candidates score zero when there are no MASK slots.
+    Choices are 1-based candidate IDs, with zero for absent words.
     """
     tensors = score_fragments(log_probs, paths, words, segments, mapping)
     return select_scored_paths(candidates, *tensors, vocab_size=log_probs.shape[-1])
@@ -253,13 +253,13 @@ def select_scored_paths(
         *,
         vocab_size: int,
 ) -> tuple[Tensor, Tensor]:
-    """Run host DP on precomputed fragment scores (including ONNX outputs)."""
+    """Run host DP on fragment scores; return 1-based choices, zero if absent."""
     tensors = descriptors, lengths, costs, tails, capacity
     descriptors, lengths, costs, tails, capacity = (
         value.detach().cpu().numpy() for value in tensors
     )
     valid = candidates.detach().cpu().numpy()
-    choices = np.full(valid.shape[:2], -1, dtype=np.int64)
+    choices = np.zeros(valid.shape[:2], dtype=np.int64)
     scores = np.full(valid.shape, -np.inf, dtype=np.float32)
     for b in range(valid.shape[0]):
         chosen, values = _select_sample(valid[b], descriptors[b], lengths[b], costs[b], tails[b], capacity[b])

@@ -26,7 +26,7 @@ class SpectrogramContext:
 class ScoreResult:
     """Output of pronunciation scoring / disambiguation."""
 
-    choices: Tensor  # [B, W] complete path index per word, -1 for absent words
+    choices: Tensor  # [B, W] 1-based complete candidate ID per word, 0 for absent words
     scores: Tensor | None  # [B, W, C] conditional whole-sample scores; invalid = -inf
 
 

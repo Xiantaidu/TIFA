@@ -118,8 +118,8 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
                 ]
             group_scripts = []
             for candidates, choice in zip(result["lexicon"], result["choices"].tolist()):
-                if choice >= 0:
-                    group_scripts.extend(candidates[choice]["scripts"])
+                if choice > 0:
+                    group_scripts.extend(candidates[choice - 1]["scripts"])
             N = len(spans)
             if N == 0:
                 continue
@@ -538,7 +538,7 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
                     words.append({
                         "index": w,
                         "text": text,
-                        "chosen": chosen,
+                        "chosen": chosen - 1,
                         "alternatives": [
                             _CompactDict({
                                 "index": c,

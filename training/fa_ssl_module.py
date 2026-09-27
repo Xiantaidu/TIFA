@@ -237,10 +237,9 @@ class ForcedAlignmentSSLModule(BaseLightningModule, RankingModule):
             order = scores.argsort(dim=1, descending=True)
             picked = choices.gather(1, order).transpose(1, 2)
             rewards = rank_rewards(rank_size).to(candidates.device).view(1, 1, rank_size)
-            rewards = rewards.expand_as(picked).masked_fill(picked < 0, 0)
-            totals = torch.zeros_like(candidates, dtype=torch.long).scatter_add(
-                2, picked.clamp_min(0), rewards,
-            )
+            totals = picked.new_zeros(*candidates.shape[:2], candidates.shape[-1] + 1).scatter_add(
+                2, picked, rewards.expand_as(picked),
+            )[..., 1:]
         # The ranker's persistent per-item records are a Python output boundary.
         counts = candidates.sum(dim=-1)
         results = []

@@ -10,7 +10,7 @@ from deployment.context import export_mode
 from inference.backend import ForcedAlignmentInferenceModel, InferenceBackend
 from inference.scoring import prepare_scoring, score_fragments
 from lib import logging
-from lib.path_traversal import first_choices, materialize_paths
+from lib.path_traversal import materialize_paths
 from modules.backbones.rope import SingleRoPosEmb
 from modules.functional import cross_cosine_similarity
 
@@ -74,7 +74,7 @@ class Prepare(nn.Module):
             torch.where(grouped, word_value, local_value)
             for local_value, word_value in zip(local, whole_word)
         )
-        return tokens, segments, mapping, first_choices(candidates), (segments > 0).any(dim=-1)
+        return tokens, segments, mapping
 
 
 class Score(nn.Module):
@@ -151,10 +151,9 @@ class Exporter:
             )
             self._export(
                 "prepare", Prepare(), (paths, words, candidates, torch.tensor(False)),
-                ["paths", "words", "candidates", "grouped"], ["tokens", "segments", "mapping", "choices", "active"],
+                ["paths", "words", "candidates", "grouped"], ["tokens", "segments", "mapping"],
                 {**grid_axes, **candidate_axes,
-                 **{k: {0: "B", 1: "P"} for k in ("tokens", "segments", "mapping")},
-                 "choices": {0: "B", 1: "W"}, "active": {0: "B"}},
+                 **{k: {0: "B", 1: "P"} for k in ("tokens", "segments", "mapping")}},
             )
             _, segments, mapping = prepare_scoring(paths, words, candidates)
             self._export(
@@ -169,7 +168,7 @@ class Exporter:
                  "tails": {0: "B", 1: "P1", 2: "P1"}, "capacity": {0: "B", 1: "P1"}},
             )
             self._export(
-                "select", Select(), (paths, words, groups, torch.zeros(B, W, dtype=torch.long)),
+                "select", Select(), (paths, words, groups, torch.ones(B, W, dtype=torch.long)),
                 ["paths", "words", "groups", "choices"], ["best_tokens", "best_words", "best_groups", "maskN"],
                 {**grid_axes, "groups": grid_axes["paths"], "choices": {0: "B", 1: "W"},
                  **{k: {0: "B", 1: "P"} for k in ("best_tokens", "best_words", "best_groups", "maskN")}},
