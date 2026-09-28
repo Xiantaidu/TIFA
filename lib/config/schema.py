@@ -553,6 +553,7 @@ class TrainerConfig(ConfigBaseModel):
 class ValidationConfig(ConfigBaseModel):
     allow_amp: bool = Field(False)
     max_plots: int = Field(100, ge=0)
+    skip_penalty: float = Field(0.5, ge=0.0)
     parallel_dirty_metrics: bool = Field(True)
     metrics_ber_tolerance: int = Field(5, ge=0)
     metrics_k_values: list[int] = Field([5, 20])
@@ -589,6 +590,7 @@ class SemiSupervisedConfig(ConfigBaseModel):
     enabled: bool = Field(False)
     aux_loss_weight: float = Field(0.25, ge=0.0)
     pseudo_frame_identity_weight: float = Field(0.25, ge=0.0)
+    skip_penalty: float = Field(0.5, ge=0.0)
     min_agreement: float = Field(0.5, ge=0.0, le=1.0)
     min_confidence: float = Field(0.10)
     min_determinacy: float = Field(0.55, ge=0.0, le=1.0)

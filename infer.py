@@ -87,6 +87,10 @@ def shared_options(func):
                  "discard (drop sample), omit (exclude intervals), preserve (assign 1ms).",
         ),
         click.option(
+            "--skip-penalty", type=float, default=0.5, show_default=True,
+            help="Raw cosine-score cost per skipped phoneme, including at sequence boundaries.",
+        ),
+        click.option(
             "--score-unit", default="levenshtein",
             type=click.Choice(["levenshtein", "word", "none"]), show_default=True,
             help="Pronunciation unit used for MLM scoring.",
@@ -131,7 +135,8 @@ def _run_inference(
         precision: str,
         oov_handling: str,
         skip_handling: str,
-        score_unit: str,
+        skip_penalty: float = 0.5,
+        score_unit: str = "levenshtein",
         stat: bool = False,
         plot: bool = False,
 ):
@@ -201,6 +206,7 @@ def _run_inference(
         precision=precision,
         mode="predict",
         score_unit=score_unit,
+        skip_penalty=skip_penalty,
     )
     logging.success("Inference completed.", callback=rank_zero_info)
 

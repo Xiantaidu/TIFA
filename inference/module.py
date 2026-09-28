@@ -9,10 +9,16 @@ from lib.path_traversal import materialize_paths
 class ForcedAlignmentInferenceModule(pl.LightningModule):
     """Forced alignment inference. Works with any InferenceBackend."""
 
-    def __init__(self, backend: InferenceBackend, score_unit: str = "levenshtein"):
+    def __init__(
+            self, backend: InferenceBackend,
+            *,
+            score_unit: str = "levenshtein",
+            skip_penalty: float = 0.5,
+    ):
         super().__init__()
         self.backend = backend
         self.score_unit = score_unit
+        self.skip_penalty = skip_penalty
 
     def predict_step(self, batch, batch_idx):
         for msg in batch.get("warning", []):
@@ -35,7 +41,9 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
         tokens, words, groups = materialize_paths(paths, batch["words"], batch["groups"], scored.choices)
 
         # ---- Align ----
-        result = self.backend.align(spec, tokens=tokens, groups=groups, unit="frame")
+        result = self.backend.align(
+            spec, tokens=tokens, groups=groups, unit="frame", skip_penalty=self.skip_penalty,
+        )
 
         # ---- Assemble per-item results ----
         results = []
@@ -89,7 +97,7 @@ class ForcedAlignmentInferenceModule(pl.LightningModule):
 
         mask = torch.arange(T, device=device).unsqueeze(0) < batch["T"].unsqueeze(1)
         spec = SpectrogramContext(features=spectrogram, mask=mask)
-        result = self.backend.align(spec, tokens=tokens, unit="frame")
+        result = self.backend.align(spec, tokens=tokens, unit="frame", skip_penalty=self.skip_penalty)
         return {"spans": result.spans, "similarity": result.similarity}
 
 

@@ -136,9 +136,10 @@ def run_inference(
     precision: str = "32-true",
     mode: str = "predict",
     score_unit: str = "levenshtein",
+    skip_penalty: float = 0.5,
 ) -> None:
     """Run inference (predict) or online evaluation (evaluate)."""
-    module = ForcedAlignmentInferenceModule(backend, score_unit=score_unit)
+    module = ForcedAlignmentInferenceModule(backend, score_unit=score_unit, skip_penalty=skip_penalty)
     trainer = pl.Trainer(
         precision=precision,
         logger=False,

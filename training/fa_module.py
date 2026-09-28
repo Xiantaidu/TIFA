@@ -525,7 +525,10 @@ class ForcedAlignmentModule(BaseLightningModule):
                         device=spectrogram.device,
                     )
                 else:
-                    aligned = backend.align(spec, tokens=tokens, unit="frame")
+                    aligned = backend.align(
+                        spec, tokens=tokens, unit="frame",
+                        skip_penalty=self.training_config.semisupervised.skip_penalty,
+                    )
                     agreement = aligned.agreement
                     similarity = aligned.similarity
                     # The decoder trims to real tokens; candidate grids retain padding.
@@ -673,7 +676,9 @@ class ForcedAlignmentModule(BaseLightningModule):
 
         if infer:
             similarity = cross_cosine_similarity(frame_features, token_features)  # [-1, 1]
-            pred_spans = decode_alignment_flat(similarity, T, N)
+            pred_spans = decode_alignment_flat(
+                similarity, T, N, skip_penalty=self.training_config.validation.skip_penalty,
+            )
             target_spans = main_sample["spans"]
             self._update_fa_metrics(pred_spans, target_spans, tokens)
             self.metrics[_CONFIDENCE].update(
@@ -691,7 +696,9 @@ class ForcedAlignmentModule(BaseLightningModule):
                     main_sample["spectrogram_dirty"], tokens, t_mask, n_mask,
                 )
                 sim_dirty = cross_cosine_similarity(xf_d, tf_d)
-                pred_spans_dirty = decode_alignment_flat(sim_dirty, T, N)
+                pred_spans_dirty = decode_alignment_flat(
+                    sim_dirty, T, N, skip_penalty=self.training_config.validation.skip_penalty,
+                )
                 self._update_fa_metrics(
                     pred_spans_dirty, target_spans, tokens, postfix="_dirty",
                 )

@@ -70,6 +70,51 @@ class _CompactEncoder(json.JSONEncoder):
         return o
 
 
+def _preserve_skipped_spans(
+    spans: list[list[float]], groups: list[int], total_duration: float,
+) -> tuple[list[tuple[float, float]], float]:
+    """Place 1ms skipped intervals inside permitted gaps, then repair overlaps.
+
+    Inputs have already been rounded to milliseconds. Work on a copy in
+    integer milliseconds so output-only repairs cannot change decoded spans.
+    """
+    original = [(int(round(start * 1000)), int(round(end * 1000))) for start, end in spans]
+    duration_ms = int(round(total_duration * 1000))
+    intervals = []
+    N = len(original)
+    i = 0
+    while i < N:
+        left = intervals[-1][1] if intervals else 0
+        onset, offset = original[i]
+        if offset > onset:
+            onset = max(onset, left)
+            intervals.append((onset, max(offset, onset + 1)))
+            i += 1
+            continue
+
+        end = i + 1
+        while end < N and original[end][0] >= original[end][1]:
+            end += 1
+        right = max(left, original[end][0] if end < N else duration_ms)
+        gap_index = i
+        while gap_index <= end:
+            if gap_index == 0 or gap_index == N or groups[gap_index - 1] != groups[gap_index]:
+                break
+            gap_index += 1
+        left_count = min(gap_index, end) - i
+        right_count = end - i - left_count
+        for k in range(left_count):
+            intervals.append((left + k, left + k + 1))
+        right_start = max(left + left_count, right - right_count)
+        for k in range(right_count):
+            intervals.append((right_start + k, right_start + k + 1))
+        i = end
+
+    if intervals:
+        duration_ms = max(duration_ms, intervals[-1][1])
+    return [(start / 1000, end / 1000) for start, end in intervals], duration_ms / 1000
+
+
 class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
     """Writes 3-tier TextGrid files from forced alignment results.
 
@@ -157,16 +202,7 @@ class SaveTextGridCallback(lightning.pytorch.callbacks.Callback):
                     N = len(spans)
 
             else:  # preserve
-                for i in zero_idx:
-                    onset = spans[i][0]
-                    if i + 1 < N:
-                        spans[i][1] = onset + eps
-                        if spans[i + 1][0] < spans[i][1]:
-                            spans[i + 1][0] = spans[i][1]
-                    else:
-                        spans[i][1] = onset + eps
-                        if spans[i][1] > total_duration:
-                            total_duration = spans[i][1]
+                spans, total_duration = _preserve_skipped_spans(spans, groups, total_duration)
 
             # Step 4: prebuild phone intervals
             phone_intervals = []

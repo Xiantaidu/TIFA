@@ -78,14 +78,14 @@ class InferenceBackend(ABC):
             paths: Tensor,
             words: Tensor,
             candidates: Tensor,
-            unit: Literal["levenshtein", "word", "none"] = "levenshtein",
+            **kwargs,
     ) -> ScoreResult:
         """Score pronunciation alternatives and pick the best path.
 
         paths [B,P,C] keeps whole-word candidate columns. words [B,P]
         assigns rows to semantic words; candidates [B,W,C] marks valid
         candidates, including empty paths. Metadata stays outside scoring.
-        No-ambiguity items bypass MLM; unit='none' returns scores=None.
+        Extra keyword arguments are backend-specific scoring options.
         """
 
     @abstractmethod
@@ -96,6 +96,7 @@ class InferenceBackend(ABC):
             tokens: Tensor,
             groups: Tensor | None = None,
             unit: Literal["frame", "second"] = "second",
+            **kwargs,
     ) -> AlignResult:
         """Produce forced alignment for a token sequence.
 
@@ -105,6 +106,7 @@ class InferenceBackend(ABC):
             groups: ``[B, N]`` int64 group IDs or None (each token = own group).
             unit: ``"second"`` returns spans in seconds (default);
                 ``"frame"`` returns spans as frame indices.
+            **kwargs: Backend-specific alignment options.
 
         Returns:
             AlignResult with spans in the requested unit and similarity matrix.
@@ -166,6 +168,7 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
             words: Tensor,
             candidates: Tensor,
             unit: Literal["levenshtein", "word", "none"] = "levenshtein",
+            **kwargs,
     ) -> ScoreResult:
         choices = first_choices(candidates)
         if unit == "none":
@@ -195,6 +198,8 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
             tokens: Tensor,
             groups: Tensor | None = None,
             unit: Literal["frame", "second"] = "second",
+            skip_penalty: float = 0.5,
+            **kwargs,
     ) -> AlignResult:
         n_mask = tokens != 0
         active = n_mask.any(dim=1) & spec.mask.any(dim=1)
@@ -210,6 +215,8 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
                     tokens=tokens[active],
                     groups=groups[active] if groups is not None else None,
                     unit=unit,
+                    skip_penalty=skip_penalty,
+                    **kwargs,
                 )
                 spans[active, :result.spans.shape[1]] = result.spans
                 similarity[active] = result.similarity
@@ -223,6 +230,7 @@ class ForcedAlignmentInferenceModel(nn.Module, InferenceBackend):
         token_lengths = n_mask.sum(dim=-1)
         spans = decode_alignment_flat(
             similarity, frame_lengths, token_lengths, groups=groups,
+            skip_penalty=skip_penalty,
         )
         if unit == "second":
             spans = spans.float() * self.timestep
@@ -277,8 +285,11 @@ class ForcedAlignmentSSLInferenceModel(nn.Module, InferenceBackend):
         mask = idx.unsqueeze(0) < L.unsqueeze(1)
         return SpectrogramContext(features=features, mask=mask)
 
-    def score(self, spec, *, paths, words, candidates, unit="levenshtein"):
+    def score(self, spec, *, paths, words, candidates, **kwargs):
         raise NotImplementedError("SSL inference not yet implemented")
 
-    def align(self, spec, tokens, groups=None, unit: Literal["frame", "second"] = "second"):
+    def align(
+            self, spec, *, tokens, groups=None,
+            unit: Literal["frame", "second"] = "second", **kwargs,
+    ):
         raise NotImplementedError("SSL inference not yet implemented")

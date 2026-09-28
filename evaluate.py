@@ -51,6 +51,10 @@ def shared_output_options(func):
 def shared_trainer_options(func):
     options = [
         click.option(
+            "--skip-penalty", type=float, default=0.5, show_default=True,
+            help="Raw cosine-score cost per skipped phoneme during online alignment.",
+        ),
+        click.option(
             "--batch-size", type=int, default=4, show_default=True,
             help="Batch size for evaluation.",
         ),
@@ -182,6 +186,7 @@ def _run_online_evaluation(
         token_topk: list[int],
         pair_topk: list[int],
         plot: bool,
+        skip_penalty: float = 0.5,
         determinacy_power: float = 2.0,
         determinacy_width: int = 5,
         monotonicity_power: float = 2.0,
@@ -259,6 +264,7 @@ def _run_online_evaluation(
         batch_size=batch_size,
         num_workers=num_workers,
         precision=precision,
+        skip_penalty=skip_penalty,
         mode="evaluate",
     )
     logging.success("Online evaluation completed.", callback=rank_zero_info)

@@ -29,6 +29,7 @@ training:
     aux_warmup_epochs: 10
   semisupervised:
     enabled: true
+    skip_penalty: 0.5
     aux_loss_weight: 0.25
     pseudo_frame_identity_weight: 0.25
     min_agreement: 0.5
@@ -62,6 +63,7 @@ training:
     frame_identity:
       weight: 1.0
   validation:
+    skip_penalty: 0.5
     metrics_ber_tolerance: 5
     metrics_k_values: [20]
     metrics_conjunction_k_values: [20]

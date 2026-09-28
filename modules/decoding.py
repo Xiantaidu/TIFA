@@ -269,40 +269,154 @@ def _decode_fa_batch(
 # ---------------------------------------------------------------------------
 
 
+@numba.njit(cache=True)
+def _canonicalize_skipped_spans(
+    spans: np.ndarray, T: int, gap_allowed: np.ndarray,
+) -> None:
+    """Place silence at the first permitted gap in each skipped-token run."""
+    N = len(spans)
+    lo = 0
+    while lo < N:
+        if spans[lo, 0] != spans[lo, 1]:
+            lo += 1
+            continue
+        hi = lo
+        while hi + 1 < N and spans[hi + 1, 0] == spans[hi + 1, 1]:
+            hi += 1
+        left = spans[lo - 1, 1] if lo > 0 else 0
+        right = spans[hi + 1, 0] if hi + 1 < N else T
+        gap_index = lo
+        while gap_index <= hi + 1 and not gap_allowed[gap_index]:
+            gap_index += 1
+        if gap_index > hi + 1:
+            assert left == right
+        for i in range(lo, hi + 1):
+            anchor = left if i < gap_index else right
+            spans[i, 0] = anchor
+            spans[i, 1] = anchor
+        lo = hi + 1
+
+
+@numba.njit(cache=True)
+def _decode_flat_single(
+    sim: np.ndarray, skip_penalty: float, gap_allowed: np.ndarray,
+) -> np.ndarray:
+    """Decode all tokens with zero-time exits and equally priced skips."""
+    T, N = sim.shape
+    penalty = np.float32(skip_penalty)
+    gap = np.full(N + 1, -np.inf, dtype=np.float32)
+    token = np.full(N, -np.inf, dtype=np.float32)
+    gap_back = np.zeros((T + 1, N + 1), dtype=np.int8)
+    token_back = np.zeros((T + 1, N), dtype=np.int8)
+    gap[0] = 0.0
+    for i in range(N):
+        gap[i + 1] = gap[i] - penalty
+        gap_back[0, i + 1] = 2  # skip
+
+    for t in range(1, T + 1):
+        next_token = np.empty(N, dtype=np.float32)
+        next_gap = np.full(N + 1, -np.inf, dtype=np.float32)
+        for i in range(N):
+            best = token[i]
+            if gap[i] > best:
+                best = gap[i]
+                token_back[t, i] = 1  # enter from gap
+            next_token[i] = best + sim[t - 1, i]
+        for i in range(N + 1):
+            if gap_allowed[i]:
+                next_gap[i] = gap[i]  # wait consumes one frame
+        for i in range(N):
+            if next_token[i] > next_gap[i + 1]:
+                next_gap[i + 1] = next_token[i]
+                gap_back[t, i + 1] = 1  # exit without consuming a frame
+            skipped = next_gap[i] - penalty
+            if skipped > next_gap[i + 1]:
+                next_gap[i + 1] = skipped
+                gap_back[t, i + 1] = 2
+        gap = next_gap
+        token = next_token
+
+    spans = np.full((N, 2), -1, dtype=np.int64)
+    t, i = T, N
+    in_token = False
+    while t > 0 or i > 0 or in_token:
+        if in_token:
+            if spans[i, 1] < 0:
+                spans[i, 1] = t
+            spans[i, 0] = t - 1
+            entered = token_back[t, i]
+            t -= 1
+            if entered == 1:
+                in_token = False
+        else:
+            source = gap_back[t, i]
+            if source == 0:
+                t -= 1
+            elif source == 1:
+                i -= 1
+                in_token = True
+            else:
+                i -= 1
+                spans[i, 0] = t
+                spans[i, 1] = t
+    _canonicalize_skipped_spans(spans, T, gap_allowed)
+    return spans
+
+
+@numba.njit(parallel=True, cache=True)
+def _decode_flat_batch(
+    sim: np.ndarray,
+    T_all: np.ndarray,
+    N_all: np.ndarray,
+    max_N: int,
+    groups: np.ndarray | None,
+    skip_penalty: float,
+) -> np.ndarray:
+    spans_out = np.zeros((sim.shape[0], max_N, 2), dtype=np.int64)
+    for b in numba.prange(sim.shape[0]):
+        T, N = int(T_all[b]), int(N_all[b])
+        if N == 0:
+            continue
+        gap_allowed = np.ones(N + 1, dtype=np.bool_)
+        if groups is not None:
+            for i in range(1, N):
+                gap_allowed[i] = groups[b, i - 1] != groups[b, i]
+        spans_out[b, :N] = _decode_flat_single(sim[b, :T, :N], skip_penalty, gap_allowed)
+    return spans_out
+
+
 def decode_alignment_flat(
     sim: Tensor,
     frame_lengths: Tensor,
     token_lengths: Tensor,
     groups: Tensor | None = None,
+    *,
+    skip_penalty: float = 0.5,
 ) -> Tensor:
-    """Viterbi-decode a frame/token similarity matrix into per-token spans.
+    """Maximize summed raw cosine similarity minus a cost per skipped token.
 
-    Flat variant: gaps between all tokens, all optional.
-      G_i -> G_i       for all i           (stay in gap)
-      G_i -> P_i       for i < N           (enter token i)
-      P_i -> P_i       for all i           (stay in token i)
-      P_i -> G_{i+1}   for i < N           (exit token i to next gap)
-      P_{i-1} -> P_i   for i > 0           (advance to next token, skip G_i)
-
-    When groups is provided, G_i is active only at group boundaries
-    (i==0, i==N, or groups[i-1] != groups[i]).
+    Every token emits at least one frame or pays skip_penalty, including
+    prefixes and suffixes. Exits and skips consume no frames. Groups restrict
+    gap waiting, not zero-time transitions. Skipped spans are right-anchored
+    where group constraints allow, with all token positions retained.
 
     Args:
         sim: [B, T, N] similarity between frame and token features.
         frame_lengths: [B] int64, number of valid frames per sample.
         token_lengths: [B] int64, number of valid tokens per sample.
         groups: optional [B, N] int64, group label per token.
+        skip_penalty: nonnegative raw cosine-score cost per skip.
 
     Returns:
         spans [B, N, 2] int64, (onset, offset) in frames.
     """
     T_all = frame_lengths.long().cpu().numpy()
     N_all = token_lengths.long().cpu().numpy()
-    max_N = int(N_all.max())
+    max_N = int(N_all.max()) if N_all.size else 0
     sim_np = sim.float().detach().cpu().numpy()
     groups_np = groups.long().cpu().numpy() if groups is not None else None
 
-    spans_np = _decode_fa_batch(sim_np, T_all, N_all, max_N, groups_np, False)
+    spans_np = _decode_flat_batch(sim_np, T_all, N_all, max_N, groups_np, skip_penalty)
 
     return torch.from_numpy(spans_np).to(sim.device)
 
