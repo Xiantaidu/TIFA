@@ -2,15 +2,21 @@
 
 ## Overview
 
-FA2026
+An accurate forced aligner to align speech or singing recordings with their transcripts.
 
 ### Highlights
 
-TBD
+1. Pronunciation scoring: choose the pronunciation candidates that best match the audio.
+2. Semantic while phonetic: align both the written forms and phonetic symbols.
+3. Robust model: work on label errors, noise, reverberation or even accompaniments.
+4. Multilingual: able to align multiple languages in a single transcript through flexible configuration.
+5. Diagnostic metrics: identify low-quality alignments without reference annotations.
 
-### Use cases
+### Downstream applications
 
-TBD
+1. Grab phoneme-level labels for speech and singing voice synthesis tasks.
+2. Inspect and correct misaligned or noisy annotations in existing datasets.
+3. Distill pronunciation knowledge to improve G2P and ASR models.
 
 ## Installation
 
@@ -28,7 +34,7 @@ Run the commands below from the repository root. Dataset, dictionary and asset p
 
 ### G2P resources
 
-The default pipeline in [configs/g2p.yaml](configs/g2p.yaml) includes Mandarin Chinese, Japanese and English converters. Prepare the dictionaries, optional dependencies and model assets for your configured converters as described in [G2P.md](docs/G2P.md#resources).
+The default pipeline in [configs/g2p.yaml](configs/g2p.yaml) includes Chinese (Mandarin & Yue), Japanese and English converters. Prepare the dictionaries, optional dependencies and model assets for your configured converters as described in [G2P.md](docs/G2P.md#resources).
 
 ### Pretrained models
 
