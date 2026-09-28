@@ -1,9 +1,6 @@
 import pathlib
 
 import click
-import torch
-
-from inference.api import load_state_dict_for_inference
 
 
 @click.command(help="Reduce a checkpoint file, only keeping the 'state_dict' key for inference.")
@@ -21,6 +18,8 @@ def reduce(
     input_ckpt: pathlib.Path,
     output_ckpt: pathlib.Path,
 ):
+    import torch
+    from inference.api import load_state_dict_for_inference
     state_dict = load_state_dict_for_inference(input_ckpt)
     ckpt = {"state_dict": state_dict}
     output_ckpt.parent.mkdir(parents=True, exist_ok=True)
