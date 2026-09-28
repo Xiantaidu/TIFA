@@ -3,7 +3,7 @@ import pathlib
 import click
 
 from lib import logging
-from lib.cli import DefaultGroup, csv_set
+from lib.cli import DefaultGroup, csv_list
 from lib.config.schema import ConfigurationScope
 
 
@@ -66,8 +66,8 @@ def shared_options(func):
         ),
         click.option(
             "--extended-language", "-L",
-            default=None, callback=csv_set(str),
-            help="Comma-separated additional G2P language tags.",
+            default=None, callback=csv_list(str),
+            help="Comma-separated additional G2P language tags, in priority order.",
         ),
         click.option(
             "--g2p",
@@ -124,7 +124,7 @@ def _run_inference(
         input_formats: set[str],
         output_dir: pathlib.Path | None,
         language: str | None,
-        extended_language: set[str] | None,
+        extended_language: list[str] | None,
         g2p: pathlib.Path | None,
         batch_size: int,
         num_workers: int,
@@ -141,9 +141,10 @@ def _run_inference(
     from inference.data import AudioTextDataset
     from inference.callbacks import StatisticsCallback, SavePlotCallback, SaveTextGridCallback
 
-    g2p_languages = {language} if language else set()
+    g2p_languages = [language] if language else []
     if extended_language:
-        g2p_languages |= extended_language
+        g2p_languages.extend(extended_language)
+    g2p_languages = list(dict.fromkeys(g2p_languages))
 
     filemap = _parse_filemap(path, input_formats)
     if output_dir is None:

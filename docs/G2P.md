@@ -239,9 +239,29 @@ string is not stored separately on the reading.
 
 When the pipeline runs with `languages=["cmn"]`:
 
-1. Converters are filtered: a converter runs if `language is None` or any of its tags are in the set.
-2. For each converter, `resolve_language(converter.language, language_set)` picks the single matching tag (or first tag when no filter is set).
-3. The tag is stamped on each output `G2PWord.language`.
+1. Converters are filtered: a converter runs if `language is None`, `language is Language.ANY`, or any of its tags are in the set.
+2. For each converter, `resolve_language(converter.language, languages)` picks the single matching tag (or first tag when no filter is set), preserving `Language.ANY`.
+3. The tag or marker is stamped on each output `G2PWord.language`.
+
+`Language.ANY` is an identity-checked marker imported from `g2p.registry`.
+Register a converter with `@converter(id="...", language=Language.ANY)` to
+defer language selection until vocabulary encoding. `encode_paths(..., languages=...)`
+tries each phoneme against the vocabulary in the supplied language order. Existing
+bare symbols and explicitly prefixed symbols take precedence. The returned token ID
+and matched symbol are used together, so labels retain the selected prefix even
+when several symbols share an ID. If no candidate matches, normal OOV handling applies.
+Input language order is preserved; inference puts `--language` first,
+followed by `--extended-language` tags in their supplied order, removing duplicates.
+`None` keeps its existing language-neutral behavior. An explicit YAML `language`
+overrides the registered marker. `passthrough` uses `Language.ANY` by default,
+so `- id: passthrough` needs no language setting. Without input languages or a
+default language, only unqualified or explicitly prefixed symbols can match.
+
+Binarization uses the same resolver when collecting G2P symbols and encoding them.
+When building a vocabulary from scratch, symbols are initially qualified with the
+first input language; a prebuilt vocabulary enables ordered lookup immediately.
+The shared main vocabulary is built before auxiliary metadata is collected, so
+auxiliary symbols use vocabulary-based resolution on their first pass.
 
 ### Convert algorithm
 

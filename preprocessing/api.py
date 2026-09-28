@@ -96,37 +96,34 @@ def binarize_datasets(
         logging.success("Binarization completed.")
         return
 
-    # Multi-dataset: collect metadata from each dataset.
-    per_metadata = []
-    for b in binarizers:
-        metadata = b.collect_metadata()
-        logging.info(
-            f"Dataset '{b.data_dir.as_posix()}': {len(metadata)} items "
-            f"({b.__class__.__name__})."
-        )
-        per_metadata.append(metadata)
-    if not per_metadata[0]:
+    main_metadata = binarizers[0].collect_metadata()
+    logging.info(
+        f"Collected {len(main_metadata)} main metadata items "
+        f"from '{binarizers[0].data_dir.as_posix()}' "
+        f"({binarizers[0].__class__.__name__})."
+    )
+    if not main_metadata:
         raise RuntimeError("No metadata items found in the main dataset.")
 
     # The model vocabulary is defined only by supervised main data. Aux-only
     # symbols must never expand the output space.
     shared_vocab, counter, builder = build_shared_vocab(
         config.vocabulary,
-        per_metadata[0],
+        main_metadata,
     )
     for b in binarizers:
         b.vocabulary = shared_vocab
         b.vocab_builder = builder
 
-    # Validate aux metadata before any binary output is written.
-    for index in range(1, len(binarizers)):
-        original_count = len(per_metadata[index])
-        per_metadata[index] = binarizers[index].filter_metadata_by_vocabulary(
-            per_metadata[index],
-        )
+    # Collect aux metadata with the shared vocabulary, then validate before writing.
+    per_metadata = [main_metadata]
+    for b in binarizers[1:]:
+        metadata = b.collect_metadata()
+        retained = b.filter_metadata_by_vocabulary(metadata)
+        per_metadata.append(retained)
         logging.info(
-            f"Aux dataset '{binarizers[index].data_dir.as_posix()}': "
-            f"retained {len(per_metadata[index])}/{original_count} items "
+            f"Aux dataset '{b.data_dir.as_posix()}': "
+            f"retained {len(retained)}/{len(metadata)} items "
             f"after main-vocabulary validation."
         )
 

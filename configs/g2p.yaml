@@ -29,9 +29,11 @@ binarizer:
           dict_path: "dictionaries/ds-zh-pinyin-lite.txt"
       # Japanese: romaji
       - id: dictionary
-        language: ja,jpn
+        language: ja
         kwargs:
           dict_path: "dictionaries/japanese_dict_full.txt"
+      # Final fallback
+      - id: passthrough
   vocabulary:
     prebuilt_vocab_file: null
     global_symbols: [AP, SP, EP, GS, sil, br, pau]

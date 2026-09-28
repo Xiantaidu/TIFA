@@ -1,9 +1,9 @@
-from g2p.registry import converter
+from g2p.registry import Language, converter
 from .base import Converter, G2PGroup, G2PWord, G2PReading
 from .text import split_words, word_spans
 
 
-@converter(id="passthrough", language=None)
+@converter(id="passthrough", language=Language.ANY)
 class PassthroughConverter(Converter):
     """Catch-all converter that returns each token as its own phoneme.
     Typically placed last in a chain as a fallback for unconverted tokens."""
@@ -17,7 +17,7 @@ class PassthroughConverter(Converter):
         ])]) for t in split_words(text)]
 
 
-@converter(id="characters", language=None)
+@converter(id="characters", language=Language.ANY)
 class CharPhonemeConverter(Converter):
     """One-to-one character-to-phoneme mapping.
     Each character in a token is mapped to one or more phonemes."""

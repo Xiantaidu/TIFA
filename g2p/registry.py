@@ -1,12 +1,20 @@
+from enum import Enum, auto
 from typing import Callable
+
+
+class Language(Enum):
+    """Special converter language markers."""
+
+    ANY = auto()
+
 
 _preprocessor_registry: dict[str, type] = {}
 _converter_registry: dict[str, type] = {}
 
 
-def parse_language(language: str | None) -> tuple[str, ...] | None:
-    if language is None:
-        return None
+def parse_language(language: str | Language | None) -> tuple[str, ...] | Language | None:
+    if language is None or language is Language.ANY:
+        return language
     return tuple(t.strip() for t in language.split(","))
 
 
@@ -19,7 +27,7 @@ def preprocessor(*, id: str) -> Callable[[type], type]:
     return decorator
 
 
-def converter(*, id: str, language: str | None = None) -> Callable[[type], type]:
+def converter(*, id: str, language: str | Language | None = None) -> Callable[[type], type]:
     tags = parse_language(language)
 
     def decorator(cls: type) -> type:

@@ -1,18 +1,49 @@
 """Encode complete G2P paths without losing their labels or provenance."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Literal
 
 import numpy as np
 
 from lib.levenshtein import align_multiple_sequences
 
-from lib.vocabulary import NUM_RESERVED_TOKENS, Vocabulary, is_stop_symbol
+from lib.vocabulary import NUM_RESERVED_TOKENS, Vocabulary, qualify_symbol
 from .converters.base import G2PWord
+from .registry import Language
 
 
 class G2PEncodingError(Exception):
     """A word has no pronunciation encodable by the active vocabulary."""
+
+
+def resolve_phoneme(
+        phoneme: str,
+        language: str | Language | None,
+        vocabulary: Vocabulary | None,
+        *,
+        languages: Sequence[str] | None = None,
+        default_language: str | None = None,
+        global_symbols: Iterable[str] = (),
+        stop_symbols: Iterable[str] = (),
+) -> tuple[int | None, str]:
+    """Resolve a phoneme, or qualify it with the first language when unresolved."""
+    if language is Language.ANY:
+        candidates = languages or ((default_language,) if default_language is not None else ())
+    else:
+        tag = language if language is not None else default_language
+        candidates = (tag,) if tag is not None else ()
+    if phoneme in global_symbols:
+        candidates = ()
+    fallback = qualify_symbol(phoneme, candidates[0] if candidates else None, global_symbols)
+    if phoneme in stop_symbols:
+        return None, phoneme
+    if fallback in stop_symbols:
+        return None, fallback
+    if vocabulary is not None:
+        resolved = vocabulary.resolve(phoneme, candidates)
+        if resolved is not None:
+            return resolved
+    return None, fallback
 
 
 def encode_paths(
@@ -21,6 +52,7 @@ def encode_paths(
         oov_handling: Literal["raise", "discard", "force"] = "raise",
         *,
         default_language: str | None = None,
+        languages: Sequence[str] | None = None,
         global_symbols: Iterable[str] = (),
         stop_symbols: Iterable[str] = (),
 ) -> tuple[dict[str, np.ndarray], list[list[dict]], list[str]]:
@@ -39,7 +71,6 @@ def encode_paths(
     stop_symbols = frozenset(stop_symbols)
     paths = []
     for word in words:
-        language = word.language if word.language is not None else default_language
         candidates = []
         for reading_index, reading in enumerate(word.readings):
             for path in reading.paths:
@@ -50,16 +81,22 @@ def encode_paths(
                         raise ValueError("An empty pronunciation must be an empty path, not an empty group.")
                     group_tokens, group_phonemes = [], []
                     for phoneme in group.phonemes:
-                        if is_stop_symbol(phoneme, language, global_symbols, stop_symbols):
+                        token, symbol = resolve_phoneme(
+                            phoneme, word.language, vocabulary,
+                            languages=languages,
+                            default_language=default_language,
+                            global_symbols=global_symbols,
+                            stop_symbols=stop_symbols,
+                        )
+                        if symbol in stop_symbols:
                             continue
-                        token = vocabulary.encode(phoneme, language)
                         if token is None:
                             unknown.append(phoneme)
                             continue
                         if token < NUM_RESERVED_TOKENS:
                             raise ValueError(f"Reserved token in G2P output: {phoneme!r}")
                         group_tokens.append(token)
-                        group_phonemes.append(f"{language}/{phoneme}")
+                        group_phonemes.append(symbol)
                     if group_tokens:
                         scripts.append(group.script)
                         tokens.extend(group_tokens)

@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import TypeAlias
 
 from ..preprocessors.base import Preprocessor
+from ..registry import Language
 
 
 @dataclass
@@ -31,12 +32,12 @@ class G2PWord:
     """
 
     text: str
-    language: str | None = None
+    language: str | Language | None = None
     readings: list[G2PReading] = field(default_factory=list)
 
 
 class Converter(ABC):
-    language: tuple[str, ...] | None = None
+    language: tuple[str, ...] | Language | None = None
 
     @abstractmethod
     def find(self, text: str) -> tuple[int, int] | None:
@@ -72,15 +73,17 @@ class G2PConversionError(Exception):
 
 
 def resolve_language(
-    language: tuple[str, ...] | None,
-    language_set: set[str] | None,
-) -> str | None:
-    """Return the single language tag that matched, or *None*."""
+    language: tuple[str, ...] | Language | None,
+    languages: list[str] | None,
+) -> str | Language | None:
+    """Resolve explicit tags, preserving ANY for vocabulary-based resolution."""
     if language is None:
         return None
-    if language_set is None:
+    if language is Language.ANY:
+        return Language.ANY
+    if not languages:
         return language[0]
     for tag in language:
-        if tag in language_set:
+        if tag in languages:
             return tag
     return None

@@ -1,5 +1,6 @@
 from .converters.base import Converter, G2PConversionError, G2PWord, resolve_language
 from .preprocessors.base import Preprocessor
+from .registry import Language
 
 
 class G2PPipeline:
@@ -19,6 +20,7 @@ class G2PPipeline:
             c for c in self._converters
             if language_set is None
             or c.language is None
+            or c.language is Language.ANY
             or any(ln in language_set for ln in c.language)
         ]
         if not active:
@@ -64,7 +66,7 @@ class G2PPipeline:
             parts = [part]
             for processor in converter.preprocessors():
                 parts = processor.process(parts)
-            language = resolve_language(converter.language, language_set)
+            language = resolve_language(converter.language, languages)
             for part in parts:
                 if part:
                     words = converter.convert(part)

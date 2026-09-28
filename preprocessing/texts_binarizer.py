@@ -7,11 +7,11 @@ import numpy
 
 from g2p.api import build_pipeline_from_config
 from g2p.converters.base import G2PWord
-from g2p.encoding import encode_paths
+from g2p.encoding import encode_paths, resolve_phoneme
 from lib import logging
 from lib.audio import load_audio
 from lib.feature.pitch import get_pitch_parselmouth
-from lib.vocabulary import is_stop_symbol, qualify_symbol
+from lib.vocabulary import Vocabulary, is_stop_symbol, qualify_symbol
 
 from .binarizer_base import (
     BaseBinarizer,
@@ -36,6 +36,10 @@ class TextMetadataItem(MetadataItem):
     phones: list[str] | None = None
 
     @property
+    def languages(self) -> list[str]:
+        return [tag.strip() for tag in self.language.split("+")]
+
+    @property
     def default_language(self) -> str:
         return self.language.split("+", 1)[0].strip()
 
@@ -45,6 +49,8 @@ class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if self.config.vocabulary.prebuilt_vocab_file is not None:
+            self.vocabulary = Vocabulary.from_file(self.config.vocabulary.prebuilt_vocab_file)
         if self.config.g2p is None:
             self.g2p = None
         else:
@@ -72,6 +78,23 @@ class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
             return None
         raise ValueError(f"Token '{symbol}' is not in the main vocabulary for language " f"'{language}'.")
 
+    def _collect_g2p_symbols(self, words: list[G2PWord], languages: list[str]) -> list[str]:
+        vocabulary_config = self.config.vocabulary
+        return [
+            resolve_phoneme(
+                phone, word.language, self.vocabulary,
+                languages=languages,
+                default_language=languages[0],
+                global_symbols=vocabulary_config.global_symbols,
+                stop_symbols=vocabulary_config.stop_symbols,
+            )[1]
+            for word in words
+            for reading in word.readings
+            for path in reading.paths
+            for group in path
+            for phone in group.phonemes
+        ]
+
     def filter_metadata_by_vocabulary(
         self,
         metadata_list: list[TextMetadataItem],
@@ -98,6 +121,7 @@ class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
                 data, _, _ = encode_paths(
                     item.g2p_words, self.vocabulary, "force",
                     default_language=item.default_language,
+                    languages=item.languages,
                     global_symbols=self.config.vocabulary.global_symbols,
                     stop_symbols=self.config.vocabulary.stop_symbols,
                 )
@@ -169,19 +193,7 @@ class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
                     f"G2P failed for item '{name}': {e}"
                 )
                 continue
-            symbols: list[str] = []
-            for word in g2p_words:
-                for reading in word.readings:
-                    for path in reading.paths:
-                        for group in path:
-                            symbols.extend(
-                                qualify_symbol(
-                                    phone,
-                                    word.language or default_language,
-                                    self.config.vocabulary.global_symbols,
-                                )
-                                for phone in group.phonemes
-                            )
+            symbols = self._collect_g2p_symbols(g2p_words, languages)
             items.append(TextMetadataItem(
                 name=name,
                 language=language,
@@ -243,6 +255,7 @@ class TextOnlyBinarizer(BaseBinarizer[TextMetadataItem]):
                 self.vocabulary,
                 "force",
                 default_language=item.default_language,
+                languages=item.languages,
                 global_symbols=self.config.vocabulary.global_symbols,
                 stop_symbols=self.config.vocabulary.stop_symbols,
             )

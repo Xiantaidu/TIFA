@@ -198,10 +198,19 @@ class Vocabulary:
         return self.vocab_size
 
     def encode(self, symbol: str, language: str | None) -> int | None:
+        resolved = self.resolve(symbol, (language,) if language is not None else ())
+        return resolved[0] if resolved is not None else None
+
+    def resolve(self, symbol: str, languages: Iterable[str] = ()) -> tuple[int, str] | None:
+        """Return the token ID and exact symbol, trying language prefixes in order."""
         if symbol in self._symbol_to_id:
-            return self._symbol_to_id[symbol]
-        if language is not None and (prefixed_symbol := f"{language}/{symbol}") in self._symbol_to_id:
-            return self._symbol_to_id[prefixed_symbol]
+            return self._symbol_to_id[symbol], symbol
+        if "/" in symbol:
+            return None
+        for language in languages:
+            prefixed_symbol = f"{language}/{symbol}"
+            if prefixed_symbol in self._symbol_to_id:
+                return self._symbol_to_id[prefixed_symbol], prefixed_symbol
         return None
 
     def decode(self, token: int, stringfy: bool = False) -> "tuple[str, ...] | str":

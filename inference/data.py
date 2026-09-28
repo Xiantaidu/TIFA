@@ -34,7 +34,7 @@ class AudioTextDataset(torch.utils.data.Dataset):
         g2p_root: str | pathlib.Path,
         vocabulary: Vocabulary,
         audio_sample_rate: int,
-        language: str | set[str] | None = None,
+        language: str | list[str] | None = None,
         oov_handling: Literal["raise", "discard", "force"] = "discard",
     ):
         self.g2p_config = g2p_config
@@ -44,8 +44,6 @@ class AudioTextDataset(torch.utils.data.Dataset):
         self.sample_rate = audio_sample_rate
         if isinstance(language, str):
             language = [language]
-        elif isinstance(language, set):
-            language = list(language)
         self.language = language
         self.oov_handling = oov_handling
 
@@ -89,7 +87,10 @@ class AudioTextDataset(torch.utils.data.Dataset):
             return _skip(identifier, f"G2P failed: {e}")
 
         try:
-            data, lexicon, texts = encode_paths(g2p_words, self.vocabulary, self.oov_handling)
+            data, lexicon, texts = encode_paths(
+                g2p_words, self.vocabulary, self.oov_handling,
+                languages=self.language,
+            )
         except G2PEncodingError as e:
             if self.oov_handling == "raise":
                 return {"skip": True, "error": f"'{identifier}': {e}"}
