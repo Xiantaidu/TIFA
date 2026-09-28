@@ -89,8 +89,8 @@ def supervised(config, override, vocab_only, eval_mode):
     )
 
 
-@main.command(name="ssl", help="Binarize text-only dataset for self-supervised learning.")
-@shared_options
+# @main.command(name="ssl", help="Binarize text-only dataset for self-supervised learning.")
+# @shared_options
 def ssl(config, override, vocab_only, eval_mode):
     _run_binarization(
         config=config, override=override,

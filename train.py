@@ -128,8 +128,8 @@ def supervised(
     )
 
 
-@main.command(name="ssl", help="Train a self-supervised model.")
-@shared_options
+# @main.command(name="ssl", help="Train a self-supervised model.")
+# @shared_options
 def ssl(
         config, override,
         exp_name, work_dir,

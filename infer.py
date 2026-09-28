@@ -227,12 +227,12 @@ def supervised(**kwargs):
     _run_inference(ConfigurationScope.FA, **kwargs)
 
 
-@main.command(name="ssl")
-@click.argument(
-    "path",
-    type=click.Path(exists=True, dir_okay=True, file_okay=True, path_type=pathlib.Path),
-)
-@shared_options
+# @main.command(name="ssl")
+# @click.argument(
+#     "path",
+#     type=click.Path(exists=True, dir_okay=True, file_okay=True, path_type=pathlib.Path),
+# )
+# @shared_options
 def ssl(**kwargs):
     """Self-supervised forced alignment inference."""
     _run_inference(ConfigurationScope.FA_SSL, **kwargs)

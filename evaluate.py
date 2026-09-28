@@ -332,11 +332,11 @@ def supervised(**kwargs):
     _run_online_evaluation(scope=ConfigurationScope.FA, **kwargs)
 
 
-@main.command(name="ssl")
-@shared_input_options
-@shared_output_options
-@shared_trainer_options
-@shared_metric_options(unit="frame")
+# @main.command(name="ssl")
+# @shared_input_options
+# @shared_output_options
+# @shared_trainer_options
+# @shared_metric_options(unit="frame")
 def ssl(**kwargs):
     """Self-supervised online evaluation."""
     _run_online_evaluation(scope=ConfigurationScope.FA_SSL, **kwargs)
