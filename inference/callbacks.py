@@ -471,6 +471,9 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
             record["overlap_precision"] = (overlap_sum[i] / (pred_sum[i] + 1e-6)).item()
             record["overlap_recall"] = (overlap_sum[i] / (gt_sum[i] + 1e-6)).item()
             record["num_tokens"] = N_i
+            record["num_skipped_tokens"] = int((
+                (spans_pred[i, :, 0] == spans_pred[i, :, 1]) & (tokens[i] != 0)
+            ).sum().item())
             if "T" in batch:
                 record["num_frames"] = int(batch["T"][i].item())
 
@@ -561,6 +564,9 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
                 "monotonicity": monotonicity,
                 "num_frames": T_i,
                 "num_tokens": N_i,
+                "num_skipped_tokens": int((
+                    (spans_frames[:, 0] == spans_frames[:, 1]) & n_mask
+                ).sum().item()),
             })
 
             if result.get("scores") is not None:
@@ -650,7 +656,7 @@ class StatisticsCallback(lightning.pytorch.callbacks.Callback):
             def _sort_key(rc):
                 identifier = rc["identifier"]
                 _r = tuple(ranks[key][identifier] for key, _ in available)
-                return (min(_r),) + _r
+                return (-rc["num_skipped_tokens"], min(_r)) + _r
 
             records.sort(key=_sort_key)
 
