@@ -59,21 +59,7 @@ class _ChineseScriptConverter(PronunciationScriptDictionaryConverter):
 
 @converter(id="chinese-pinyin", language="zh,zho,cmn")
 class PinyinConverter(_ChineseScriptConverter):
-    """Mandarin Chinese pinyin converter.
-
-    Config examples::
-
-        converters:
-          - id: mandarin
-          - id: passthrough
-            language: eng
-
-        # Pinyin-to-phoneme mapping
-        converters:
-          - id: mandarin
-            kwargs:
-              dict_path: /path/to/pinyin_phonemes.txt
-    """
+    """Mandarin Chinese pinyin converter."""
 
     def __init__(self, dict_path: str) -> None:
         super().__init__(
@@ -82,23 +68,9 @@ class PinyinConverter(_ChineseScriptConverter):
         )
 
 
-@converter(id="cantonese-jyutping", language="yue")
+@converter(id="yue-jyutping", language="yue")
 class JyutpingConverter(_ChineseScriptConverter):
-    """Cantonese (Jyutping) converter.
-
-    Config examples::
-
-        converters:
-          - id: cantonese
-          - id: passthrough
-            language: eng
-
-        # Jyutping-to-phoneme mapping
-        converters:
-          - id: cantonese
-            kwargs:
-              dict_path: /path/to/jyutping_phonemes.txt
-    """
+    """Yue (Jyutping) converter."""
 
     def __init__(self, dict_path: str) -> None:
         super().__init__(
