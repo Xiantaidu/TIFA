@@ -38,7 +38,7 @@ The default pipeline in [configs/g2p.yaml](configs/g2p.yaml) includes Chinese (M
 
 ### Pretrained models
 
-**TBD**.
+PyTorch model: [TIFA-1.0](https://github.com/openvpi/TIFA/releases/tag/v1.0.0)
 
 ## Inference
 
