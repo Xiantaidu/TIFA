@@ -20,6 +20,8 @@ An accurate forced aligner to align speech or singing recordings with their tran
 
 ## Installation
 
+### Environment setup
+
 Step 1: Start with a separate Python environment, such as a Conda environment.
 
 Step 2: Install the latest version of PyTorch following its [official website](https://pytorch.org/get-started/locally/).
