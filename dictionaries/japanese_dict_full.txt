@@ -175,3 +175,132 @@ pyi	py i
 pyu	py u
 pye	py e
 pyo	py o
+au	a u
+aa	a a
+ae	a e
+ii	i i
+ia	i a
+iu	i u
+iya	i y a
+iyo	i y o
+ea	e a
+ei	e i
+eu	e u
+ee	e e
+oa	o a
+ou	o u
+kaa	k a a
+kau	k a u
+gaa	g a a
+kii	k i i
+kiu	k i u
+gii	g i i
+kuu	k u u
+guu	g u u
+kea	k e a
+kei	k e i
+kee	k e e
+gei	g e i
+gee	g e e
+koo	k o o
+goa	g o a
+goo	g o o
+saa	s a a
+zaa	z a a
+zai	z a i
+shia	sh i a
+shii	sh i i
+jia	j i a
+jii	j i i
+jio	j i o
+suu	s u u
+zuu	z u u
+sei	s e i
+see	s e e
+zea	z e a
+zee	z e e
+soa	s o a
+sou	s o u
+soo	s o o
+zoa	z o a
+zoo	z o o
+taa	t a a
+tau	t a u
+tao	t a o
+daa	d a a
+dai	d a i
+dayo	d a y o
+chia	ch i a
+chii	ch i i
+chio	ch i o
+tsuu	ts u u
+teu	t e u
+tee	t e e
+dea	d e a
+deu	d e u
+dee	d e e
+toa	t o a
+toe	t o e
+too	t o o
+doo	d o o
+nai	n a i
+nia	n i a
+nii	n i i
+niu	n i u
+nuu	n u u
+nei	n e i
+nee	n e e
+nou	n o u
+haa	h a a
+hau	h a u
+baa	b a a
+paa	p a a
+hia	h i a
+hii	h i i
+bii	b i i
+pia	p i a
+pii	p i i
+piu	p i u
+fuu	f u u
+fyu	f y u
+fyo	f y o
+buu	b u u
+puu	p u u
+bee	b e e
+pee	p e e
+hoa	h o a
+hoi	h o i
+hou	h o u
+hoe	h o e
+hoo	h o o
+boa	b o a
+bou	b o u
+boo	b o o
+maa	m a a
+mii	m i i
+miu	m i u
+muu	m u u
+mea	m e a
+mee	m e e
+moi	m o i
+mou	m o u
+yua	y u a
+yui	y u i
+yuu	y u u
+yue	y u e
+you	y o u
+raa	r a a
+rai	r a i
+rau	r a u
+ria	r i a
+rii	r i i
+riu	r i u
+ruu	r u u
+rea	r e a
+rei	r e i
+ree	r e e
+rou	r o u
+roo	r o o
+waa	w a a
+wai	w a i
+wao	w a o
