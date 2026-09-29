@@ -1,4 +1,4 @@
-# FA2026
+# TIFA: Token-Imputing Forced Aligner
 
 ## Overview
 
@@ -446,4 +446,4 @@ The repository exposes APIs for downstream applications:
 
 ## License
 
-FA2026 is licensed under the [MIT License](LICENSE).
+TIFA is licensed under the [MIT License](LICENSE).
