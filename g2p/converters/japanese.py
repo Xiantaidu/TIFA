@@ -68,8 +68,6 @@ _KANA_TO_ROMAJI: dict[str, str] = {
     "ゔ": "vu",
     "ゔぁ": "va", "ゔぃ": "vi", "ゔぇ": "ve", "ゔぉ": "vo",
     # ---- ぢ-row yoon and づ loanword digraphs ----
-    # Modern Japanese reads ぢ/づ like じ/ず, so these reuse romaji already
-    # present in the pronunciation dictionary; no new dict entries needed.
     "ぢゃ": "ja", "ぢゅ": "ju", "ぢぇ": "je", "ぢょ": "jo",
     "づぁ": "za", "づぉ": "zo",
     # ---- special ----
